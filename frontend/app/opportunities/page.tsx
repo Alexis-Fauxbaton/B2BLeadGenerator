@@ -31,9 +31,9 @@ const SELECT_CLS =
   "rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100";
 
 function ContactIcons({ o }: { o: OpportunityList }) {
-  // Précision d'abord : un canal n'est "allumé" que si on a la valeur ET une
-  // confiance suffisante (haute/moyenne) — sinon il reste gris ("à trouver").
-  const estabTrusted = o.contact_confidence === "haute" || o.contact_confidence === "moyenne";
+  // Précision d'abord : un canal n'est "allumé" que si le match est géo-confirmé
+  // (haute) — sinon il reste gris ("à trouver").
+  const estabTrusted = o.contact_confidence === "haute";
   const items: [boolean, typeof Phone, string][] = [
     [Boolean(o.phone) && estabTrusted, Phone, "Téléphone"],
     [Boolean(o.email) && estabTrusted, Mail, "Email"],

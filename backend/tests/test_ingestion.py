@@ -335,45 +335,17 @@ def test_contact_quality_email_classification():
     assert classify_email(None) is None
 
 
-def test_contact_quality_holding_detection():
-    from app.services.contact_quality import looks_like_holding
-
-    assert looks_like_holding("Lapérouse Holding Food Retail") is True
-    assert looks_like_holding("Groupe Bertrand") is True
-    assert looks_like_holding("Resto X", naf="64.20Z") is True
-    assert looks_like_holding(
-        "Société X",
-        activite="la création, acquisition, exploitation et aliénation de tout hôtel, restaurant",
-    ) is True
-    assert looks_like_holding("Le Bon Bistrot") is False
-
-
-def test_contact_quality_name_concordance():
-    from app.services.contact_quality import names_concordant
-
-    assert names_concordant("Le Bon Bistrot", "Le Bon Bistrot") is True
-    assert names_concordant("Calcifer", "Restaurant Calcifer") is True
-    # BEAR YTD vs Bearsden : tokens distinctifs disjoints -> NON concordant.
-    assert names_concordant("BEAR YTD", "Bearsden Paris") is False
-    # Aucun token distinctif d'un côté -> on ne valide pas (précision).
-    assert names_concordant("Le Restaurant", "Chez Paul") is False
-    assert names_concordant("Calcifer", None) is False
-
-
 def test_contact_quality_confidence_levels():
     from app.services.contact_quality import establishment_confidence, decision_maker_confidence
 
-    assert establishment_confidence("geo", False) == "haute"
-    assert establishment_confidence("geo", False, name_ok=False) == "haute"  # géo se suffit
-    assert establishment_confidence("text", False, name_ok=True) == "moyenne"
-    assert establishment_confidence("text", False, name_ok=False) == "basse"  # nom discordant
-    assert establishment_confidence("text", True) == "basse"    # holding -> jamais sûr
-    assert establishment_confidence(None, False) == "basse"
+    # Précision d'abord : établissement fiable UNIQUEMENT si géo-confirmé.
+    assert establishment_confidence("geo") == "haute"
+    assert establishment_confidence("text") == "basse"   # match par nom -> pas fiable
+    assert establishment_confidence(None) == "basse"
     # Décideur : haute seulement si l'email est corroboré par le nom.
-    assert decision_maker_confidence("marie.dupont@x.fr", "Marie Dupont", False) == "haute"
-    assert decision_maker_confidence("contact@x.fr", "Marie Dupont", False) == "basse"
-    assert decision_maker_confidence("marie.dupont@x.fr", "Marie Dupont", True) == "basse"
-    assert decision_maker_confidence(None, "Marie Dupont", False) == "basse"
+    assert decision_maker_confidence("marie.dupont@x.fr", "Marie Dupont") == "haute"
+    assert decision_maker_confidence("contact@x.fr", "Marie Dupont") == "basse"
+    assert decision_maker_confidence(None, "Marie Dupont") == "basse"
 
 
 def test_places_match_basis():

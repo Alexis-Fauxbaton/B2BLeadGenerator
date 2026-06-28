@@ -358,8 +358,7 @@ function reviewFreshness(n: number | null) {
 
 function ConfidenceChip({ level }: { level: string | null }) {
   const map: Record<string, { label: string; cls: string }> = {
-    haute: { label: "fiable", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
-    moyenne: { label: "à confirmer", cls: "bg-amber-50 text-amber-700 ring-amber-200" },
+    haute: { label: "vérifié (géo)", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
   };
   const c = map[level ?? ""] ?? { label: "non vérifié", cls: "bg-slate-100 text-slate-400 ring-slate-200" };
   return (
@@ -373,9 +372,9 @@ function ContactBlock({ opp }: { opp: OpportunityRead }) {
   const instaUrl = opp.instagram
     ? `https://instagram.com/${opp.instagram.replace(/^@/, "")}`
     : null;
-  // Précision d'abord : on n'affiche les contacts établissement que si la
-  // confiance est haute ou moyenne ; sinon "à trouver".
-  const estabShown = opp.contact_confidence === "haute" || opp.contact_confidence === "moyenne";
+  // Précision d'abord : on n'affiche les contacts établissement que si le match
+  // est géo-confirmé (haute) ; sinon "à trouver".
+  const estabShown = opp.contact_confidence === "haute";
   const hasEstabValues = Boolean(opp.phone || opp.email || opp.website || opp.instagram);
   const fresh = reviewFreshness(opp.review_count);
   // Décideur : email affiché seulement si confiance haute.

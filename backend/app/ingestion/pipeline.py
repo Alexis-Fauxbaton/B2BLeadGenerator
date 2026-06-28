@@ -20,8 +20,6 @@ from ..services.contact_quality import (
     classify_email,
     decision_maker_confidence,
     establishment_confidence,
-    looks_like_holding,
-    names_concordant,
 )
 from ..services.scoring import compute_score
 from ..services.segment import classify_segment
@@ -571,11 +569,6 @@ def _contact_enrich_one(
         opp.establishment_name, lat, lon, website=opp.website, city=opp.city, postal=postal
     )
 
-    # Une société mère / holding n'est pas un local à équiper : son contact
-    # "déborde" sur le vaisseau amiral du groupe -> on ne l'auto-attribue pas
-    # avec confiance (flag, pas drop).
-    is_holding = looks_like_holding(opp.establishment_name, opp.naf, opp.proof_text)
-
     # Contacts ÉTABLISSEMENT (ligne publique du lieu) — ne remplit que si vide.
     opp.phone = opp.phone or info.phone
     opp.website = opp.website or info.website
@@ -590,14 +583,13 @@ def _contact_enrich_one(
         else:
             opp.email = opp.email or info.email
 
-    # Confiance (précision d'abord) — pilote l'affichage côté UI. Pour un match
-    # 'text' (nom+ville), on exige que le nom Places concorde avec l'enseigne.
-    name_ok = names_concordant(opp.establishment_name, info.place_name)
+    # Confiance (précision d'abord) : contact établissement fiable UNIQUEMENT si
+    # match géo-confirmé ; sinon "à trouver". Une seule règle (pas de tambouille).
     has_estab = any([opp.phone, opp.email, opp.website, opp.instagram, opp.facebook])
     if has_estab:
-        opp.contact_confidence = establishment_confidence(info.match_basis, is_holding, name_ok)
+        opp.contact_confidence = establishment_confidence(info.match_basis)
     opp.decision_maker_confidence = decision_maker_confidence(
-        opp.decision_maker_email, opp.decision_maker, is_holding
+        opp.decision_maker_email, opp.decision_maker
     )
 
     opp.contact_enriched_at = datetime.utcnow()
@@ -607,7 +599,7 @@ def _contact_enrich_one(
     # probablement d'un AUTRE établissement (cas BEAR YTD vs Bearsden, 424 avis)
     # -> on l'ignore (ni stocké, ni scoré, ni affiché). La nature création/reprise
     # vient du registre (origineFonds), pas des avis (retrait du misfire (b)).
-    trusted_match = opp.contact_confidence in ("haute", "moyenne")
+    trusted_match = opp.contact_confidence == "haute"  # = géo-confirmé
     if info.review_count is not None and trusted_match:
         opp.review_count = info.review_count
         score = compute_score(
