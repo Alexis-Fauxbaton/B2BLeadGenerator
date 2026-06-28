@@ -1,0 +1,290 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import {
+  Search,
+  SlidersHorizontal,
+  ArrowUpDown,
+  DownloadCloud,
+  Loader2,
+  Phone,
+  Mail,
+  Instagram,
+  Globe,
+  User,
+} from "lucide-react";
+import { api, type OpportunityFilters } from "@/lib/api";
+import type { IngestStats, Meta, OpportunityList } from "@/lib/types";
+import { CHANNEL_LABELS, STATUS_LABELS, formatDate } from "@/lib/labels";
+import PageHeader from "@/components/PageHeader";
+import {
+  ChannelBadge,
+  ScoreBadge,
+  SignalBadge,
+  SourceBadge,
+  StatusBadge,
+} from "@/components/Badges";
+import { Loading, ErrorState, EmptyState } from "@/components/States";
+
+const SELECT_CLS =
+  "rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100";
+
+function ContactIcons({ o }: { o: OpportunityList }) {
+  // Précision d'abord : un canal n'est "allumé" que si on a la valeur ET une
+  // confiance suffisante (haute/moyenne) — sinon il reste gris ("à trouver").
+  const estabTrusted = o.contact_confidence === "haute" || o.contact_confidence === "moyenne";
+  const items: [boolean, typeof Phone, string][] = [
+    [Boolean(o.phone) && estabTrusted, Phone, "Téléphone"],
+    [Boolean(o.email) && estabTrusted, Mail, "Email"],
+    [Boolean(o.instagram) && estabTrusted, Instagram, "Instagram"],
+    [Boolean(o.website) && estabTrusted, Globe, "Site web"],
+    [o.decision_maker_confidence === "haute", User, "Décideur"],
+  ];
+  if (!items.some(([on]) => on))
+    return <span className="text-xs text-slate-300">à trouver</span>;
+  return (
+    <div className="flex items-center gap-1.5">
+      {items.map(([on, Icon, label]) => (
+        <Icon
+          key={label}
+          size={15}
+          className={on ? "text-emerald-600" : "text-slate-200"}
+          aria-label={on ? label : `${label} absent`}
+        />
+      ))}
+    </div>
+  );
+}
+
+export default function OpportunitiesPage() {
+  const [meta, setMeta] = useState<Meta | null>(null);
+  const [rows, setRows] = useState<OpportunityList[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const [filters, setFilters] = useState<OpportunityFilters>({
+    sort_by: "score",
+    order: "desc",
+  });
+
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<IngestStats | null>(null);
+
+  const loadMeta = () =>
+    api.getMeta().then(setMeta).catch((e) => setError(e.message));
+
+  const loadRows = () => {
+    setRows(null);
+    api.getOpportunities(filters).then(setRows).catch((e) => setError(e.message));
+  };
+
+  useEffect(() => {
+    loadMeta();
+  }, []);
+
+  useEffect(() => {
+    loadRows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters]);
+
+  const runImport = async () => {
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const stats = await api.ingest({ since_days: 60, limit: 100 });
+      setImportResult(stats);
+      loadMeta();
+      loadRows();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const set = (patch: Partial<OpportunityFilters>) =>
+    setFilters((f) => ({ ...f, ...patch }));
+
+  const sortLabel = useMemo(
+    () =>
+      ({
+        score: "Score",
+        detection_date: "Date de détection",
+        city: "Ville",
+        status: "Statut",
+      }[filters.sort_by ?? "score"]),
+    [filters.sort_by]
+  );
+
+  if (error) return <ErrorState message={error} />;
+
+  return (
+    <>
+      <PageHeader
+        title="Opportunités"
+        subtitle={rows ? `${rows.length} établissement(s)` : "Chargement…"}
+      >
+        <button
+          onClick={runImport}
+          disabled={importing}
+          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+          title="Récupérer de vrais leads CHR depuis BODACC (Île-de-France, 60 derniers jours)"
+        >
+          {importing ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : (
+            <DownloadCloud size={16} />
+          )}
+          Importer (BODACC)
+        </button>
+      </PageHeader>
+
+      <div className="space-y-4 p-8">
+        {importResult && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            <span className="font-medium">Import BODACC terminé :</span>
+            <span>{importResult.fetched} annonces analysées</span>
+            <span>· {importResult.chr_matched} CHR détectés</span>
+            <span>· <b>{importResult.created} nouveaux</b></span>
+            <span>· {importResult.updated} mis à jour</span>
+            <span>· {importResult.skipped_dupes} doublons ignorés</span>
+            {importResult.errors > 0 && <span>· {importResult.errors} erreurs</span>}
+          </div>
+        )}
+        {/* Filtres */}
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-card">
+          <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-700">
+            <SlidersHorizontal size={16} className="text-slate-400" /> Filtres
+          </div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+            <div className="relative">
+              <Search size={16} className="absolute left-3 top-2.5 text-slate-400" />
+              <input
+                placeholder="Rechercher par nom…"
+                className={`${SELECT_CLS} w-full pl-9`}
+                value={filters.search ?? ""}
+                onChange={(e) => set({ search: e.target.value })}
+              />
+            </div>
+
+            <select className={SELECT_CLS} value={filters.city ?? ""} onChange={(e) => set({ city: e.target.value })}>
+              <option value="">Toutes les villes</option>
+              {meta?.cities.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+
+            <select className={SELECT_CLS} value={filters.establishment_type ?? ""} onChange={(e) => set({ establishment_type: e.target.value })}>
+              <option value="">Tous les types</option>
+              {meta?.establishment_types.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+
+            <select className={SELECT_CLS} value={filters.main_signal ?? ""} onChange={(e) => set({ main_signal: e.target.value })}>
+              <option value="">Tous les signaux</option>
+              {meta?.signal_types.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+
+            <select className={SELECT_CLS} value={filters.status ?? ""} onChange={(e) => set({ status: e.target.value })}>
+              <option value="">Tous les statuts</option>
+              {meta?.statuses.map((s) => <option key={s} value={s}>{STATUS_LABELS[s] ?? s}</option>)}
+            </select>
+
+            <select className={SELECT_CLS} value={filters.recommended_channel ?? ""} onChange={(e) => set({ recommended_channel: e.target.value })}>
+              <option value="">Tous les canaux</option>
+              {meta?.channels.map((c) => <option key={c} value={c}>{CHANNEL_LABELS[c] ?? c}</option>)}
+            </select>
+
+            <select className={SELECT_CLS} value={filters.source ?? ""} onChange={(e) => set({ source: e.target.value })}>
+              <option value="">Toutes les sources</option>
+              <option value="demo">Démo</option>
+              <option value="bodacc">BODACC (réel)</option>
+            </select>
+
+            <select className={SELECT_CLS} value={filters.min_score ?? ""} onChange={(e) => set({ min_score: e.target.value ? Number(e.target.value) : undefined })}>
+              <option value="">Score minimum</option>
+              {[8, 6, 5, 3].map((v) => <option key={v} value={v}>≥ {v}/10</option>)}
+            </select>
+
+            <div className="flex items-center gap-2">
+              <select className={`${SELECT_CLS} flex-1`} value={filters.sort_by ?? "score"} onChange={(e) => set({ sort_by: e.target.value })}>
+                <option value="score">Tri : Score</option>
+                <option value="detection_date">Tri : Détection</option>
+                <option value="city">Tri : Ville</option>
+                <option value="status">Tri : Statut</option>
+              </select>
+              <button
+                onClick={() => set({ order: filters.order === "desc" ? "asc" : "desc" })}
+                className="grid h-[38px] w-[38px] shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                title={`Ordre : ${filters.order === "desc" ? "décroissant" : "croissant"}`}
+              >
+                <ArrowUpDown size={16} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Tableau */}
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-card">
+          {!rows ? (
+            <Loading />
+          ) : rows.length === 0 ? (
+            <EmptyState label="Aucune opportunité ne correspond à ces filtres." />
+          ) : (
+            <div className="overflow-x-auto scrollbar-thin">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                    <th className="px-4 py-3">Établissement</th>
+                    <th className="px-4 py-3">Type</th>
+                    <th className="px-4 py-3">Ville</th>
+                    <th className="px-4 py-3">Signal</th>
+                    <th className="px-4 py-3">Score</th>
+                    <th className="px-4 py-3">Timing</th>
+                    <th className="px-4 py-3">Besoin</th>
+                    <th className="px-4 py-3">Contact</th>
+                    <th className="px-4 py-3">Canal</th>
+                    <th className="px-4 py-3">Statut</th>
+                    <th className="px-4 py-3">Détecté</th>
+                    <th className="px-4 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {rows.map((o) => (
+                    <tr key={o.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-medium text-slate-900">
+                        <div className="flex items-center gap-2">
+                          <span className="max-w-[220px] truncate" title={o.establishment_name}>
+                            {o.establishment_name}
+                          </span>
+                          <SourceBadge source={o.source} />
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 capitalize text-slate-600">{o.establishment_type}</td>
+                      <td className="px-4 py-3 text-slate-600">{o.city}</td>
+                      <td className="px-4 py-3"><SignalBadge label={o.main_signal} /></td>
+                      <td className="px-4 py-3"><ScoreBadge score={o.opportunity_score} /></td>
+                      <td className="px-4 py-3 text-slate-600">{o.estimated_timing}</td>
+                      <td className="px-4 py-3 max-w-[180px] truncate text-slate-500" title={o.probable_needs.join(", ")}>
+                        {o.probable_needs[0] ?? "—"}
+                      </td>
+                      <td className="px-4 py-3"><ContactIcons o={o} /></td>
+                      <td className="px-4 py-3"><ChannelBadge channel={o.recommended_channel} /></td>
+                      <td className="px-4 py-3"><StatusBadge status={o.status} /></td>
+                      <td className="px-4 py-3 whitespace-nowrap text-slate-500">{formatDate(o.detection_date)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <Link
+                          href={`/opportunities/${o.id}`}
+                          className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200"
+                        >
+                          Voir
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}

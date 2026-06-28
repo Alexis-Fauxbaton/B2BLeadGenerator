@@ -1,0 +1,183 @@
+"""Schémas Pydantic pour les entrées/sorties de l'API."""
+from datetime import date, datetime
+from typing import List, Optional
+
+from pydantic import BaseModel
+
+
+# --- Signal -------------------------------------------------------------------
+
+
+class SignalRead(BaseModel):
+    id: int
+    signal_type: str
+    source: str
+    source_url: str
+    signal_date: date
+    confidence_score: float
+    raw_text: str
+
+    class Config:
+        from_attributes = True
+
+
+# --- Contact history ----------------------------------------------------------
+
+
+class ContactHistoryRead(BaseModel):
+    id: int
+    channel: Optional[str]
+    message: Optional[str]
+    action_type: str
+    status: Optional[str]
+    note: Optional[str]
+    contacted_at: Optional[datetime]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# --- Opportunity --------------------------------------------------------------
+
+
+class OpportunityBase(BaseModel):
+    establishment_name: str
+    establishment_type: str
+    city: str
+    address: str
+    main_signal: str
+    secondary_signals: List[str] = []
+    detection_date: date
+    estimated_timing: str
+    probable_needs: List[str] = []
+    decision_maker: Optional[str] = None
+    opportunity_score: int = 0
+    score_reason: str = ""
+    recommended_channel: str = "telephone"
+    channel_reason: str = ""
+    proof_text: str = ""
+    proof_url: str = ""
+    status: str = "non_contacte"
+    next_follow_up_date: Optional[date] = None
+
+
+class OpportunityList(OpportunityBase):
+    """Version allégée pour le tableau / pipeline."""
+
+    id: int
+    source: str = "demo"
+    source_ref: Optional[str] = None
+    siren: Optional[str] = None
+    naf: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    instagram: Optional[str] = None
+    facebook: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    review_count: Optional[int] = None
+    contact_confidence: Optional[str] = None
+    decision_maker_email: Optional[str] = None
+    decision_maker_confidence: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class OpportunityRead(OpportunityList):
+    """Fiche détail complète."""
+
+    generated_instagram_dm: Optional[str] = None
+    generated_email: Optional[str] = None
+    generated_linkedin: Optional[str] = None
+    generated_call_script: Optional[str] = None
+    signals: List[SignalRead] = []
+    contact_history: List[ContactHistoryRead] = []
+
+
+class OpportunityUpdate(BaseModel):
+    """Mise à jour partielle d'une opportunité (PATCH)."""
+
+    establishment_name: Optional[str] = None
+    establishment_type: Optional[str] = None
+    city: Optional[str] = None
+    address: Optional[str] = None
+    main_signal: Optional[str] = None
+    secondary_signals: Optional[List[str]] = None
+    estimated_timing: Optional[str] = None
+    probable_needs: Optional[List[str]] = None
+    decision_maker: Optional[str] = None
+    proof_text: Optional[str] = None
+    proof_url: Optional[str] = None
+    next_follow_up_date: Optional[date] = None
+    note: Optional[str] = None  # ajoutée à l'historique si fournie
+
+
+class StatusUpdate(BaseModel):
+    status: str
+    note: Optional[str] = None
+    next_follow_up_date: Optional[date] = None
+
+
+# --- Messages -----------------------------------------------------------------
+
+
+class GeneratedMessages(BaseModel):
+    instagram_dm: str
+    email: str
+    linkedin: str
+    call_script: str
+    source: str  # "openai" ou "template"
+
+
+# --- Settings -----------------------------------------------------------------
+
+
+class SettingsRead(BaseModel):
+    id: int
+    provider_name: str
+    provider_offer: str
+    tone: str
+    target_area: str
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SettingsUpdate(BaseModel):
+    provider_name: Optional[str] = None
+    provider_offer: Optional[str] = None
+    tone: Optional[str] = None
+    target_area: Optional[str] = None
+
+
+# --- Dashboard ----------------------------------------------------------------
+
+
+class SignalBreakdown(BaseModel):
+    label: str
+    count: int
+
+
+class StatusBreakdown(BaseModel):
+    label: str
+    count: int
+
+
+class DashboardStats(BaseModel):
+    total_opportunities: int
+    hot_leads: int
+    not_contacted: int
+    follow_ups_due: int
+    interested: int
+    appointments: int
+    won: int
+    lost: int
+    by_signal: List[SignalBreakdown]
+    by_status: List[StatusBreakdown]
+    hottest: List[OpportunityList]

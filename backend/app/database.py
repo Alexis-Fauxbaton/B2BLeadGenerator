@@ -1,0 +1,69 @@
+"""Configuration de la base de données SQLite via SQLModel."""
+import os
+
+from dotenv import load_dotenv
+from sqlmodel import Session, SQLModel, create_engine
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./chr_signal_radar.db")
+
+# check_same_thread=False : nécessaire car FastAPI peut utiliser plusieurs threads.
+engine = create_engine(
+    DATABASE_URL,
+    echo=False,
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+)
+
+
+def init_db() -> None:
+    """Crée les tables si elles n'existent pas encore, puis applique les
+    migrations légères (ajout de colonnes manquantes sur une base existante)."""
+    # Import nécessaire pour que SQLModel connaisse les modèles avant create_all.
+    from . import models  # noqa: F401
+
+    SQLModel.metadata.create_all(engine)
+    _run_lightweight_migrations()
+
+
+def _run_lightweight_migrations() -> None:
+    """Ajoute les colonnes ajoutées après coup (SQLite n'a pas de IF NOT EXISTS
+    sur ADD COLUMN ; on inspecte donc PRAGMA table_info)."""
+    from sqlalchemy import inspect, text
+
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+
+    inspector = inspect(engine)
+    if "opportunities" not in inspector.get_table_names():
+        return
+
+    existing = {col["name"] for col in inspector.get_columns("opportunities")}
+    additions = {
+        "source": "ALTER TABLE opportunities ADD COLUMN source VARCHAR DEFAULT 'demo'",
+        "source_ref": "ALTER TABLE opportunities ADD COLUMN source_ref VARCHAR",
+        "siren": "ALTER TABLE opportunities ADD COLUMN siren VARCHAR",
+        "naf": "ALTER TABLE opportunities ADD COLUMN naf VARCHAR",
+        "phone": "ALTER TABLE opportunities ADD COLUMN phone VARCHAR",
+        "email": "ALTER TABLE opportunities ADD COLUMN email VARCHAR",
+        "website": "ALTER TABLE opportunities ADD COLUMN website VARCHAR",
+        "instagram": "ALTER TABLE opportunities ADD COLUMN instagram VARCHAR",
+        "facebook": "ALTER TABLE opportunities ADD COLUMN facebook VARCHAR",
+        "latitude": "ALTER TABLE opportunities ADD COLUMN latitude REAL",
+        "longitude": "ALTER TABLE opportunities ADD COLUMN longitude REAL",
+        "review_count": "ALTER TABLE opportunities ADD COLUMN review_count INTEGER",
+        "contact_confidence": "ALTER TABLE opportunities ADD COLUMN contact_confidence VARCHAR",
+        "decision_maker_email": "ALTER TABLE opportunities ADD COLUMN decision_maker_email VARCHAR",
+        "decision_maker_confidence": "ALTER TABLE opportunities ADD COLUMN decision_maker_confidence VARCHAR",
+        "contact_enriched_at": "ALTER TABLE opportunities ADD COLUMN contact_enriched_at DATETIME",
+    }
+    with engine.begin() as conn:
+        for column, ddl in additions.items():
+            if column not in existing:
+                conn.execute(text(ddl))
+
+
+def get_session():
+    """Dépendance FastAPI : fournit une session DB par requête."""
+    with Session(engine) as session:
+        yield session
