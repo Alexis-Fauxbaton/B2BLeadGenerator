@@ -15,6 +15,8 @@ import requests
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CHR-Signal-Radar/0.1)"}
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+# Emails explicitement déclarés cliquables (fiables, vs placeholders de formulaire).
+MAILTO_RE = re.compile(r"mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})")
 INSTA_RE = re.compile(r"instagram\.com/([A-Za-z0-9_.]+)")
 FB_RE = re.compile(r"facebook\.com/([A-Za-z0-9_.\-]+)")
 TEL_RE = re.compile(r'tel:([+0-9][\d .()-]{6,})')
@@ -23,28 +25,34 @@ FR_PHONE_RE = re.compile(r"(?:(?:\+33|0)\s?[1-9])(?:[\s.-]?\d{2}){4}")
 # Sous-pages utiles à tenter.
 CONTACT_PATHS = ["contact", "nous-contacter", "mentions-legales", "mentions-legales/", "legal"]
 
-# Emails à ignorer (artefacts, libs, exemples).
+# Emails à ignorer (artefacts, libs, exemples, placeholders de formulaire).
 EMAIL_JUNK = (
     "sentry", "wixpress", "example.com", "example.org", "domain.com", "email@",
     "your@", "@2x", "@sentry", "godaddy", "wordpress", "squarespace", ".png",
     ".jpg", ".jpeg", ".gif", ".webp", ".svg", "u003e", "name@",
+    # placeholders de formulaire (ex: "sophie@email.com", "prenom.nom@...")
+    "@email.com", "@exemple", "exemple@", "@votre", "votre@", "prenom", "@adresse",
+    "@mail.com", "@test.", "@monsite", "@yourdomain", "@yoursite", "nom@",
 )
 INSTA_IGNORE = {"p", "reel", "reels", "explore", "accounts", "stories", "tv", "share"}
 FB_IGNORE = {"sharer", "tr", "plugins", "dialog", "profile.php", "people"}
 
 
-def _clean_emails(html: str, site_domain: str) -> Optional[str]:
-    found = []
-    for e in EMAIL_RE.findall(html):
-        el = e.lower()
-        if any(j in el for j in EMAIL_JUNK):
-            continue
-        found.append(el)
+def _pick_email(candidates: List[str], site_domain: str) -> Optional[str]:
+    found = [e.lower() for e in candidates if not any(j in e.lower() for j in EMAIL_JUNK)]
     if not found:
         return None
     # Préfère un email du même domaine que le site.
     same = [e for e in found if site_domain and site_domain in e.split("@")[-1]]
     return (same or found)[0]
+
+
+def _clean_emails(html: str, site_domain: str) -> Optional[str]:
+    # 1) Emails en `mailto:` = déclarés cliquables -> fiables. 2) Repli texte
+    #    libre seulement si aucun mailto (filtre les placeholders de formulaire
+    #    type "sophie@email.com" via EMAIL_JUNK).
+    return _pick_email(MAILTO_RE.findall(html), site_domain) \
+        or _pick_email(EMAIL_RE.findall(html), site_domain)
 
 
 def _first(matches: List[str], ignore: set) -> Optional[str]:

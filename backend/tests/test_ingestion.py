@@ -539,6 +539,20 @@ def test_website_scraper_filters_junk_and_ignored():
     assert c["instagram"] is None
 
 
+def test_website_scraper_ignores_form_placeholder_email():
+    from app.ingestion.enrichment.website_scraper import extract_from_html
+
+    # Placeholder de formulaire de réservation + vrai email en mailto.
+    html = (
+        '<input type="email" placeholder="sophie@email.com">'
+        '<a href="mailto:resa@koko-odessa.fr">réserver</a>'
+    )
+    assert extract_from_html(html, site_domain="koko-odessa.fr")["email"] == "resa@koko-odessa.fr"
+    # Placeholder seul (pas de mailto) -> on n'invente pas d'email.
+    only_placeholder = '<input type="email" placeholder="sophie@email.com">'
+    assert extract_from_html(only_placeholder, site_domain="koko-odessa.fr")["email"] is None
+
+
 def test_osm_name_matching():
     from app.ingestion.enrichment.osm import _name_matches
 
