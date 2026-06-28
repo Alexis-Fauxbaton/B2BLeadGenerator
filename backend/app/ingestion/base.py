@@ -36,6 +36,7 @@ class LeadCandidate:
     address: str = ""
     secondary_signals: List[str] = field(default_factory=list)
     decision_maker: Optional[str] = None
+    dirigeants: List[str] = field(default_factory=list)
     establishment_type: Optional[str] = None
     classification_text: str = ""
     # Identifiants / enrichissement

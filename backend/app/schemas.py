@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 # --- Signal -------------------------------------------------------------------
@@ -52,6 +52,7 @@ class OpportunityBase(BaseModel):
     estimated_timing: str
     probable_needs: List[str] = []
     decision_maker: Optional[str] = None
+    dirigeants: List[str] = []
     opportunity_score: int = 0
     score_reason: str = ""
     recommended_channel: str = "telephone"
@@ -86,6 +87,13 @@ class OpportunityList(OpportunityBase):
 
     class Config:
         from_attributes = True
+
+    # Colonnes JSON ajoutées après coup : NULL en base sur les anciennes lignes
+    # -> on coerce en liste vide pour ne pas casser la sérialisation.
+    @field_validator("secondary_signals", "probable_needs", "dirigeants", mode="before")
+    @classmethod
+    def _coerce_none_list(cls, v):
+        return v if v is not None else []
 
 
 class OpportunityRead(OpportunityList):

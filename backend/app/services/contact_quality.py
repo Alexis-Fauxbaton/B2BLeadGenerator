@@ -26,6 +26,14 @@ HOLDING_NAME_MARKERS = (
     "food retail", "patrimoine", "gestion",
 )
 
+# Mots génériques (type d'établissement, articles, ville) : ignorés pour juger
+# qu'un nom CONCORDE avec un autre (on veut les tokens distinctifs).
+GENERIC_NAME_WORDS = {
+    "le", "la", "les", "du", "de", "des", "et", "aux", "au", "chez", "paris",
+    "cafe", "bar", "restaurant", "brasserie", "hotel", "resto", "pizzeria",
+    "boulangerie", "traiteur", "bistro", "bistrot", "snack", "food", "the",
+}
+
 
 def _norm(text: Optional[str]) -> str:
     text = (text or "").lower()
@@ -84,15 +92,34 @@ def looks_like_holding(
     return False
 
 
-def establishment_confidence(match_basis: Optional[str], is_holding: bool) -> str:
+def _distinctive_tokens(text: Optional[str]) -> set:
+    return {t for t in _tokens(text) if t not in GENERIC_NAME_WORDS and not t.isdigit()}
+
+
+def names_concordant(enseigne: Optional[str], place_name: Optional[str]) -> bool:
+    """Le nom du lieu trouvé recoupe-t-il vraiment notre enseigne ? (tokens
+    distinctifs communs). Faux si l'un des deux n'a aucun token distinctif —
+    précision d'abord : on ne valide pas un match qu'on ne peut pas corroborer."""
+    a = _distinctive_tokens(enseigne)
+    b = _distinctive_tokens(place_name)
+    if not a or not b:
+        return False
+    return bool(a & b)
+
+
+def establishment_confidence(
+    match_basis: Optional[str], is_holding: bool, name_ok: bool = True
+) -> str:
     """Confiance d'un contact établissement.
     match_basis : 'geo' (lieu Places ≤ seuil du point Sirene) | 'text' (nom+ville)
-    | None (pas de match Places validé)."""
+    | None. Pour un match 'text', on EXIGE en plus la concordance de nom
+    (name_ok) — sinon le bon arrondissement ne suffit pas (cas BEAR YTD vs
+    Bearsden). Le match 'geo' se suffit à lui-même."""
     if is_holding:
         return "basse"
     if match_basis == "geo":
         return "haute"
-    if match_basis == "text":
+    if match_basis == "text" and name_ok:
         return "moyenne"
     return "basse"
 

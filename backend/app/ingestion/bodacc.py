@@ -7,6 +7,7 @@ Mapping : transforme chaque annonce en LeadCandidate normalisé.
 from __future__ import annotations
 
 import json
+import re
 import time
 import unicodedata
 from datetime import date, datetime, timedelta
@@ -193,7 +194,15 @@ class BodaccConnector(Connector):
         )
         activite = _extract_activite(person, establishments)
         address = _extract_address(person, rec)
-        decision_maker = _person_full_name(person) if _is_physical(person) else None
+        # Personne physique (entreprise individuelle) -> son nom. Société (pm) ->
+        # on lit TOUS les dirigeants déclarés dans `administration` (Président, DG,
+        # Gérant…). `decision_maker` = le principal ; `dirigeants` = la liste.
+        if _is_physical(person):
+            decision_maker = _person_full_name(person) or None
+            dirigeants = [decision_maker] if decision_maker else []
+        else:
+            dirigeants = _parse_dirigeants(person.get("administration"))
+            decision_maker = dirigeants[0] if dirigeants else None
 
         classification_text = " ".join(filter(None, [activite, name]))
 
@@ -212,6 +221,7 @@ class BodaccConnector(Connector):
             secondary_signals=secondary,
             detection_date=detection,
             decision_maker=decision_maker,
+            dirigeants=dirigeants,
             classification_text=classification_text,
             siren=siren,
             proof_text=proof_text,
@@ -300,6 +310,63 @@ def _bodacc_norm(text: Any) -> str:
     return "".join(
         c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn"
     )
+
+
+_ROLE_RE = re.compile(
+    r"(Président[e]?(?: directeur général)?|G[ée]rant[e]?|Co-?g[ée]rant[e]?|"
+    r"Directeur général|Directrice générale|Directeur|Directrice|Associé[e]? unique)"
+    r"\s*:\s*",
+    re.IGNORECASE,
+)
+# Priorité du décideur principal à retenir.
+_ROLE_PRIORITY = ["president", "gerant", "directeur general", "directeur", "associe"]
+
+
+def _dirigeant_rank(role: str) -> int:
+    r = _bodacc_norm(role)
+    for i, key in enumerate(_ROLE_PRIORITY):
+        if key in r:
+            return i
+    return len(_ROLE_PRIORITY)
+
+
+def _parse_dirigeants(administration: Any) -> List[str]:
+    """Extrait TOUS les dirigeants du champ `administration` d'une société,
+    triés par importance (Président d'abord). Ex: 'Président : Afif, Samuel Serge
+    Elie, Directeur général : Journo, Victor Isaac' -> ['Samuel Afif, Président',
+    'Victor Journo, Directeur général']."""
+    if not isinstance(administration, str) or not administration.strip():
+        return []
+    matches = list(_ROLE_RE.finditer(administration))
+    if not matches:
+        return []
+    pairs: List[tuple] = []
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(administration)
+        name = administration[start:end].strip().strip(",").strip()
+        if name:
+            pairs.append((m.group(1), name))
+    pairs.sort(key=lambda p: _dirigeant_rank(p[0]))
+    return [_format_dirigeant(name, role) for role, name in pairs]
+
+
+def _parse_dirigeant(administration: Any) -> Optional[str]:
+    """Dirigeant principal (Président en priorité) ou None."""
+    dirigeants = _parse_dirigeants(administration)
+    return dirigeants[0] if dirigeants else None
+
+
+def _format_dirigeant(name: str, role: str) -> str:
+    """'Afif, Samuel Serge Elie' + 'Président' -> 'Samuel Afif, Président'.
+    On garde la virgule : le scoring valorise un décideur nommé (présence d'une
+    virgule = rôle identifié)."""
+    display = name
+    if "," in name:
+        nom_part, prenoms = name.split(",", 1)
+        first = prenoms.split()
+        display = f"{first[0]} {nom_part.strip()}".strip() if first else nom_part.strip()
+    return f"{display}, {role.strip().capitalize()}"
 
 
 def _is_takeover(origine_fonds: str, prev_owner: Any, prev_operator: Any) -> bool:

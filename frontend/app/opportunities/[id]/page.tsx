@@ -420,10 +420,23 @@ function ContactBlock({ opp }: { opp: OpportunityRead }) {
         </div>
       </div>
 
-      {/* Bloc décideur */}
+      {/* Bloc décideur(s) */}
       <div className="space-y-2 border-t border-slate-100 pt-3">
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Décideur</span>
-        <InfoRow label="Nom" value={opp.decision_maker ?? "—"} />
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Décideur{(opp.dirigeants?.length ?? 0) > 1 ? "s" : ""}
+        </span>
+        {(opp.dirigeants?.length ?? 0) > 0 ? (
+          <div className="space-y-1.5">
+            {opp.dirigeants.map((d) => (
+              <div key={d} className="flex items-center gap-2 text-sm text-slate-700">
+                <User size={14} className="shrink-0 text-slate-400" />
+                <span>{d}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <InfoRow label="Nom" value={opp.decision_maker ?? "—"} />
+        )}
         {decideurEmailShown ? (
           <ContactRow icon={Mail} href={`mailto:${opp.decision_maker_email}`} text={opp.decision_maker_email!} action="Écrire" />
         ) : (

@@ -21,6 +21,7 @@ from ..services.contact_quality import (
     decision_maker_confidence,
     establishment_confidence,
     looks_like_holding,
+    names_concordant,
 )
 from ..services.scoring import compute_score
 from ..services.segment import classify_segment
@@ -301,6 +302,14 @@ def _process_candidate(
         existing.address = cand.address
         existing.siren = cand.siren
         existing.naf = cand.naf
+        # Signaux & décideur : à rafraîchir aussi (sinon une amélioration du
+        # parsing — origineFonds, administration — ne corrige jamais l'existant).
+        existing.main_signal = cand.main_signal
+        existing.secondary_signals = cand.secondary_signals
+        existing.decision_maker = cand.decision_maker
+        existing.dirigeants = cand.dirigeants
+        existing.estimated_timing = timing
+        existing.probable_needs = needs
         if cand.latitude is not None:
             existing.latitude = cand.latitude
             existing.longitude = cand.longitude
@@ -327,6 +336,7 @@ def _process_candidate(
         estimated_timing=timing,
         probable_needs=needs,
         decision_maker=cand.decision_maker,
+        dirigeants=cand.dirigeants,
         opportunity_score=score.score,
         score_reason=score.reason,
         recommended_channel=channel.channel,
@@ -505,6 +515,10 @@ def run_contact_enrich(
         if reset:
             for o in session.exec(select(Opportunity).where(Opportunity.source == source)).all():
                 o.phone = o.email = o.website = o.instagram = o.facebook = None
+                o.review_count = None
+                o.contact_confidence = None
+                o.decision_maker_email = None
+                o.decision_maker_confidence = None
                 o.contact_enriched_at = None
                 session.add(o)
             session.commit()
@@ -576,20 +590,25 @@ def _contact_enrich_one(
         else:
             opp.email = opp.email or info.email
 
-    # Confiance (précision d'abord) — pilote l'affichage côté UI.
+    # Confiance (précision d'abord) — pilote l'affichage côté UI. Pour un match
+    # 'text' (nom+ville), on exige que le nom Places concorde avec l'enseigne.
+    name_ok = names_concordant(opp.establishment_name, info.place_name)
     has_estab = any([opp.phone, opp.email, opp.website, opp.instagram, opp.facebook])
     if has_estab:
-        opp.contact_confidence = establishment_confidence(info.match_basis, is_holding)
+        opp.contact_confidence = establishment_confidence(info.match_basis, is_holding, name_ok)
     opp.decision_maker_confidence = decision_maker_confidence(
         opp.decision_maker_email, opp.decision_maker, is_holding
     )
 
     opp.contact_enriched_at = datetime.utcnow()
 
-    # Fraîcheur Places (nb d'avis) : simple qualifieur de score. La nature
-    # création/reprise vient désormais du registre (origineFonds, dans bodacc.py),
-    # donc PLUS de reclassification ici (cf. retrait du misfire (b)).
-    if info.review_count is not None:
+    # Fraîcheur Places (nb d'avis) : on ne FAIT CONFIANCE au nb d'avis que si le
+    # match établissement est fiable (haute/moyenne). Sinon il vient
+    # probablement d'un AUTRE établissement (cas BEAR YTD vs Bearsden, 424 avis)
+    # -> on l'ignore (ni stocké, ni scoré, ni affiché). La nature création/reprise
+    # vient du registre (origineFonds), pas des avis (retrait du misfire (b)).
+    trusted_match = opp.contact_confidence in ("haute", "moyenne")
+    if info.review_count is not None and trusted_match:
         opp.review_count = info.review_count
         score = compute_score(
             main_signal=opp.main_signal,
@@ -603,6 +622,10 @@ def _contact_enrich_one(
         )
         opp.opportunity_score = score.score
         opp.score_reason = score.reason
+    else:
+        # Match non fiable (ou pas d'avis) : on EFFACE tout nb d'avis trompeur
+        # déjà stocké — il vient probablement d'un autre établissement.
+        opp.review_count = None
 
     if opp.phone:
         stats.with_phone += 1

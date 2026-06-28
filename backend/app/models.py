@@ -64,6 +64,9 @@ class Opportunity(SQLModel, table=True):
     estimated_timing: str  # ex: "J-30", "J-60", "J-90"
     probable_needs: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     decision_maker: Optional[str] = None
+    # Tous les dirigeants déclarés (Président, DG, Gérant…) — pivots pour joindre
+    # le décideur. `decision_maker` = le principal ; ceci = la liste complète.
+    dirigeants: List[str] = Field(default_factory=list, sa_column=Column(JSON))
 
     opportunity_score: int = 0
     score_reason: str = ""

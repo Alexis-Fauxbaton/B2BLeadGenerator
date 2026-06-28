@@ -235,9 +235,9 @@ def test_contact_pass_rescores_on_review_count():
         source="bodacc", source_ref="R1",
     )
 
-    class FakeEnricher:  # pas de réseau : renvoie un établissement très récent.
+    class FakeEnricher:  # match FIABLE (geo) -> on fait confiance au nb d'avis.
         def enrich(self, *a, **k):
-            return ContactInfo(phone="0102030405", review_count=4)
+            return ContactInfo(phone="0102030405", review_count=4, match_basis="geo")
 
     class FakeSirene:
         def lookup(self, siren):
@@ -294,6 +294,35 @@ def test_contact_pass_does_not_reclass_creation_via_reviews():
     assert opp.contact_confidence == "haute"       # tél via match géo
 
 
+def test_contact_pass_ignores_reviews_on_unreliable_match():
+    """Cas BEAR YTD : match Places par nom+ville mais nom DISCORDANT (Bearsden)
+    -> confiance basse -> on n'affiche/score PAS les 424 avis (autre lieu)."""
+    from app.models import Opportunity
+    from app.ingestion.pipeline import _contact_enrich_one, ContactStats
+    from app.ingestion.enrichment.contact_enricher import ContactInfo
+
+    opp = Opportunity(
+        establishment_name="BEAR YTD", establishment_type="coffee shop", city="Paris",
+        address="38 rue Yves Toudic, 75010 Paris", main_signal="création récente",
+        secondary_signals=[], detection_date=date(2026, 6, 25), estimated_timing="J-30",
+        probable_needs=["mobilier"], recommended_channel="telephone",
+        source="bodacc", source_ref="B1",
+        review_count=999,  # valeur périmée déjà en base (passe précédente)
+    )
+
+    class Enr:  # Places a renvoyé "Bearsden Paris" (424 avis) par nom+ville.
+        def enrich(self, *a, **k):
+            return ContactInfo(phone="0145354923", review_count=424,
+                               match_basis="text", place_name="Bearsden Paris")
+
+    class NoSirene:
+        def lookup(self, siren): return None
+
+    _contact_enrich_one(opp, Enr(), NoSirene(), ContactStats())
+    assert opp.contact_confidence == "basse"   # nom discordant
+    assert opp.review_count is None             # 424 ET le 999 périmé effacés
+
+
 def test_contact_quality_email_classification():
     from app.services.contact_quality import classify_email, is_role_based_email
 
@@ -319,11 +348,25 @@ def test_contact_quality_holding_detection():
     assert looks_like_holding("Le Bon Bistrot") is False
 
 
+def test_contact_quality_name_concordance():
+    from app.services.contact_quality import names_concordant
+
+    assert names_concordant("Le Bon Bistrot", "Le Bon Bistrot") is True
+    assert names_concordant("Calcifer", "Restaurant Calcifer") is True
+    # BEAR YTD vs Bearsden : tokens distinctifs disjoints -> NON concordant.
+    assert names_concordant("BEAR YTD", "Bearsden Paris") is False
+    # Aucun token distinctif d'un côté -> on ne valide pas (précision).
+    assert names_concordant("Le Restaurant", "Chez Paul") is False
+    assert names_concordant("Calcifer", None) is False
+
+
 def test_contact_quality_confidence_levels():
     from app.services.contact_quality import establishment_confidence, decision_maker_confidence
 
     assert establishment_confidence("geo", False) == "haute"
-    assert establishment_confidence("text", False) == "moyenne"
+    assert establishment_confidence("geo", False, name_ok=False) == "haute"  # géo se suffit
+    assert establishment_confidence("text", False, name_ok=True) == "moyenne"
+    assert establishment_confidence("text", False, name_ok=False) == "basse"  # nom discordant
     assert establishment_confidence("text", True) == "basse"    # holding -> jamais sûr
     assert establishment_confidence(None, False) == "basse"
     # Décideur : haute seulement si l'email est corroboré par le nom.
@@ -346,6 +389,49 @@ def test_places_match_basis():
     assert _match_basis("restaurant", "10 Rue Y, 69001 Lyon", "75003", "Paris", **far, **anchor) is None
     assert _match_basis("hair_salon", addr, "75003", "Paris", **near, **anchor) is None
     assert _match_basis("restaurant", addr, "75003", "Paris") == "text"
+
+
+def test_bodacc_parses_dirigeants_from_administration():
+    """Pour une société (pm), les décideurs viennent du champ `administration`
+    (TOUS : Président, DG, Gérant…), pas du nom de la société."""
+    from app.ingestion.bodacc import _parse_dirigeant, _parse_dirigeants
+
+    admin = "Président : Afif, Samuel Serge Elie, Directeur général : Journo, Victor Isaac"
+    # Liste complète, Président en tête.
+    assert _parse_dirigeants(admin) == [
+        "Samuel Afif, Président",
+        "Victor Journo, Directeur général",
+    ]
+    # Principal seul.
+    assert _parse_dirigeant(admin) == "Samuel Afif, Président"
+    assert _parse_dirigeant("Gérant : Martin, Marie") == "Marie Martin, Gérant"
+    assert _parse_dirigeants(None) == []
+    assert _parse_dirigeants("") == []
+
+
+def test_bodacc_company_uses_administration_for_decision_makers():
+    """Bout-en-bout : une SAS dont listepersonnes est la société -> on capture
+    TOUS les dirigeants (BEAR YTD = Afif + Journo)."""
+    record = {
+        "id": "A2026ADMIN",
+        "familleavis": "creation",
+        "commercant": "BEAR YTD",
+        "ville": "Paris",
+        "cp": "75010",
+        "dateparution": "2026-06-25",
+        "listepersonnes": (
+            '{"personne": {"typePersonne": "pm", "denomination": "BEAR YTD",'
+            ' "activite": "coffee shop, salon de thé",'
+            ' "administration": "Président : Afif, Samuel Serge Elie,'
+            ' Directeur général : Journo, Victor Isaac"}}'
+        ),
+        "listeprecedentproprietaire": None,
+        "listeprecedentexploitant": None,
+    }
+    c = BodaccConnector().to_candidates([record])[0]
+    assert c.establishment_name == "BEAR YTD"
+    assert c.decision_maker == "Samuel Afif, Président"
+    assert c.dirigeants == ["Samuel Afif, Président", "Victor Journo, Directeur général"]
 
 
 def test_bodacc_origine_fonds_drives_creation_vs_reprise():

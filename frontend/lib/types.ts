@@ -10,6 +10,7 @@ export interface OpportunityList {
   estimated_timing: string;
   probable_needs: string[];
   decision_maker: string | null;
+  dirigeants: string[];
   opportunity_score: number;
   score_reason: string;
   recommended_channel: string;

@@ -24,6 +24,7 @@ class ContactInfo:
     facebook: Optional[str] = None
     review_count: Optional[int] = None  # nb d'avis Places -> proxy de fraîcheur
     match_basis: Optional[str] = None  # 'geo' | 'text' | None -> pilote la confiance
+    place_name: Optional[str] = None  # displayName Places -> concordance de nom
 
     def has_priority(self) -> bool:
         """A-t-on au moins un des champs prioritaires (email/tel/insta) ?"""
@@ -54,6 +55,7 @@ class ContactEnricher:
             info.website = info.website or places.get("website")
             info.review_count = places.get("review_count")
             info.match_basis = places.get("match_basis")
+            info.place_name = places.get("display_name")
 
         # 1. OSM (tags directs) si on a des coordonnées.
         if latitude is not None and longitude is not None:

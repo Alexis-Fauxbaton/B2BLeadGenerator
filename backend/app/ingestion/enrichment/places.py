@@ -158,6 +158,7 @@ def lookup_places(
     empty = {
         "phone": None, "website": None, "business_status": None,
         "review_count": None, "place_id": None, "matched": False, "match_basis": None,
+        "display_name": None,
     }
     key = os.getenv("GOOGLE_PLACES_API_KEY")
     if not key or not name:
@@ -205,4 +206,5 @@ def lookup_places(
         "place_id": p.get("id"),
         "matched": True,
         "match_basis": basis,
+        "display_name": (p.get("displayName") or {}).get("text"),
     }
