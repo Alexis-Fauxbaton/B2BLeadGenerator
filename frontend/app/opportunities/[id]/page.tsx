@@ -159,6 +159,14 @@ export default function OpportunityDetailPage() {
                 <span className="font-medium text-slate-600">{formatDate(opp.activity_start_date)}</span>
               </p>
             )}
+            {opp.venue_origin_date && (
+              <p className="text-xs text-slate-400">
+                Local d&apos;origine depuis{" "}
+                <span className="font-medium text-slate-600">
+                  {new Date(opp.venue_origin_date).getFullYear()}
+                </span>
+              </p>
+            )}
           </div>
         </div>
       </div>

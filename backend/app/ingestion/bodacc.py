@@ -161,6 +161,9 @@ class BodaccConnector(Connector):
             _parse_date_opt(acte.get("dateCommencementActivite"))
             if isinstance(acte, dict) else None
         )
+        # SIREN du précédent exploitant/propriétaire (reprise) -> sert à dater
+        # l'origine réelle du local (2e lookup Sirene dans le pipeline).
+        previous_siren = _extract_previous_siren(prev_operator) or _extract_previous_siren(prev_owner)
 
         # Signal principal
         main_signal = FAMILY_TO_SIGNAL.get(family)
@@ -230,6 +233,7 @@ class BodaccConnector(Connector):
             classification_text=classification_text,
             siren=siren,
             activity_start_date=activity_start,
+            previous_siren=previous_siren,
             proof_text=proof_text,
             proof_url=rec.get("url_complete") or "",
             raw=rec,
@@ -294,6 +298,23 @@ def _establishment_name(establishments: Any) -> str:
                 if val:
                     return val
     return ""
+
+
+def _extract_previous_siren(value: Any) -> Optional[str]:
+    """SIREN du précédent exploitant/propriétaire depuis listeprecedent* (dont
+    la personne porte un numeroImmatriculation.numeroIdentification)."""
+    node = _parse_json(value)
+    if isinstance(node, dict):
+        node = node.get("personne", node)
+    if isinstance(node, list):
+        node = node[0] if node else {}
+    if isinstance(node, dict):
+        immat = node.get("numeroImmatriculation")
+        if isinstance(immat, dict):
+            digits = "".join(c for c in str(immat.get("numeroIdentification") or "") if c.isdigit())
+            if len(digits) >= 9:
+                return digits[:9]
+    return None
 
 
 def _establishment_origine(establishments: Any) -> str:

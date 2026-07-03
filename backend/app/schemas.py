@@ -54,6 +54,7 @@ class OpportunityBase(BaseModel):
     secondary_signals: List[str] = []
     detection_date: date
     activity_start_date: Optional[date] = None
+    venue_origin_date: Optional[date] = None
     estimated_timing: str
     probable_needs: List[str] = []
     decision_maker: Optional[str] = None
@@ -108,6 +109,7 @@ class OpportunityList(OpportunityBase):
         return _stage(
             self.main_signal, self.review_count, self.detection_date, date.today(),
             activity_start_date=self.activity_start_date,
+            venue_origin_date=self.venue_origin_date,
         )
 
     @computed_field

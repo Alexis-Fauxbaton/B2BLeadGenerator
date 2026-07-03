@@ -29,6 +29,7 @@ BUYING_SIGNALS = OPENING_SIGNALS | TAKEOVER_SIGNALS | RENOVATION_SIGNALS | RECRU
 ESTABLISHED_REVIEWS = 200   # >= => "établi" (fenêtre passée)
 OPENED_REVIEWS = 20         # <= (et > 0) => a déjà des avis => "ouvert récemment"
 PREOPENING_MAX_AGE_DAYS = 45  # signal d'ouverture récent => "pré-ouverture"
+ESTABLISHED_AGE_DAYS = 730  # local dont l'origine (reprise) date de >= 2 ans => "établi"
 
 HOT_MAX_AGE_DAYS = 60       # moment d'achat <= 60 j => chaud
 WARM_MAX_AGE_DAYS = 120     # <= 120 j => tiède ; au-delà => froid
@@ -44,18 +45,27 @@ def lifecycle_stage(
     today: Optional[date] = None,
     closed: bool = False,
     activity_start_date: Optional[date] = None,
+    venue_origin_date: Optional[date] = None,
 ) -> str:
-    """pré-ouverture | ouvert récemment | établi | fermé."""
+    """pré-ouverture | ouvert récemment | établi | fermé.
+
+    `venue_origin_date` = date d'origine du LOCAL (via le précédent exploitant
+    d'une reprise) : un vieux local repris est un lieu ÉTABLI (le stage décrit le
+    lieu ; la chaleur, elle, reste chaude via le signal reprise récent -> cas
+    "établi mais chaud")."""
     today = today or date.today()
     if closed:
         return "fermé"
-    if review_count is not None:
-        if review_count >= ESTABLISHED_REVIEWS:
-            return "établi"
-        if review_count > 0:
-            return "ouvert récemment"  # a des avis => déjà ouvert
-    # Discriminant FIABLE (registre) : date de début d'activité.
-    # Future => pas encore ouvert ; passée => déjà ouvert.
+    # Établi = le LIEU est ancien : soit beaucoup d'avis, soit une origine
+    # (reprise) datant de >= 2 ans.
+    if review_count is not None and review_count >= ESTABLISHED_REVIEWS:
+        return "établi"
+    if venue_origin_date is not None and (today - venue_origin_date).days >= ESTABLISHED_AGE_DAYS:
+        return "établi"
+    if review_count is not None and review_count > 0:
+        return "ouvert récemment"  # a des avis => déjà ouvert
+    # Discriminant FIABLE (registre) : date de début d'activité (du repreneur/
+    # nouvel exploitant). Future => pas encore ouvert ; passée => déjà ouvert.
     if activity_start_date is not None:
         return "pré-ouverture" if activity_start_date > today else "ouvert récemment"
     # Repli heuristique (pas de date) : signal d'ouverture récent => pré-ouverture.

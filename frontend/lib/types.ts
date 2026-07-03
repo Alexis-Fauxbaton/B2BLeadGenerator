@@ -8,6 +8,7 @@ export interface OpportunityList {
   secondary_signals: string[];
   detection_date: string;
   activity_start_date: string | null;
+  venue_origin_date: string | null;
   estimated_timing: string;
   probable_needs: string[];
   decision_maker: string | null;

@@ -406,6 +406,17 @@ def test_bodacc_company_uses_administration_for_decision_makers():
     assert c.dirigeants == ["Samuel Afif, Président", "Victor Journo, Directeur général"]
 
 
+def test_bodacc_extracts_previous_siren():
+    from app.ingestion.bodacc import _extract_previous_siren
+
+    val = ('{"personne": {"denomination": "RESTO X",'
+           ' "numeroImmatriculation": {"numeroIdentification": "384 821 682",'
+           ' "codeRCS": "RCS"}, "typePersonne": "pm"}}')
+    assert _extract_previous_siren(val) == "384821682"
+    assert _extract_previous_siren("ANCIEN EXPLOITANT SARL") is None  # texte brut
+    assert _extract_previous_siren(None) is None
+
+
 def test_bodacc_parses_activity_start_date():
     """La date de début d'activité (acte.dateCommencementActivite) est captée."""
     from datetime import date as _date
@@ -599,6 +610,13 @@ def test_lifecycle_stage():
     # Des avis priment la date (si avis -> forcément déjà ouvert/établi).
     assert lifecycle_stage("création récente", 500, _date(2026, 6, 20), today,
                            activity_start_date=_date(2026, 8, 1)) == "établi"
+    # Vieux local repris (origine >= 2 ans) -> établi ("établi mais chaud" : le
+    # stage décrit le lieu ancien, la chaleur reste chaude via la reprise récente).
+    assert lifecycle_stage("reprise", None, _date(2026, 6, 20), today,
+                           venue_origin_date=_date(2015, 1, 1)) == "établi"
+    # Repris d'un local JEUNE (origine récente) -> pas établi.
+    assert lifecycle_stage("reprise", None, _date(2026, 6, 20), today,
+                           venue_origin_date=_date(2026, 1, 1)) == "ouvert récemment"
 
 
 def test_lifecycle_heat():

@@ -236,6 +236,11 @@ def _process_candidate(
     # 1. Enrichissement Sirene (NAF, enseigne, adresse, état) si activé.
     if enricher is not None:
         enricher.enrich(cand)
+        # Reprise : dater l'origine réelle du local via le précédent exploitant
+        # (2e lookup Sirene) -> un vieux local repris = lieu "établi".
+        if cand.previous_siren:
+            prev = enricher.lookup(cand.previous_siren)
+            cand.venue_origin_date = _ymd((prev or {}).get("date_creation"))
         if cand.enriched:
             stats.enriched += 1
         if cand.closed:
@@ -307,6 +312,7 @@ def _process_candidate(
         existing.decision_maker = cand.decision_maker
         existing.dirigeants = cand.dirigeants
         existing.activity_start_date = cand.activity_start_date
+        existing.venue_origin_date = cand.venue_origin_date
         existing.estimated_timing = timing
         existing.probable_needs = needs
         if cand.latitude is not None:
@@ -333,6 +339,7 @@ def _process_candidate(
         secondary_signals=cand.secondary_signals,
         detection_date=cand.detection_date,
         activity_start_date=cand.activity_start_date,
+        venue_origin_date=cand.venue_origin_date,
         estimated_timing=timing,
         probable_needs=needs,
         decision_maker=cand.decision_maker,
@@ -639,6 +646,16 @@ def _coord(value):
     try:
         return float(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _ymd(value):
+    """Parse 'YYYY-MM-DD' -> date, ou None."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
         return None
 
 
