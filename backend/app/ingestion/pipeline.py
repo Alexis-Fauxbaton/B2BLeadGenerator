@@ -30,7 +30,7 @@ from .enrichment.backfill import backfill_siren
 from .enrichment.contact_enricher import ContactEnricher
 from .enrichment.naf_classifier import classify_naf
 from .enrichment.sirene import SireneEnricher
-from .instagram import discover, scrape_hashtags
+from .instagram import discover, judge, scrape_hashtags
 
 # Besoins probables par type d'établissement (alignés sur l'offre LumaPro).
 NEEDS_BY_TYPE = {
@@ -231,7 +231,8 @@ def run_instagram(
     enricher = SireneEnricher()
 
     try:
-        leads = discover(scrape_hashtags(hashtags, limit))
+        # Filtre heuristique (recall) -> juge LLM (précision, jette yeat.fr & co).
+        leads = judge(discover(scrape_hashtags(hashtags, limit)))
         stats.fetched = len(leads)
         seen_refs: set = set()
         for lead in leads:
