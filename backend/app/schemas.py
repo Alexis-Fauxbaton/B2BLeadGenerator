@@ -53,6 +53,7 @@ class OpportunityBase(BaseModel):
     main_signal: str
     secondary_signals: List[str] = []
     detection_date: date
+    activity_start_date: Optional[date] = None
     estimated_timing: str
     probable_needs: List[str] = []
     decision_maker: Optional[str] = None
@@ -104,7 +105,10 @@ class OpportunityList(OpportunityBase):
     @computed_field
     @property
     def lifecycle_stage(self) -> str:
-        return _stage(self.main_signal, self.review_count, self.detection_date, date.today())
+        return _stage(
+            self.main_signal, self.review_count, self.detection_date, date.today(),
+            activity_start_date=self.activity_start_date,
+        )
 
     @computed_field
     @property

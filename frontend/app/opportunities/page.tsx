@@ -20,6 +20,7 @@ import { CHANNEL_LABELS, STATUS_LABELS, formatDate } from "@/lib/labels";
 import PageHeader from "@/components/PageHeader";
 import {
   ScoreBadge,
+  SignalBadge,
   SourceBadge,
   StatusBadge,
   StageBadge,
@@ -251,6 +252,7 @@ export default function OpportunitiesPage() {
                     <th className="px-4 py-3">Établissement</th>
                     <th className="px-4 py-3">Type</th>
                     <th className="px-4 py-3">Ville</th>
+                    <th className="px-4 py-3">Signal</th>
                     <th className="px-4 py-3">Cycle de vie</th>
                     <th className="px-4 py-3">Score</th>
                     <th className="px-4 py-3">Besoin</th>
@@ -273,6 +275,7 @@ export default function OpportunitiesPage() {
                       </td>
                       <td className="px-4 py-3 capitalize text-slate-600">{o.establishment_type}</td>
                       <td className="px-4 py-3 text-slate-600">{o.city}</td>
+                      <td className="px-4 py-3"><SignalBadge label={o.main_signal} /></td>
                       <td className="px-4 py-3">
                         <div className="flex flex-col items-start gap-1">
                           <StageBadge stage={o.lifecycle_stage} />

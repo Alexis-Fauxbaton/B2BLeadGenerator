@@ -61,6 +61,9 @@ class Opportunity(SQLModel, table=True):
     secondary_signals: List[str] = Field(default_factory=list, sa_column=Column(JSON))
 
     detection_date: date
+    # Date de début d'activité (BODACC dateCommencementActivite) : future =>
+    # pas encore ouvert (pré-ouverture) ; passée => déjà ouvert. NULL si absent.
+    activity_start_date: Optional[date] = None
     estimated_timing: str  # ex: "J-30", "J-60", "J-90"
     probable_needs: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     decision_maker: Optional[str] = None

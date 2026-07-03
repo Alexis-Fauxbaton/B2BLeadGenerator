@@ -406,6 +406,26 @@ def test_bodacc_company_uses_administration_for_decision_makers():
     assert c.dirigeants == ["Samuel Afif, Président", "Victor Journo, Directeur général"]
 
 
+def test_bodacc_parses_activity_start_date():
+    """La date de début d'activité (acte.dateCommencementActivite) est captée."""
+    from datetime import date as _date
+
+    record = {
+        "id": "A2026ACT",
+        "familleavis": "creation",
+        "commercant": "Le Futur Bistrot",
+        "ville": "Paris",
+        "cp": "75011",
+        "dateparution": "2026-06-20",
+        "listepersonnes": '{"personne": {"denomination": "Le Futur Bistrot",'
+        ' "activite": "restauration traditionnelle"}}',
+        "acte": '{"dateImmatriculation": "2026-06-17",'
+        ' "dateCommencementActivite": "2026-08-01"}',
+    }
+    c = BodaccConnector().to_candidates([record])[0]
+    assert c.activity_start_date == _date(2026, 8, 1)
+
+
 def test_bodacc_origine_fonds_drives_creation_vs_reprise():
     import json as _json
 
@@ -570,6 +590,15 @@ def test_lifecycle_stage():
     assert lifecycle_stage("création récente", None, _date(2026, 3, 1), today) == "ouvert récemment"
     # Reprise (pas famille ouverture) -> ouvert récemment.
     assert lifecycle_stage("reprise", None, _date(2026, 6, 20), today) == "ouvert récemment"
+    # Date de début d'activité FUTURE -> pré-ouverture (fiable, prime l'heuristique
+    # même pour une reprise). PASSÉE -> ouvert récemment.
+    assert lifecycle_stage("reprise", None, _date(2026, 6, 20), today,
+                           activity_start_date=_date(2026, 8, 1)) == "pré-ouverture"
+    assert lifecycle_stage("reprise", None, _date(2026, 6, 20), today,
+                           activity_start_date=_date(2026, 6, 10)) == "ouvert récemment"
+    # Des avis priment la date (si avis -> forcément déjà ouvert/établi).
+    assert lifecycle_stage("création récente", 500, _date(2026, 6, 20), today,
+                           activity_start_date=_date(2026, 8, 1)) == "établi"
 
 
 def test_lifecycle_heat():

@@ -153,6 +153,12 @@ export default function OpportunityDetailPage() {
             <ScoreBadge score={opp.opportunity_score} />
             <p className="mt-2 text-xs text-slate-400">Détecté le {formatDate(opp.detection_date)}</p>
             <p className="text-xs text-slate-400">Timing estimé : <span className="font-medium text-slate-600">{opp.estimated_timing}</span></p>
+            {opp.activity_start_date && (
+              <p className="text-xs text-slate-400">
+                {opp.lifecycle_stage === "pré-ouverture" ? "Ouvre le " : "Activité depuis le "}
+                <span className="font-medium text-slate-600">{formatDate(opp.activity_start_date)}</span>
+              </p>
+            )}
           </div>
         </div>
       </div>

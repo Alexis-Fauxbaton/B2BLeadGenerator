@@ -156,6 +156,11 @@ class BodaccConnector(Connector):
         prev_owner = rec.get("listeprecedentproprietaire")
         prev_operator = rec.get("listeprecedentexploitant")
         origine_fonds = _establishment_origine(establishments)
+        acte = _parse_json(rec.get("acte"))
+        activity_start = (
+            _parse_date_opt(acte.get("dateCommencementActivite"))
+            if isinstance(acte, dict) else None
+        )
 
         # Signal principal
         main_signal = FAMILY_TO_SIGNAL.get(family)
@@ -224,6 +229,7 @@ class BodaccConnector(Connector):
             dirigeants=dirigeants,
             classification_text=classification_text,
             siren=siren,
+            activity_start_date=activity_start,
             proof_text=proof_text,
             proof_url=rec.get("url_complete") or "",
             raw=rec,
@@ -456,3 +462,13 @@ def _parse_date(value: Any) -> date:
         return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
     except ValueError:
         return date.today()
+
+
+def _parse_date_opt(value: Any) -> Optional[date]:
+    """Comme _parse_date mais renvoie None si absent/invalide (pas date.today())."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None

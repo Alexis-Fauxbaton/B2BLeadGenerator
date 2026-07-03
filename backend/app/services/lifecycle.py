@@ -43,6 +43,7 @@ def lifecycle_stage(
     detection_date: date,
     today: Optional[date] = None,
     closed: bool = False,
+    activity_start_date: Optional[date] = None,
 ) -> str:
     """pré-ouverture | ouvert récemment | établi | fermé."""
     today = today or date.today()
@@ -52,7 +53,12 @@ def lifecycle_stage(
         if review_count >= ESTABLISHED_REVIEWS:
             return "établi"
         if review_count > 0:
-            return "ouvert récemment"  # a des avis mais peu
+            return "ouvert récemment"  # a des avis => déjà ouvert
+    # Discriminant FIABLE (registre) : date de début d'activité.
+    # Future => pas encore ouvert ; passée => déjà ouvert.
+    if activity_start_date is not None:
+        return "pré-ouverture" if activity_start_date > today else "ouvert récemment"
+    # Repli heuristique (pas de date) : signal d'ouverture récent => pré-ouverture.
     age = (today - detection_date).days
     if main_signal in OPENING_SIGNALS and age <= PREOPENING_MAX_AGE_DAYS:
         return "pré-ouverture"

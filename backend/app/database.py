@@ -52,6 +52,7 @@ def _run_lightweight_migrations() -> None:
         "latitude": "ALTER TABLE opportunities ADD COLUMN latitude REAL",
         "longitude": "ALTER TABLE opportunities ADD COLUMN longitude REAL",
         "dirigeants": "ALTER TABLE opportunities ADD COLUMN dirigeants JSON",
+        "activity_start_date": "ALTER TABLE opportunities ADD COLUMN activity_start_date DATE",
         "review_count": "ALTER TABLE opportunities ADD COLUMN review_count INTEGER",
         "contact_confidence": "ALTER TABLE opportunities ADD COLUMN contact_confidence VARCHAR",
         "decision_maker_email": "ALTER TABLE opportunities ADD COLUMN decision_maker_email VARCHAR",

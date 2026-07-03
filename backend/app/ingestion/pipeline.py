@@ -306,6 +306,7 @@ def _process_candidate(
         existing.secondary_signals = cand.secondary_signals
         existing.decision_maker = cand.decision_maker
         existing.dirigeants = cand.dirigeants
+        existing.activity_start_date = cand.activity_start_date
         existing.estimated_timing = timing
         existing.probable_needs = needs
         if cand.latitude is not None:
@@ -331,6 +332,7 @@ def _process_candidate(
         main_signal=cand.main_signal,
         secondary_signals=cand.secondary_signals,
         detection_date=cand.detection_date,
+        activity_start_date=cand.activity_start_date,
         estimated_timing=timing,
         probable_needs=needs,
         decision_maker=cand.decision_maker,

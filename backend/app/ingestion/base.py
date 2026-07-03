@@ -42,6 +42,7 @@ class LeadCandidate:
     # Identifiants / enrichissement
     siren: Optional[str] = None
     naf: Optional[str] = None
+    activity_start_date: Optional[date] = None  # BODACC dateCommencementActivite
     enriched: bool = False
     closed: bool = False  # établissement administrativement fermé (à écarter)
     # Géoloc (Sirene) — sert à OSM et aux liens Maps.
