@@ -187,20 +187,27 @@ export default function OpportunityDetailPage() {
                 <ExternalLink size={14} /> Source (fictive)
               </a>
             )}
-            <div className="mt-4 space-y-2">
-              {opp.signals.map((s) => (
-                <div key={s.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                  <div>
-                    <span className="font-medium text-slate-700">{s.signal_type}</span>
-                    <span className="ml-2 text-xs text-slate-400">{s.source}</span>
-                  </div>
-                  <div className="flex items-center gap-3 text-xs text-slate-400">
-                    <span>conf. {(s.confidence_score * 100).toFixed(0)}%</span>
-                    <span>{formatDate(s.signal_date)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            {/* Chronologie des signaux (frise verticale, ordre chronologique). */}
+            <ol className="relative mt-4 space-y-4 border-l border-slate-200 pl-5">
+              {[...opp.signals]
+                .sort((a, b) => a.signal_date.localeCompare(b.signal_date))
+                .map((s) => (
+                  <li key={s.id} className="relative">
+                    <span className="absolute -left-[23px] top-1 h-2.5 w-2.5 rounded-full bg-brand-400 ring-4 ring-white" />
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <SignalBadge label={s.signal_type} />
+                        <span className="text-xs text-slate-400">{s.source}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-slate-400">
+                        <span>conf. {(s.confidence_score * 100).toFixed(0)}%</span>
+                        <span>{formatDate(s.signal_date)}</span>
+                      </div>
+                    </div>
+                    {s.raw_text && <p className="mt-0.5 text-xs text-slate-500">{s.raw_text}</p>}
+                  </li>
+                ))}
+            </ol>
           </Section>
 
           {/* Scoring */}
