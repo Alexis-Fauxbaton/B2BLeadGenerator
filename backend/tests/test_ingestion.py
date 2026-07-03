@@ -684,6 +684,64 @@ def test_lifecycle_freshness():
     assert freshness(None, today) == "à rafraîchir"
 
 
+def test_instagram_discover_filters_chr_idf():
+    from app.ingestion.instagram import discover
+
+    posts = [
+        {"ownerUsername": "resto_paris", "ownerFullName": "Le Nouveau Bistrot",
+         "caption": "Ouverture prochaine !", "hashtags": ["ouvertureprochaine"],
+         "locationName": "Paris, France"},
+        {"ownerUsername": "gym_nanterre", "ownerFullName": "Fitness Club",
+         "caption": "Salle de sport #ouvertureprochaine", "hashtags": [],
+         "locationName": "Nanterre"},  # pas CHR
+        {"ownerUsername": "resto_nice", "ownerFullName": "Pizzeria Bella",
+         "caption": "Notre restaurant ouvre", "hashtags": [], "locationName": "Nice"},  # pas IdF
+        {"ownerUsername": "cafe_92", "ownerFullName": "Café Lumo",
+         "caption": "Nouveau café à Boulogne 92100", "hashtags": [], "locationName": None},
+        {"ownerUsername": "resto_paris", "ownerFullName": "doublon",
+         "caption": "resto", "locationName": "Paris"},  # doublon handle
+    ]
+    got = discover(posts)
+    handles = [d["handle"] for d in got]
+    assert "resto_paris" in handles       # CHR + Paris
+    assert "cafe_92" in handles           # CHR + CP 92
+    assert "gym_nanterre" not in handles  # pas CHR
+    assert "resto_nice" not in handles    # CHR mais pas IdF
+    assert handles.count("resto_paris") == 1  # dédup par handle
+    assert next(d for d in got if d["handle"] == "cafe_92")["type"] == "café"
+
+
+def test_backfill_siren_match():
+    from app.ingestion.enrichment.backfill import _best_match
+
+    results = [
+        {  # bon : NAF CHR + nom concordant + bon dép
+            "siren": "111222333", "nom_complet": "CALCIFER",
+            "siege": {"activite_principale": "56.10A", "code_postal": "75003",
+                      "liste_enseignes": ["CALCIFER"]},
+        },
+    ]
+    m = _best_match(results, "Calcifer", "75")
+    assert m and m["siren"] == "111222333"
+
+    # NAF non-CHR -> rejeté.
+    non_chr = [{"siren": "1", "nom_complet": "CALCIFER SCI",
+                "siege": {"activite_principale": "68.20B", "code_postal": "75003"}}]
+    assert _best_match(non_chr, "Calcifer", "75") is None
+
+    # Nom discordant (homonyme) -> rejeté.
+    other = [{"siren": "2", "nom_complet": "AUTRE CHOSE",
+              "siege": {"activite_principale": "56.10A", "code_postal": "75003",
+                        "liste_enseignes": ["AUTRE CHOSE"]}}]
+    assert _best_match(other, "Calcifer", "75") is None
+
+    # Mauvais département -> rejeté.
+    farbg = [{"siren": "3", "nom_complet": "CALCIFER",
+              "siege": {"activite_principale": "56.10A", "code_postal": "69001",
+                        "liste_enseignes": ["CALCIFER"]}}]
+    assert _best_match(farbg, "Calcifer", "75") is None
+
+
 def test_osm_name_matching():
     from app.ingestion.enrichment.osm import _name_matches
 

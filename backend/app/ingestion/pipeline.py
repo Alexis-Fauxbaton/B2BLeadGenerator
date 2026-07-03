@@ -26,9 +26,11 @@ from ..services.segment import classify_segment
 from .base import Connector, LeadCandidate
 from .bodacc import BodaccConnector
 from .chr_classifier import classify
+from .enrichment.backfill import backfill_siren
 from .enrichment.contact_enricher import ContactEnricher
 from .enrichment.naf_classifier import classify_naf
 from .enrichment.sirene import SireneEnricher
+from .instagram import discover, scrape_hashtags
 
 # Besoins probables par type d'établissement (alignés sur l'offre LumaPro).
 NEEDS_BY_TYPE = {
@@ -214,6 +216,52 @@ def run_backfill(
     )
 
 
+def run_instagram(
+    hashtags: Optional[List[str]] = None,
+    limit: int = 40,
+    session: Optional[Session] = None,
+) -> IngestStats:
+    """Source Instagram-first [PHASE 2] : Apify (hashtags) -> filtre CHR + IdF ->
+    backfill SIREN (nom+ville) -> pipeline existant (Sirene/dirigeants/contact/
+    score/cycle de vie). Upsert `source="instagram"`, dédup par handle."""
+    init_db()
+    own_session = session is None
+    session = session or Session(engine)
+    stats = IngestStats(source="instagram", mode="instagram")
+    enricher = SireneEnricher()
+
+    try:
+        leads = discover(scrape_hashtags(hashtags, limit))
+        stats.fetched = len(leads)
+        seen_refs: set = set()
+        for lead in leads:
+            try:
+                bf = backfill_siren(lead["name"], lead["city"]) or {}
+                cand = LeadCandidate(
+                    source="instagram",
+                    source_ref=lead["handle"],
+                    establishment_name=bf.get("enseigne") or lead["name"],
+                    city=lead["city"],
+                    main_signal="ouverture prochaine",
+                    detection_date=date.today(),
+                    classification_text=lead["name"],
+                    establishment_type=lead["type"],  # pré-classé CHR à la découverte
+                    instagram=lead["handle"],
+                    siren=bf.get("siren"),
+                    naf=bf.get("naf"),
+                )
+                _process_candidate(session, cand, stats, seen_refs, enricher)
+            except Exception:
+                stats.errors += 1
+                session.rollback()
+        session.commit()
+    finally:
+        if own_session:
+            session.close()
+
+    return stats
+
+
 def _source_cursor(session: Session, source: str) -> Optional[date]:
     """Date de détection la plus récente déjà ingérée pour cette source."""
     rows = session.exec(
@@ -262,7 +310,9 @@ def _process_candidate(
     # Sans NAF (enrichissement indisponible), on retombe sur les mots-clés.
     text = " ".join(filter(None, [cand.classification_text, cand.establishment_name]))
     if cand.naf:
-        etype = classify_naf(cand.naf, text)
+        etype = classify_naf(cand.naf, text)  # NAF fait autorité
+    elif cand.establishment_type:
+        etype = cand.establishment_type  # déjà validé CHR (ex. découverte Instagram)
     else:
         etype = classify(text)
     if not etype:
@@ -319,6 +369,8 @@ def _process_candidate(
         existing.secondary_signals = cand.secondary_signals
         existing.decision_maker = cand.decision_maker
         existing.dirigeants = cand.dirigeants
+        if cand.instagram:
+            existing.instagram = cand.instagram
         existing.activity_start_date = cand.activity_start_date
         existing.venue_origin_date = cand.venue_origin_date
         existing.estimated_timing = timing
@@ -362,6 +414,7 @@ def _process_candidate(
         source_ref=cand.source_ref,
         siren=cand.siren,
         naf=cand.naf,
+        instagram=cand.instagram,
         latitude=cand.latitude,
         longitude=cand.longitude,
         status="non_contacte",

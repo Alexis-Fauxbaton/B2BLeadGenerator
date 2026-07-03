@@ -158,4 +158,14 @@ def run_refresh_endpoint(source: str = "bodacc"):
         raise HTTPException(status_code=502, detail=f"Refresh échoué : {exc}")
 
 
+@dev_router.post("/instagram")
+def run_instagram_endpoint(limit: int = 40):
+    from .ingestion.pipeline import run_instagram, stats_to_dict
+
+    try:
+        return stats_to_dict(run_instagram(limit=limit))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ingestion Instagram échouée : {exc}")
+
+
 app.include_router(dev_router)

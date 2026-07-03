@@ -213,6 +213,7 @@ export default function OpportunitiesPage() {
               <option value="">Toutes les sources</option>
               <option value="demo">Démo</option>
               <option value="bodacc">BODACC (réel)</option>
+              <option value="instagram">Instagram</option>
             </select>
 
             <select className={SELECT_CLS} value={filters.min_score ?? ""} onChange={(e) => set({ min_score: e.target.value ? Number(e.target.value) : undefined })}>

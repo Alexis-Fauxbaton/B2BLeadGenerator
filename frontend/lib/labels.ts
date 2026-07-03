@@ -88,4 +88,5 @@ export const ACTION_LABELS: Record<string, string> = {
 export const SOURCE_LABELS: Record<string, string> = {
   demo: "Démo",
   bodacc: "BODACC",
+  instagram: "Instagram",
 };

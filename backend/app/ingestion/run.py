@@ -19,6 +19,7 @@ from .pipeline import (
     run_contact_enrich,
     run_incremental,
     run_ingestion,
+    run_instagram,
     run_reenrich,
     run_refresh,
     stats_to_dict,
@@ -30,7 +31,7 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         default="window",
-        choices=["window", "incremental", "backfill", "reenrich", "contact", "refresh"],
+        choices=["window", "incremental", "backfill", "reenrich", "contact", "refresh", "instagram"],
     )
     parser.add_argument("--source", default="bodacc", help="Connecteur à utiliser.")
     parser.add_argument("--since", type=int, default=90, help="Fenêtre en jours (window/backfill).")
@@ -59,6 +60,8 @@ def main() -> None:
         stats = run_reenrich(source=args.source)
     elif args.mode == "refresh":
         stats = run_refresh(source=args.source)
+    elif args.mode == "instagram":
+        stats = run_instagram(limit=args.limit)
     elif args.mode == "contact":
         stats = run_contact_enrich(source=args.source)
     elif args.mode == "incremental":
