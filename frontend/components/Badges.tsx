@@ -54,3 +54,51 @@ export function SignalBadge({ label }: { label: string }) {
     </span>
   );
 }
+
+// --- Cycle de vie : stage (vie du lieu) / chaleur (moment d'achat) / fraîcheur --
+
+const STAGE_STYLES: Record<string, string> = {
+  "pré-ouverture": "bg-violet-50 text-violet-700 ring-violet-200",
+  "ouvert récemment": "bg-sky-50 text-sky-700 ring-sky-200",
+  "établi": "bg-amber-50 text-amber-700 ring-amber-200",
+  "fermé": "bg-slate-100 text-slate-400 ring-slate-200",
+};
+
+const HEAT_STYLES: Record<string, { dot: string; cls: string }> = {
+  chaud: { dot: "bg-red-500", cls: "bg-red-50 text-red-600 ring-red-200" },
+  tiède: { dot: "bg-orange-400", cls: "bg-orange-50 text-orange-600 ring-orange-200" },
+  froid: { dot: "bg-slate-300", cls: "bg-slate-100 text-slate-400 ring-slate-200" },
+};
+
+const FRESH_STYLES: Record<string, string> = {
+  fraîche: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  "à rafraîchir": "bg-amber-50 text-amber-700 ring-amber-200",
+  périmée: "bg-slate-100 text-slate-400 ring-slate-200",
+};
+
+export function StageBadge({ stage }: { stage: string }) {
+  const cls = STAGE_STYLES[stage] ?? "bg-slate-100 text-slate-600 ring-slate-200";
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${cls}`}>
+      {stage}
+    </span>
+  );
+}
+
+export function HeatBadge({ heat }: { heat: string }) {
+  const s = HEAT_STYLES[heat] ?? HEAT_STYLES.froid;
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${s.cls}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} /> {heat}
+    </span>
+  );
+}
+
+export function FreshnessBadge({ freshness }: { freshness: string }) {
+  const cls = FRESH_STYLES[freshness] ?? "bg-slate-100 text-slate-400 ring-slate-200";
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${cls}`}>
+      {freshness}
+    </span>
+  );
+}

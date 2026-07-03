@@ -30,7 +30,16 @@ import {
   STATUS_ORDER,
   formatDate,
 } from "@/lib/labels";
-import { ChannelBadge, ScoreBadge, SignalBadge, SourceBadge, StatusBadge } from "@/components/Badges";
+import {
+  ChannelBadge,
+  ScoreBadge,
+  SignalBadge,
+  SourceBadge,
+  StatusBadge,
+  StageBadge,
+  HeatBadge,
+  FreshnessBadge,
+} from "@/components/Badges";
 import { Loading, ErrorState } from "@/components/States";
 import CopyButton from "@/components/CopyButton";
 
@@ -132,6 +141,12 @@ export default function OpportunityDetailPage() {
                   {s}
                 </span>
               ))}
+            </div>
+            {/* Cycle de vie : stage (lieu) · chaleur (moment d'achat) · fraîcheur */}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <StageBadge stage={opp.lifecycle_stage} />
+              <HeatBadge heat={opp.heat} />
+              <FreshnessBadge freshness={opp.freshness} />
             </div>
           </div>
           <div className="text-right">

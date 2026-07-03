@@ -43,9 +43,11 @@ export function scoreTier(score: number): {
   classes: string;
   dot: string;
 } {
+  // NB : "Élevé/Moyen/Faible" (et pas Chaud/…) pour ne pas entrer en collision
+  // avec l'axe HEAT (chaud/tiède/froid), qui est une autre notion.
   if (score >= 8)
     return {
-      label: "Chaud",
+      label: "Élevé",
       classes: "bg-rose-50 text-rose-700 ring-rose-200",
       dot: "bg-rose-500",
     };
@@ -56,7 +58,7 @@ export function scoreTier(score: number): {
       dot: "bg-amber-500",
     };
   return {
-    label: "Froid",
+    label: "Faible",
     classes: "bg-sky-50 text-sky-700 ring-sky-200",
     dot: "bg-sky-500",
   };

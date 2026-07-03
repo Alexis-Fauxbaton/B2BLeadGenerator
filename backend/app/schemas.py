@@ -2,7 +2,11 @@
 from datetime import date, datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, computed_field, field_validator
+
+from .services.lifecycle import freshness as _freshness
+from .services.lifecycle import heat as _heat
+from .services.lifecycle import lifecycle_stage as _stage
 
 
 # --- Signal -------------------------------------------------------------------
@@ -82,6 +86,7 @@ class OpportunityList(OpportunityBase):
     contact_confidence: Optional[str] = None
     decision_maker_email: Optional[str] = None
     decision_maker_confidence: Optional[str] = None
+    contact_enriched_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -94,6 +99,23 @@ class OpportunityList(OpportunityBase):
     @classmethod
     def _coerce_none_list(cls, v):
         return v if v is not None else []
+
+    # --- Cycle de vie : DÉRIVÉ à la sérialisation (pas stocké) ----------------
+    @computed_field
+    @property
+    def lifecycle_stage(self) -> str:
+        return _stage(self.main_signal, self.review_count, self.detection_date, date.today())
+
+    @computed_field
+    @property
+    def heat(self) -> str:
+        return _heat(self.main_signal, self.detection_date, date.today())
+
+    @computed_field
+    @property
+    def freshness(self) -> str:
+        last = self.contact_enriched_at.date() if self.contact_enriched_at else self.detection_date
+        return _freshness(last, date.today())
 
 
 class OpportunityRead(OpportunityList):

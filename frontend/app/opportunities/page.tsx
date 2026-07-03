@@ -19,11 +19,11 @@ import type { IngestStats, Meta, OpportunityList } from "@/lib/types";
 import { CHANNEL_LABELS, STATUS_LABELS, formatDate } from "@/lib/labels";
 import PageHeader from "@/components/PageHeader";
 import {
-  ChannelBadge,
   ScoreBadge,
-  SignalBadge,
   SourceBadge,
   StatusBadge,
+  StageBadge,
+  HeatBadge,
 } from "@/components/Badges";
 import { Loading, ErrorState, EmptyState } from "@/components/States";
 
@@ -66,6 +66,8 @@ export default function OpportunitiesPage() {
     sort_by: "score",
     order: "desc",
   });
+  // Persiste les filtres entre navigations (retour depuis une fiche).
+  const [ready, setReady] = useState(false);
 
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<IngestStats | null>(null);
@@ -82,10 +84,24 @@ export default function OpportunitiesPage() {
     loadMeta();
   }, []);
 
+  // Restaure les filtres sauvegardés au montage.
   useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("opp_filters");
+      if (saved) setFilters(JSON.parse(saved));
+    } catch {}
+    setReady(true);
+  }, []);
+
+  // Recharge + persiste quand les filtres changent (après restauration).
+  useEffect(() => {
+    if (!ready) return;
+    try {
+      window.localStorage.setItem("opp_filters", JSON.stringify(filters));
+    } catch {}
     loadRows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters]);
+  }, [filters, ready]);
 
   const runImport = async () => {
     setImporting(true);
@@ -235,12 +251,10 @@ export default function OpportunitiesPage() {
                     <th className="px-4 py-3">Établissement</th>
                     <th className="px-4 py-3">Type</th>
                     <th className="px-4 py-3">Ville</th>
-                    <th className="px-4 py-3">Signal</th>
+                    <th className="px-4 py-3">Cycle de vie</th>
                     <th className="px-4 py-3">Score</th>
-                    <th className="px-4 py-3">Timing</th>
                     <th className="px-4 py-3">Besoin</th>
                     <th className="px-4 py-3">Contact</th>
-                    <th className="px-4 py-3">Canal</th>
                     <th className="px-4 py-3">Statut</th>
                     <th className="px-4 py-3">Détecté</th>
                     <th className="px-4 py-3"></th>
@@ -259,14 +273,17 @@ export default function OpportunitiesPage() {
                       </td>
                       <td className="px-4 py-3 capitalize text-slate-600">{o.establishment_type}</td>
                       <td className="px-4 py-3 text-slate-600">{o.city}</td>
-                      <td className="px-4 py-3"><SignalBadge label={o.main_signal} /></td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col items-start gap-1">
+                          <StageBadge stage={o.lifecycle_stage} />
+                          <HeatBadge heat={o.heat} />
+                        </div>
+                      </td>
                       <td className="px-4 py-3"><ScoreBadge score={o.opportunity_score} /></td>
-                      <td className="px-4 py-3 text-slate-600">{o.estimated_timing}</td>
                       <td className="px-4 py-3 max-w-[180px] truncate text-slate-500" title={o.probable_needs.join(", ")}>
                         {o.probable_needs[0] ?? "—"}
                       </td>
                       <td className="px-4 py-3"><ContactIcons o={o} /></td>
-                      <td className="px-4 py-3"><ChannelBadge channel={o.recommended_channel} /></td>
                       <td className="px-4 py-3"><StatusBadge status={o.status} /></td>
                       <td className="px-4 py-3 whitespace-nowrap text-slate-500">{formatDate(o.detection_date)}</td>
                       <td className="px-4 py-3 text-right">

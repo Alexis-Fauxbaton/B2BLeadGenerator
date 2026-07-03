@@ -188,3 +188,17 @@ rafraîchit surtout les entités **actives** (en fenêtre) ; Sirene souvent
 - `freshness` / péremption : fraîche / à rafraîchir / périmée selon date + stage.
 - refresh : émet un nouveau `Signal` sans supprimer les anciens ; recalcul du stage.
 - merge-rule : handle→SIREN réconcilie sur la même entité.
+
+## À VÉRIFIER — vieillissement dans le temps
+La phase ① (fonctions pures) est validée par **simulation** (recalcul avec un
+`today` futur : pré-ouverture→ouvert à +45 j, heat chaud→tiède→froid, fresh
+fraîche→périmée). **MAIS le vieillissement RÉEL reste à observer**, et il est
+**couplé à la boucle refresh (phase ②)** :
+- la **fraîcheur ne vieillit que si on ne rafraîchit pas** ; un « vérifié le X »
+  émis par le refresh doit la **remettre à zéro** → à tester une fois la passe
+  refresh en place.
+- vérifier que les **transitions de stage** collent au réel (une création qui
+  ouvre vraiment ; un établi qui reçoit un nouveau moment chaud → « établi ·
+  chaud »).
+- caler les **seuils** (`PREOPENING_MAX_AGE_DAYS`, fenêtres heat, seuils fresh)
+  sur des données qui ont réellement vieilli, pas seulement en simulation.

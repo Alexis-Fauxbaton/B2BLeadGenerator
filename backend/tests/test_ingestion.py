@@ -553,6 +553,49 @@ def test_website_scraper_ignores_form_placeholder_email():
     assert extract_from_html(only_placeholder, site_domain="koko-odessa.fr")["email"] is None
 
 
+def test_lifecycle_stage():
+    from datetime import date as _date
+    from app.services.lifecycle import lifecycle_stage
+
+    today = _date(2026, 6, 29)
+    # Fermé prime tout.
+    assert lifecycle_stage("création récente", None, _date(2026, 6, 20), today, closed=True) == "fermé"
+    # Beaucoup d'avis -> établi (même si signal d'ouverture).
+    assert lifecycle_stage("création récente", 400, _date(2026, 6, 20), today) == "établi"
+    # Quelques avis -> ouvert récemment.
+    assert lifecycle_stage("création récente", 8, _date(2026, 6, 20), today) == "ouvert récemment"
+    # Signal d'ouverture récent, pas d'avis -> pré-ouverture.
+    assert lifecycle_stage("création récente", None, _date(2026, 6, 20), today) == "pré-ouverture"
+    # Signal d'ouverture ancien -> ouvert récemment (plus pré-ouverture).
+    assert lifecycle_stage("création récente", None, _date(2026, 3, 1), today) == "ouvert récemment"
+    # Reprise (pas famille ouverture) -> ouvert récemment.
+    assert lifecycle_stage("reprise", None, _date(2026, 6, 20), today) == "ouvert récemment"
+
+
+def test_lifecycle_heat():
+    from datetime import date as _date
+    from app.services.lifecycle import heat
+
+    today = _date(2026, 6, 29)
+    # Moment d'achat récent -> chaud, quel que soit le stage ("établi mais chaud").
+    assert heat("recrutement", _date(2026, 6, 20), today) == "chaud"        # 9 j
+    assert heat("reprise", _date(2026, 3, 31), today) == "tiède"            # ~90 j
+    assert heat("création récente", _date(2026, 1, 1), today) == "froid"    # vieux
+    # Signal non-achat -> froid.
+    assert heat("annonce presse locale", _date(2026, 6, 28), today) == "froid"
+
+
+def test_lifecycle_freshness():
+    from datetime import date as _date
+    from app.services.lifecycle import freshness
+
+    today = _date(2026, 6, 29)
+    assert freshness(_date(2026, 6, 20), today) == "fraîche"       # 9 j
+    assert freshness(_date(2026, 5, 1), today) == "à rafraîchir"   # ~59 j
+    assert freshness(_date(2026, 1, 1), today) == "périmée"        # ~180 j
+    assert freshness(None, today) == "à rafraîchir"
+
+
 def test_osm_name_matching():
     from app.ingestion.enrichment.osm import _name_matches
 

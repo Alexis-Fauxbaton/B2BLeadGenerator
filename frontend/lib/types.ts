@@ -30,6 +30,9 @@ export interface OpportunityList {
   latitude: number | null;
   longitude: number | null;
   review_count: number | null;
+  lifecycle_stage: string;
+  heat: string;
+  freshness: string;
   contact_confidence: string | null;
   decision_maker_email: string | null;
   decision_maker_confidence: string | null;
