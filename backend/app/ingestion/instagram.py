@@ -18,9 +18,22 @@ from typing import Any, Dict, List, Optional
 import requests
 
 APIFY_ACTOR = "apify~instagram-hashtag-scraper"
+# Hashtags CHR-orientés. Mesuré : les tags CHR (restaurantparis 73 %,
+# ouverturerestaurant 33 % de comptes CHR+IdF) sont 3-7x plus propres que les
+# génériques (ouvertureprochaine & co ~10 %) — on gaspille beaucoup moins de
+# posts (= de crédits Apify) sur des comptes hors-cible.
+#   - Famille "CHR + ouverture" : double signal, meilleur rendement final.
+#   - Famille "CHR + lieu" : gros volume, majorité d'établis -> le juge LLM
+#     filtre la fraîcheur (garde seulement ce qui ouvre/vient d'ouvrir).
+#   - 1 générique conservé pour la pré-ouverture pure (local encore sans nom CHR).
 DEFAULT_HASHTAGS = [
-    "ouvertureprochaine", "nouvelleadresse", "nouveaurestaurant",
-    "comingsoonparis", "prochainement",
+    # CHR + ouverture (précision)
+    "ouverturerestaurant", "nouveaurestaurantparis", "ouverturerestaurantparis",
+    "nouveaucafeparis", "nouvellebrasserie",
+    # CHR + lieu (volume, le juge filtre la fraîcheur)
+    "restaurantparis", "cafeparis", "coffeeshopparis", "barparis",
+    # pré-ouverture pure
+    "ouvertureprochaine",
 ]
 
 # Mots-clés CHR (dans nom/caption/hashtags).
