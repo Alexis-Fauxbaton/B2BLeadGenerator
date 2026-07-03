@@ -89,6 +89,8 @@ class OpportunityList(OpportunityBase):
     decision_maker_email: Optional[str] = None
     decision_maker_confidence: Optional[str] = None
     contact_enriched_at: Optional[datetime] = None
+    last_checked_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -108,6 +110,7 @@ class OpportunityList(OpportunityBase):
     def lifecycle_stage(self) -> str:
         return _stage(
             self.main_signal, self.review_count, self.detection_date, date.today(),
+            closed=self.closed_at is not None,
             activity_start_date=self.activity_start_date,
             venue_origin_date=self.venue_origin_date,
         )
@@ -120,7 +123,10 @@ class OpportunityList(OpportunityBase):
     @computed_field
     @property
     def freshness(self) -> str:
-        last = self.contact_enriched_at.date() if self.contact_enriched_at else self.detection_date
+        # Dernier "événement" connu : refresh (heartbeat) > enrichissement contact
+        # > détection. Un refresh remet donc la fraîcheur à zéro.
+        last_dt = self.last_checked_at or self.contact_enriched_at
+        last = last_dt.date() if last_dt else self.detection_date
         return _freshness(last, date.today())
 
 

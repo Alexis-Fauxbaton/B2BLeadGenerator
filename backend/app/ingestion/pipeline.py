@@ -92,6 +92,14 @@ class ContactStats:
     errors: int = 0
 
 
+@dataclass
+class RefreshStats:
+    source: str = "bodacc"
+    checked: int = 0
+    closed_now: int = 0  # fermetures nouvellement détectées (Sirene état != A)
+    errors: int = 0
+
+
 def get_connector(source: str) -> Connector:
     if source not in CONNECTORS:
         raise ValueError(f"Source inconnue : {source}. Disponibles : {list(CONNECTORS)}")
@@ -640,6 +648,72 @@ def _contact_enrich_one(
         stats.with_any_priority += 1
     else:
         stats.none += 1
+
+
+def run_refresh(
+    source: str = "bodacc",
+    limit: int = 1000,
+    session: Optional[Session] = None,
+) -> RefreshStats:
+    """Passe REFRESH (gratuite, Sirene) — re-vérifie les leads ACTIFS :
+    - détecte les FERMETURES (état administratif != A) -> closed_at + stage "fermé"
+      + Signal "fermé" ;
+    - pose un HEARTBEAT de fraîcheur (last_checked_at) -> remet la fraîcheur à zéro.
+    Généralise `reenrich` à l'entretien dans le temps (cf. lead-lifecycle-design)."""
+    init_db()
+    own_session = session is None
+    session = session or Session(engine)
+    stats = RefreshStats(source=source)
+    enricher = SireneEnricher()
+
+    try:
+        rows = session.exec(
+            select(Opportunity).where(
+                Opportunity.source == source,
+                Opportunity.siren.is_not(None),
+                Opportunity.closed_at.is_(None),
+                Opportunity.status.notin_(["gagne", "perdu"]),
+            )
+        ).all()[:limit]
+
+        for opp in rows:
+            stats.checked += 1
+            try:
+                _refresh_one(session, opp, enricher, stats)
+                session.add(opp)
+                session.commit()
+            except Exception:
+                stats.errors += 1
+                session.rollback()
+    finally:
+        if own_session:
+            session.close()
+
+    return stats
+
+
+def _refresh_one(session: Session, opp: Opportunity, enricher: SireneEnricher, stats: RefreshStats) -> None:
+    now = datetime.utcnow()
+    opp.last_checked_at = now  # heartbeat -> fraîcheur remise à zéro
+    data = enricher.lookup(opp.siren)
+    if data:
+        siege = data.get("siege") or {}
+        etat = data.get("etat_administratif") or siege.get("etat_administratif")
+        if etat and etat.upper() != "A" and opp.closed_at is None:
+            opp.closed_at = now
+            opp.status = "perdu"
+            stats.closed_now += 1
+            session.add(
+                Signal(
+                    opportunity_id=opp.id,
+                    signal_type="fermé",
+                    source="Sirene (refresh)",
+                    signal_date=date.today(),
+                    confidence_score=0.9,
+                    raw_text=f"Établissement fermé (état administratif {etat}).",
+                )
+            )
+    opp.updated_at = now
 
 
 def _coord(value):

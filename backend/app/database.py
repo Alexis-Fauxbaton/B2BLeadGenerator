@@ -59,6 +59,8 @@ def _run_lightweight_migrations() -> None:
         "decision_maker_email": "ALTER TABLE opportunities ADD COLUMN decision_maker_email VARCHAR",
         "decision_maker_confidence": "ALTER TABLE opportunities ADD COLUMN decision_maker_confidence VARCHAR",
         "contact_enriched_at": "ALTER TABLE opportunities ADD COLUMN contact_enriched_at DATETIME",
+        "last_checked_at": "ALTER TABLE opportunities ADD COLUMN last_checked_at DATETIME",
+        "closed_at": "ALTER TABLE opportunities ADD COLUMN closed_at DATETIME",
     }
     with engine.begin() as conn:
         for column, ddl in additions.items():

@@ -148,4 +148,14 @@ def run_contact_enrich_endpoint(source: str = "bodacc", limit: int = 500):
         raise HTTPException(status_code=502, detail=f"Enrichissement contact échoué : {exc}")
 
 
+@dev_router.post("/refresh")
+def run_refresh_endpoint(source: str = "bodacc"):
+    from .ingestion.pipeline import run_refresh, stats_to_dict
+
+    try:
+        return stats_to_dict(run_refresh(source=source))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Refresh échoué : {exc}")
+
+
 app.include_router(dev_router)

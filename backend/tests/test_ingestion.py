@@ -584,6 +584,47 @@ def test_website_scraper_ignores_form_placeholder_email():
     assert extract_from_html(only_placeholder, site_domain="koko-odessa.fr")["email"] is None
 
 
+def test_refresh_closure_and_heartbeat():
+    """La passe refresh : détecte la fermeture (Sirene état != A) -> closed_at +
+    status perdu + Signal 'fermé' ; et pose le heartbeat last_checked_at."""
+    from sqlmodel import SQLModel, Session, create_engine, select
+    from app.models import Opportunity, Signal
+    from app.ingestion.pipeline import _refresh_one, RefreshStats
+
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+
+    def make(ref, siren):
+        return Opportunity(
+            establishment_name="X", establishment_type="restaurant", city="Paris",
+            address="", main_signal="reprise", secondary_signals=[],
+            detection_date=date(2026, 6, 1), estimated_timing="J-60", probable_needs=[],
+            source="bodacc", source_ref=ref, siren=siren,
+        )
+
+    class ClosedSirene:
+        def lookup(self, siren): return {"etat_administratif": "F", "siege": {}}
+
+    class ActiveSirene:
+        def lookup(self, siren): return {"etat_administratif": "A", "siege": {}}
+
+    with Session(engine) as s:
+        closed = make("R1", "123456789")
+        s.add(closed); s.commit(); s.refresh(closed)
+        _refresh_one(s, closed, ClosedSirene(), RefreshStats()); s.commit()
+        assert closed.closed_at is not None
+        assert closed.status == "perdu"
+        assert closed.last_checked_at is not None
+        sigs = s.exec(select(Signal).where(Signal.opportunity_id == closed.id)).all()
+        assert any(sg.signal_type == "fermé" for sg in sigs)
+
+        active = make("R2", "987654321")
+        s.add(active); s.commit(); s.refresh(active)
+        _refresh_one(s, active, ActiveSirene(), RefreshStats()); s.commit()
+        assert active.closed_at is None
+        assert active.last_checked_at is not None  # heartbeat -> fraîcheur remise à zéro
+
+
 def test_lifecycle_stage():
     from datetime import date as _date
     from app.services.lifecycle import lifecycle_stage

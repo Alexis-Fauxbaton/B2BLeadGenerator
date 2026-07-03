@@ -111,6 +111,10 @@ class Opportunity(SQLModel, table=True):
     decision_maker_confidence: Optional[str] = None
     # NULL = enrichissement contact pas encore tenté (cible de la passe contact).
     contact_enriched_at: Optional[datetime] = None
+    # Refresh : dernière vérification (heartbeat de fraîcheur) et date de fermeture
+    # détectée (Sirene état != A) => stage "fermé".
+    last_checked_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
 
     status: str = "non_contacte"
 
