@@ -412,6 +412,9 @@ function ContactBlock({ opp }: { opp: OpportunityRead }) {
   // est géo-confirmé (haute) ; sinon "à trouver".
   const estabShown = opp.contact_confidence === "haute";
   const hasEstabValues = Boolean(opp.phone || opp.email || opp.website || opp.instagram);
+  // Le handle d'un lead SOURCE Instagram est fiable (c'est par lui qu'on l'a
+  // trouvé) -> toujours affiché, même sans match Places.
+  const instaFromSource = Boolean(instaUrl && opp.source === "instagram");
   const fresh = reviewFreshness(opp.review_count);
   // Décideur : email affiché seulement si confiance haute.
   const decideurEmailShown = opp.decision_maker_confidence === "haute" && Boolean(opp.decision_maker_email);
@@ -422,7 +425,13 @@ function ContactBlock({ opp }: { opp: OpportunityRead }) {
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Établissement</span>
-          <ConfidenceChip level={opp.contact_confidence} />
+          {opp.source === "instagram" ? (
+            <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset bg-pink-50 text-pink-600 ring-pink-200">
+              source Insta
+            </span>
+          ) : (
+            <ConfidenceChip level={opp.contact_confidence} />
+          )}
         </div>
         {estabShown && hasEstabValues ? (
           <div className="space-y-2">
@@ -440,9 +449,18 @@ function ContactBlock({ opp }: { opp: OpportunityRead }) {
             )}
           </div>
         ) : (
-          <p className="text-sm text-slate-400">
-            {hasEstabValues ? "Contact trouvé mais non vérifié — à confirmer." : "Contact établissement à trouver."}
-          </p>
+          <div className="space-y-2">
+            {instaFromSource && (
+              <ContactRow icon={Instagram} href={instaUrl!} text={`@${opp.instagram!.replace(/^@/, "")}`} action="Ouvrir" external />
+            )}
+            <p className="text-sm text-slate-400">
+              {instaFromSource
+                ? "Tél / email / site à trouver."
+                : hasEstabValues
+                ? "Contact trouvé mais non vérifié — à confirmer."
+                : "Contact établissement à trouver."}
+            </p>
+          </div>
         )}
 
         {/* Match Google / fraîcheur */}

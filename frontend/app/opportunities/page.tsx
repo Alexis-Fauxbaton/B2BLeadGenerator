@@ -38,7 +38,8 @@ function ContactIcons({ o }: { o: OpportunityList }) {
   const items: [boolean, typeof Phone, string][] = [
     [Boolean(o.phone) && estabTrusted, Phone, "Téléphone"],
     [Boolean(o.email) && estabTrusted, Mail, "Email"],
-    [Boolean(o.instagram) && estabTrusted, Instagram, "Instagram"],
+    // Le handle d'un lead source Instagram est fiable (c'est la source).
+    [Boolean(o.instagram) && (estabTrusted || o.source === "instagram"), Instagram, "Instagram"],
     [Boolean(o.website) && estabTrusted, Globe, "Site web"],
     [o.decision_maker_confidence === "haute", User, "Décideur"],
   ];
