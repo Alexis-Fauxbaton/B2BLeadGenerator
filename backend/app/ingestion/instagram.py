@@ -13,11 +13,19 @@ import json
 import os
 import re
 import unicodedata
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 import requests
 
 APIFY_ACTOR = "apify~instagram-hashtag-scraper"
+PROFILE_ACTOR = "apify~instagram-profile-scraper"
+# Garde-fou déterministe : au-delà, un compte est clairement établi (Le Palais
+# = 200 posts). Volontairement haut : le LLM (qui lit les derniers posts) est le
+# vrai discriminateur ; ceci n'attrape que l'évident + sert de plancher si le LLM
+# est indisponible. NB : l'ÂGE des posts n'est PAS un critère (une pré-ouverture
+# peut teaser pendant des mois) — seuls le volume énorme et le CONTENU tranchent.
+POSTS_ESTABLISHED_HARD = 150
 # Hashtags CHR-orientés. Mesuré : les tags CHR (restaurantparis 73 %,
 # ouverturerestaurant 33 % de comptes CHR+IdF) sont 3-7x plus propres que les
 # génériques (ouvertureprochaine & co ~10 %) — on gaspille beaucoup moins de
@@ -217,6 +225,216 @@ def judge(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
             c2["freshness"] = r["freshness"]
             kept.append(c2)
     return kept
+
+
+def scrape_profiles(handles: List[str], timeout: int = 180) -> Dict[str, Dict[str, Any]]:
+    """Scrape les profils Instagram (actor profil) -> {username: profil}.
+    2e passe, sur les seuls survivants (donc peu coûteuse). Fail-soft {} si pas de
+    token/erreur. Chaque profil porte postsCount, biography, businessAddress
+    (structuré), externalUrl(s), et latestPosts (légendes + timestamps)."""
+    token = os.getenv("APIFY_TOKEN")
+    if not token or not handles:
+        return {}
+    url = f"https://api.apify.com/v2/acts/{PROFILE_ACTOR}/run-sync-get-dataset-items?token={token}"
+    try:
+        resp = requests.post(url, json={"usernames": handles}, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for p in data:
+        u = (p.get("username") or "").strip().lower()
+        if u:
+            out[u] = p
+    return out
+
+
+def _clean_city(name: Optional[str]) -> str:
+    """'Paris, France' -> 'Paris'. Défaut ''."""
+    return (name or "").split(",")[0].strip()
+
+
+def _struct_address(profile: Dict[str, Any]) -> Optional[str]:
+    """Adresse structurée d'un compte business -> chaîne, ou None."""
+    ba = profile.get("businessAddress") or {}
+    street = (ba.get("street_address") or "").strip()
+    zc = (ba.get("zip_code") or "").strip()
+    city = _clean_city(ba.get("city_name"))
+    parts = [p for p in (street, " ".join(x for x in (zc, city) if x)) if p]
+    return ", ".join(parts) or None
+
+
+def _profile_long_history(profile: Dict[str, Any], today: date, threshold_days: int = 150) -> bool:
+    """True si l'exploitation dure depuis des mois => établi. On regarde le VIEUX
+    (historique long), pas le récent (=inactivité, autre signal). Robuste : on
+    exige PLUSIEURS posts anciens (historique soutenu), pas un seul — sinon un
+    throwback / post épinglé flaguerait à tort une vraie nouvelle adresse.
+    Déterministe, complète postsCount pour les comptes peu actifs mais anciens."""
+    dates: List[date] = []
+    for x in profile.get("latestPosts") or []:
+        ts = (x.get("timestamp") or "")[:10]
+        try:
+            dates.append(datetime.strptime(ts, "%Y-%m-%d").date())
+        except ValueError:
+            continue
+    if not dates:
+        return False
+    old = [d for d in dates if (today - d).days > threshold_days]
+    return len(old) >= min(3, len(dates))
+
+
+def _external_url(profile: Dict[str, Any]) -> Optional[str]:
+    """URL de site (hors linktr.ee/agrégateurs) si disponible."""
+    url = (profile.get("externalUrl") or "").strip()
+    if url and "linktr.ee" not in url and "linktree" not in url:
+        return url
+    for e in profile.get("externalUrls") or []:
+        u = (e.get("url") or "").strip()
+        if u and "linktr.ee" not in u and "linktree" not in u:
+            return u
+    return url or None
+
+
+def profile_enrich(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """3e étage : sur les survivants (auto-annonces fraîches), scrape le profil et
+    écarte les lieux DÉJÀ ÉTABLIS (des mois d'exploitation -> DROP, cas Le Palais),
+    en gardant pré-ouverture ET vient d'ouvrir, et en enrichissant au passage
+    adresse(s)/email(s)/site/ville.
+
+    - Règle : postsCount > POSTS_ESTABLISHED_HARD -> DROP (garde-fou + plancher).
+    - Juge LLM : lit les ~6 derniers posts (légendes + dates). Discrimine sur le
+      LONG historique d'exploitation, pas l'âge. 'established' -> drop ; 'recent'
+      (ouvre / vient d'ouvrir) -> garde ; doute -> garde.
+      Extrait aussi addresses[] et emails[] (bio + posts).
+
+    Fail-soft : pas de profil (token/erreur) -> candidats inchangés (ni drop ni
+    enrichissement). Pas de clé OpenAI -> seule la règle postsCount s'applique."""
+    if not candidates:
+        return candidates
+    profiles = scrape_profiles([c["handle"] for c in candidates])
+    if not profiles:
+        return candidates  # scrape indispo : on ne casse rien
+
+    # Contexte profil + garde-fous DÉTERMINISTES (fiables, reproductibles) :
+    #  - postsCount énorme -> établi (Le Palais 200) ;
+    #  - plus vieux post récent daté de +5 mois -> exploitation longue (attrape
+    #    les comptes peu actifs mais anciens : 11 posts étalés sur 2 ans).
+    today = date.today()
+    survivors: List[Dict[str, Any]] = []
+    for c in candidates:
+        prof = profiles.get(c["handle"].lower()) or {}
+        c["_profile"] = prof
+        posts_count = prof.get("postsCount")
+        if isinstance(posts_count, int) and posts_count > POSTS_ESTABLISHED_HARD:
+            continue
+        if _profile_long_history(prof, today):
+            continue
+        survivors.append(c)
+
+    # Client LLM créé une fois, appelé UNITAIREMENT (1 profil / appel). Le batch
+    # faisait fuiter adresses ET verdicts d'un compte à l'autre — en isolé, plus
+    # de contamination et verdict reproductible.
+    client = _openai_client()
+
+    kept: List[Dict[str, Any]] = []
+    for c in survivors:
+        prof = c.pop("_profile", {}) or {}
+        # Profil vide (scrape raté/privé) -> gardé sans juger (aucune preuve).
+        has_data = bool(prof.get("latestPosts") or prof.get("postsCount") is not None)
+        v = _judge_profile(client, c["handle"], c.get("name"), prof) if (client and has_data) else {}
+        # Drop uniquement le vraiment ÉTABLI (des mois d'exploitation). On garde
+        # pré-ouverture ET vient d'ouvrir. Sinon (pas de clé/erreur) on garde
+        # (la règle postsCount a déjà filtré l'évident).
+        if v.get("status") == "established":
+            continue
+        # --- enrichissement ---
+        struct_addr = _struct_address(prof)
+        struct_city = _clean_city((prof.get("businessAddress") or {}).get("city_name"))
+        llm_addrs = [a for a in (v.get("addresses") or []) if a]
+        llm_emails = [e for e in (v.get("emails") or []) if e]
+        biz_email = (prof.get("businessEmail") or prof.get("public_email") or "").strip()
+
+        addresses = ([struct_addr] if struct_addr else []) + [a for a in llm_addrs if a != struct_addr]
+        emails = ([biz_email] if biz_email else []) + [e for e in llm_emails if e != biz_email]
+
+        if addresses:
+            c["address"] = addresses[0]
+            c["extra_addresses"] = addresses[1:]
+        if struct_city:
+            c["city"] = struct_city  # vraie ville -> corrige les 'villes bancales'
+        if emails:
+            c["email"] = emails[0]
+            c["extra_emails"] = emails[1:]
+        website = _external_url(prof)
+        if website:
+            c["website"] = website
+        kept.append(c)
+    return kept
+
+
+_PROFILE_SYSTEM = (
+    "Tu analyses UN profil Instagram d'établissement CHR pour un fournisseur B2B. "
+    "But : écarter les lieux DÉJÀ ÉTABLIS et garder ceux qui OUVRENT ou VIENNENT "
+    "D'OUVRIR (encore en phase d'aménagement = bon prospect). status :\n"
+    "- 'established' : opère depuis PLUSIEURS MOIS — historique de service récurrent "
+    "(programme du mois, réservations, événements réguliers, nombreux posts "
+    "d'exploitation sur une longue période). À ÉCARTER.\n"
+    "- 'recent' : ouvre bientôt (travaux, 'bientôt', compte à rebours) OU vient "
+    "d'ouvrir récemment (lancement, premières semaines, peu d'historique). À GARDER.\n"
+    "Indices d'ÉTABLI dans la BIO ou les posts : 'depuis <année>', 'ouvert depuis', "
+    "'X ans', 'anniversaire' / 'X an(s)' fêté, posts de service de plusieurs mois/"
+    "années. Un COMPTE neuf ne veut pas dire établissement neuf (ex. bio 'nouveau "
+    "compte, ouverts depuis 1995' = établi).\n"
+    "RÈGLE : si une DATE d'ouverture récente/à venir est mentionnée, c'est 'recent'. "
+    "L'ÂGE des posts seul ne compte pas (une pré-ouverture peut teaser des mois). Ce "
+    "qui compte : y a-t-il un LONG historique d'EXPLOITATION ? DOUTE -> 'recent'. "
+    "Extrait aussi, UNIQUEMENT depuis la bio/les posts de CE compte : addresses "
+    "(adresses postales complètes) et emails. Réponds STRICTEMENT en JSON."
+)
+
+
+def _openai_client():
+    """Client OpenAI, ou None (fail-soft : pas de clé / SDK absent / erreur)."""
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        return None
+    try:
+        from openai import OpenAI
+        return OpenAI(api_key=key)
+    except Exception:
+        return None
+
+
+def _judge_profile(client, handle: str, name: Optional[str], profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Juge UN profil (établi/récent + extraction adresses/emails). Appel isolé :
+    aucune contamination entre comptes. Fail-soft {} en cas d'erreur."""
+    latest = profile.get("latestPosts") or []
+    recents = "\n".join(
+        f'  - {(x.get("timestamp") or "?")[:10]} : {(x.get("caption") or "")[:180]}'
+        for x in latest[:6]
+    )
+    block = (
+        f'@{handle} | {name} | posts={profile.get("postsCount")} '
+        f'| abonnés={profile.get("followersCount")} | catégorie={profile.get("businessCategoryName")}\n'
+        f'bio: {(profile.get("biography") or "")[:250]}\n'
+        f'derniers posts:\n{recents or "  (aucun)"}'
+    )
+    user = (
+        "Profil :\n" + block + "\n\n"
+        'Format EXACT : {"status":"established|recent","opening_date":"YYYY-MM-DD|null",'
+        '"addresses":[],"emails":[]}'
+    )
+    try:
+        completion = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            messages=[{"role": "system", "content": _PROFILE_SYSTEM}, {"role": "user", "content": user}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        return json.loads(completion.choices[0].message.content)
+    except Exception:
+        return {}
 
 
 def _chr_type(text: str) -> str:

@@ -91,6 +91,9 @@ class OpportunityList(OpportunityBase):
     contact_enriched_at: Optional[datetime] = None
     last_checked_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
+    # Contacts multiples (profil Insta d'un groupe : autres adresses/emails).
+    extra_addresses: List[str] = []
+    extra_emails: List[str] = []
     created_at: datetime
     updated_at: datetime
 
@@ -99,7 +102,10 @@ class OpportunityList(OpportunityBase):
 
     # Colonnes JSON ajoutées après coup : NULL en base sur les anciennes lignes
     # -> on coerce en liste vide pour ne pas casser la sérialisation.
-    @field_validator("secondary_signals", "probable_needs", "dirigeants", mode="before")
+    @field_validator(
+        "secondary_signals", "probable_needs", "dirigeants",
+        "extra_addresses", "extra_emails", mode="before",
+    )
     @classmethod
     def _coerce_none_list(cls, v):
         return v if v is not None else []

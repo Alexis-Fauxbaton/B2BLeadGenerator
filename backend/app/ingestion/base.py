@@ -34,6 +34,11 @@ class LeadCandidate:
     proof_text: str = ""
     proof_url: str = ""
     address: str = ""
+    # Contact enrichi à la source (ex. profil Instagram) — sinon rempli plus tard.
+    email: Optional[str] = None
+    website: Optional[str] = None
+    extra_addresses: List[str] = field(default_factory=list)  # lieux multiples (groupe)
+    extra_emails: List[str] = field(default_factory=list)
     secondary_signals: List[str] = field(default_factory=list)
     decision_maker: Optional[str] = None
     dirigeants: List[str] = field(default_factory=list)

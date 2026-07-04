@@ -30,7 +30,7 @@ from .enrichment.backfill import backfill_siren
 from .enrichment.contact_enricher import ContactEnricher
 from .enrichment.naf_classifier import classify_naf
 from .enrichment.sirene import SireneEnricher
-from .instagram import discover, judge, scrape_hashtags
+from .instagram import discover, judge, profile_enrich, scrape_hashtags
 
 # Besoins probables par type d'établissement (alignés sur l'offre LumaPro).
 NEEDS_BY_TYPE = {
@@ -232,15 +232,17 @@ def run_instagram(
     enricher = SireneEnricher()
 
     try:
-        # Filtre heuristique (recall) -> juge LLM de fraîcheur (précision : ne
-        # garde que les vraies ouvertures, pas les établis mal étiquetés).
-        # `posts` peut être fourni (rejeu depuis cache) pour éviter un run Apify.
+        # Pipeline de découverte, du recall à la précision :
+        #  discover (heuristique CHR+IdF) -> judge (fraîcheur + auto-annonce)
+        #  -> profile_enrich (profil : vire les établis type Le Palais + extrait
+        #     adresse/email/site/vraie ville). `posts` peut être fourni (rejeu cache).
         raw_posts = posts if posts is not None else scrape_hashtags(hashtags, limit)
-        leads = judge(discover(raw_posts))
+        leads = profile_enrich(judge(discover(raw_posts)))
         stats.fetched = len(leads)
         seen_refs: set = set()
         for lead in leads:
             try:
+                # Ville désormais issue du profil quand dispo -> meilleur match SIREN.
                 bf = backfill_siren(lead["name"], lead["city"]) or {}
                 # Signal déduit du verdict de fraîcheur (tous famille "opening",
                 # +3 au score). Défaut si le juge n'a pas tourné (fail-soft).
@@ -253,6 +255,11 @@ def run_instagram(
                     source_ref=lead["handle"],
                     establishment_name=bf.get("enseigne") or lead["name"],
                     city=lead["city"],
+                    address=lead.get("address", ""),
+                    email=lead.get("email"),
+                    website=lead.get("website"),
+                    extra_addresses=lead.get("extra_addresses", []),
+                    extra_emails=lead.get("extra_emails", []),
                     main_signal=main_signal,
                     detection_date=date.today(),
                     classification_text=lead["name"],
@@ -382,6 +389,17 @@ def _process_candidate(
         existing.dirigeants = cand.dirigeants
         if cand.instagram:
             existing.instagram = cand.instagram
+        # Contact enrichi à la source (profil Insta) : email/site/adresses multiples.
+        if cand.email:
+            existing.email = cand.email
+        if cand.website:
+            existing.website = cand.website
+        if cand.extra_addresses:
+            existing.extra_addresses = cand.extra_addresses
+        if cand.extra_emails:
+            existing.extra_emails = cand.extra_emails
+        if cand.source == "instagram" and (cand.email or cand.website or cand.address):
+            existing.contact_confidence = "haute"
         existing.activity_start_date = cand.activity_start_date
         existing.venue_origin_date = cand.venue_origin_date
         existing.estimated_timing = timing
@@ -426,6 +444,15 @@ def _process_candidate(
         siren=cand.siren,
         naf=cand.naf,
         instagram=cand.instagram,
+        email=cand.email,
+        website=cand.website,
+        extra_addresses=cand.extra_addresses,
+        extra_emails=cand.extra_emails,
+        # Contact issu du profil Insta (adresse business / email déclarés) = fiable.
+        contact_confidence=(
+            "haute" if cand.source == "instagram" and (cand.email or cand.website or cand.address)
+            else None
+        ),
         latitude=cand.latitude,
         longitude=cand.longitude,
         status="non_contacte",

@@ -98,6 +98,10 @@ class Opportunity(SQLModel, table=True):
     website: Optional[str] = None
     instagram: Optional[str] = None
     facebook: Optional[str] = None
+    # Contacts multiples (ex. profil Insta d'un groupe : plusieurs adresses/emails).
+    # Le principal est dans address/email ; ceci = les autres.
+    extra_addresses: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    extra_emails: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     # Nb d'avis Google Places (proxy de fraîcheur : 0-20 = fenêtre d'aménagement

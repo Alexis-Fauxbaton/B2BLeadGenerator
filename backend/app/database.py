@@ -61,6 +61,8 @@ def _run_lightweight_migrations() -> None:
         "contact_enriched_at": "ALTER TABLE opportunities ADD COLUMN contact_enriched_at DATETIME",
         "last_checked_at": "ALTER TABLE opportunities ADD COLUMN last_checked_at DATETIME",
         "closed_at": "ALTER TABLE opportunities ADD COLUMN closed_at DATETIME",
+        "extra_addresses": "ALTER TABLE opportunities ADD COLUMN extra_addresses JSON",
+        "extra_emails": "ALTER TABLE opportunities ADD COLUMN extra_emails JSON",
     }
     with engine.begin() as conn:
         for column, ddl in additions.items():
