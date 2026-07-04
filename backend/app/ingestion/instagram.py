@@ -296,11 +296,17 @@ def _external_url(profile: Dict[str, Any]) -> Optional[str]:
     return url or None
 
 
-def profile_enrich(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def profile_enrich(
+    candidates: List[Dict[str, Any]],
+    profiles: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """3e étage : sur les survivants (auto-annonces fraîches), scrape le profil et
     écarte les lieux DÉJÀ ÉTABLIS (des mois d'exploitation -> DROP, cas Le Palais),
     en gardant pré-ouverture ET vient d'ouvrir, et en enrichissant au passage
     adresse(s)/email(s)/site/ville.
+
+    `profiles` (dict {username: profil}) peut être injecté pour tourner sur des
+    snapshots figés (éval reproductible, sans réseau) ; sinon on scrape.
 
     - Règle : postsCount > POSTS_ESTABLISHED_HARD -> DROP (garde-fou + plancher).
     - Juge LLM : lit les ~6 derniers posts (légendes + dates). Discrimine sur le
@@ -312,7 +318,8 @@ def profile_enrich(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     enrichissement). Pas de clé OpenAI -> seule la règle postsCount s'applique."""
     if not candidates:
         return candidates
-    profiles = scrape_profiles([c["handle"] for c in candidates])
+    if profiles is None:
+        profiles = scrape_profiles([c["handle"] for c in candidates])
     if not profiles:
         return candidates  # scrape indispo : on ne casse rien
 
