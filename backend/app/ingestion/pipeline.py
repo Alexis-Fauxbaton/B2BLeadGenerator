@@ -220,6 +220,7 @@ def run_instagram(
     hashtags: Optional[List[str]] = None,
     limit: int = 40,
     session: Optional[Session] = None,
+    posts: Optional[List[dict]] = None,
 ) -> IngestStats:
     """Source Instagram-first [PHASE 2] : Apify (hashtags) -> filtre CHR + IdF ->
     backfill SIREN (nom+ville) -> pipeline existant (Sirene/dirigeants/contact/
@@ -231,19 +232,28 @@ def run_instagram(
     enricher = SireneEnricher()
 
     try:
-        # Filtre heuristique (recall) -> juge LLM (précision, jette yeat.fr & co).
-        leads = judge(discover(scrape_hashtags(hashtags, limit)))
+        # Filtre heuristique (recall) -> juge LLM de fraîcheur (précision : ne
+        # garde que les vraies ouvertures, pas les établis mal étiquetés).
+        # `posts` peut être fourni (rejeu depuis cache) pour éviter un run Apify.
+        raw_posts = posts if posts is not None else scrape_hashtags(hashtags, limit)
+        leads = judge(discover(raw_posts))
         stats.fetched = len(leads)
         seen_refs: set = set()
         for lead in leads:
             try:
                 bf = backfill_siren(lead["name"], lead["city"]) or {}
+                # Signal déduit du verdict de fraîcheur (tous famille "opening",
+                # +3 au score). Défaut si le juge n'a pas tourné (fail-soft).
+                main_signal = {
+                    "opening": "ouverture prochaine",
+                    "just_opened": "création récente",
+                }.get(lead.get("freshness"), "ouverture prochaine")
                 cand = LeadCandidate(
                     source="instagram",
                     source_ref=lead["handle"],
                     establishment_name=bf.get("enseigne") or lead["name"],
                     city=lead["city"],
-                    main_signal="ouverture prochaine",
+                    main_signal=main_signal,
                     detection_date=date.today(),
                     classification_text=lead["name"],
                     establishment_type=lead["type"],  # pré-classé CHR à la découverte
@@ -425,11 +435,14 @@ def _process_candidate(
     session.add(opp)
     session.flush()  # pour récupérer opp.id
 
+    source_label = {
+        "bodacc": "BODACC", "instagram": "Instagram", "demo": "Démo",
+    }.get(cand.source, cand.source)
     session.add(
         Signal(
             opportunity_id=opp.id,
             signal_type=cand.main_signal,
-            source=f"BODACC ({cand.source})",
+            source=source_label,
             source_url=cand.proof_url,
             signal_date=cand.detection_date,
             confidence_score=0.8,

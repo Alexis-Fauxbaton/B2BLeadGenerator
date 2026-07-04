@@ -130,14 +130,26 @@ def discover(posts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     return out
 
 
-def judge(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Juge LLM (le "flou") — ne garde que les VRAIS établissements CHR qui
-    ouvrent/viennent d'ouvrir en Île-de-France, et nettoie le nom. Un filtre par
-    mots-clés ne sait pas distinguer "marque qui utilise le hashtag" d'un "lieu
-    qui ouvre" (cas yeat.fr) ; c'est le boulot du LLM.
+# Fraîcheurs qui constituent une opportunité (le reste est rejeté par le juge).
+FRESH_KEEP = ("opening", "just_opened")
 
-    Fail-soft : sans OPENAI_API_KEY (ou en cas d'erreur) -> renvoie l'entrée
-    telle quelle (on retombe sur le seul filtre heuristique)."""
+
+def judge(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Juge LLM de FRAÎCHEUR — le cœur de la précision. L'heuristique dit "CHR +
+    IdF" mais ne sait pas si le lieu OUVRE ou est déjà installé depuis 20 ans
+    (une légende "venez déguster nos spécialités" ne le dit pas). Mesuré : sur
+    ~100 candidats CHR+IdF, seuls ~30 % sont de vraies ouvertures — le reste est
+    établi. Le juge classe chaque compte :
+      - opening      : ouvre bientôt / pré-ouverture
+      - just_opened  : a ouvert il y a peu (< ~3 mois)
+      - established  : établi, aucun signal d'ouverture (REJETÉ)
+      - unknown      : indéterminable depuis la légende (REJETÉ, au doute)
+    Ne garde que opening/just_opened, nettoie le nom, et attache `freshness` au
+    candidat (le pipeline en déduit le signal d'achat). Rejette aussi les
+    non-lieux (marques/produits) via `established`.
+
+    Fail-soft : sans OPENAI_API_KEY (ou erreur) -> renvoie l'entrée inchangée
+    (on retombe sur le seul filtre heuristique, sans garantie de fraîcheur)."""
     key = os.getenv("OPENAI_API_KEY")
     if not key or not candidates:
         return candidates
@@ -152,18 +164,25 @@ def judge(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
         for i, c in enumerate(candidates)
     )
     system = (
-        "Tu qualifies des comptes Instagram pour un fournisseur B2B de luminaires/"
-        "mobilier ciblant le CHR (café, restaurant, bar, hôtel, brasserie, "
-        "boulangerie, traiteur, salon de thé). Tu ne gardes QUE les comptes d'un "
-        "VRAI établissement/lieu physique qui OUVRE bientôt ou vient d'ouvrir en "
-        "Île-de-France. Tu JETTES : marques/produits sans lieu, autres secteurs "
-        "(sport, beauté, bijoux…), établissements déjà bien établis, autres régions. "
+        "Tu évalues des comptes Instagram d'établissements CHR (café, restaurant, "
+        "bar, hôtel, brasserie, boulangerie, traiteur, salon de thé) en Île-de-France "
+        "pour un fournisseur B2B de luminaires/mobilier. Pour CHAQUE compte, classe "
+        "la FRAÎCHEUR d'après des indices EXPLICITES dans la légende (date "
+        "d'ouverture, 'bientôt', 'nouvelle adresse', 'on ouvre', 'ouverture le', "
+        "compte à rebours, 'enfin ouvert', 'nouveau') :\n"
+        "- 'opening' : ouvre bientôt / pré-ouverture\n"
+        "- 'just_opened' : a ouvert il y a peu (< ~3 mois)\n"
+        "- 'established' : établi, AUCUN signal d'ouverture récente ; OU ce n'est "
+        "pas un vrai lieu physique CHR (marque, produit, autre secteur)\n"
+        "- 'unknown' : impossible à trancher depuis la légende\n"
+        "En cas de doute -> 'unknown' ou 'established', JAMAIS 'opening'. "
+        "Donne aussi un nom d'enseigne propre (sans emojis ni slogan). "
         "Réponds STRICTEMENT en JSON."
     )
     user = (
-        f"Voici {len(candidates)} comptes. Pour chacun, décide keep (true/false) et "
-        "donne un nom d'enseigne propre (sans emojis ni slogan).\n"
-        'Format EXACT : {"results":[{"index":0,"keep":true,"name":"Enseigne"}]}\n\n'
+        f"Voici {len(candidates)} comptes.\n"
+        'Format EXACT : {"results":[{"index":0,"freshness":"opening|just_opened|'
+        'established|unknown","name":"Enseigne"}]}\n\n'
         f"{listing}"
     )
     try:
@@ -182,10 +201,11 @@ def judge(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
     kept: List[Dict[str, str]] = []
     for i, c in enumerate(candidates):
         r = by_index.get(i)
-        if r and r.get("keep"):
+        if r and r.get("freshness") in FRESH_KEEP:
             c2 = dict(c)
             if r.get("name"):
                 c2["name"] = str(r["name"]).strip()
+            c2["freshness"] = r["freshness"]
             kept.append(c2)
     return kept
 
