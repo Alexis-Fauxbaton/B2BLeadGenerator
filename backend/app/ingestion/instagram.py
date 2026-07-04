@@ -135,21 +135,24 @@ FRESH_KEEP = ("opening", "just_opened")
 
 
 def judge(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Juge LLM de FRAÎCHEUR — le cœur de la précision. L'heuristique dit "CHR +
-    IdF" mais ne sait pas si le lieu OUVRE ou est déjà installé depuis 20 ans
-    (une légende "venez déguster nos spécialités" ne le dit pas). Mesuré : sur
-    ~100 candidats CHR+IdF, seuls ~30 % sont de vraies ouvertures — le reste est
-    établi. Le juge classe chaque compte :
-      - opening      : ouvre bientôt / pré-ouverture
-      - just_opened  : a ouvert il y a peu (< ~3 mois)
-      - established  : établi, aucun signal d'ouverture (REJETÉ)
-      - unknown      : indéterminable depuis la légende (REJETÉ, au doute)
-    Ne garde que opening/just_opened, nettoie le nom, et attache `freshness` au
-    candidat (le pipeline en déduit le signal d'achat). Rejette aussi les
-    non-lieux (marques/produits) via `established`.
+    """Juge LLM — deux verdicts par compte, tous deux requis pour garder :
+
+    1) FRAÎCHEUR : l'heuristique dit "CHR + IdF" mais pas si le lieu OUVRE ou est
+       établi depuis 20 ans. Mesuré : ~30 % seulement des candidats sont de
+       vraies ouvertures. Valeurs opening / just_opened / established / unknown.
+    2) IDENTITÉ (`is_venue_owner`) : sous ces hashtags, ~1/3 des posts viennent
+       de comptes MÉDIA/influenceurs qui PARLENT d'un lieu (3e personne : "@x
+       s'installe") — le `ownerUsername` est alors le messager, pas le lieu.
+       Récupérer le vrai handle depuis la légende est non fiable (mesuré : 1 fois
+       sur 2 aucun mention propre, et parfois un faux — bout d'email…). Décision
+       produit : on ne garde QUE les auto-annonces (le posteur EST le lieu), où
+       le handle est fiable par construction. Les posts média sont rejetés.
+
+    Garde uniquement `freshness ∈ {opening, just_opened}` ET `is_venue_owner`.
+    Nettoie le nom et attache `freshness` (le pipeline en déduit le signal).
 
     Fail-soft : sans OPENAI_API_KEY (ou erreur) -> renvoie l'entrée inchangée
-    (on retombe sur le seul filtre heuristique, sans garantie de fraîcheur)."""
+    (on retombe sur le seul filtre heuristique, sans garantie)."""
     key = os.getenv("OPENAI_API_KEY")
     if not key or not candidates:
         return candidates
@@ -164,25 +167,30 @@ def judge(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
         for i, c in enumerate(candidates)
     )
     system = (
-        "Tu évalues des comptes Instagram d'établissements CHR (café, restaurant, "
-        "bar, hôtel, brasserie, boulangerie, traiteur, salon de thé) en Île-de-France "
-        "pour un fournisseur B2B de luminaires/mobilier. Pour CHAQUE compte, classe "
-        "la FRAÎCHEUR d'après des indices EXPLICITES dans la légende (date "
-        "d'ouverture, 'bientôt', 'nouvelle adresse', 'on ouvre', 'ouverture le', "
-        "compte à rebours, 'enfin ouvert', 'nouveau') :\n"
-        "- 'opening' : ouvre bientôt / pré-ouverture\n"
-        "- 'just_opened' : a ouvert il y a peu (< ~3 mois)\n"
-        "- 'established' : établi, AUCUN signal d'ouverture récente ; OU ce n'est "
-        "pas un vrai lieu physique CHR (marque, produit, autre secteur)\n"
-        "- 'unknown' : impossible à trancher depuis la légende\n"
-        "En cas de doute -> 'unknown' ou 'established', JAMAIS 'opening'. "
+        "Tu évalues des comptes Instagram sous des hashtags d'ouverture CHR (café, "
+        "restaurant, bar, hôtel, brasserie, boulangerie, traiteur, salon de thé) en "
+        "Île-de-France, pour un fournisseur B2B de luminaires/mobilier. Pour CHAQUE "
+        "compte, donne DEUX verdicts :\n"
+        "A) is_venue_owner (bool) : le compte qui poste EST-il l'établissement "
+        "lui-même ? true si auto-annonce à la 1re personne ('on ouvre', 'notre "
+        "nouvelle adresse', 'bientôt chez nous'). false si c'est un tiers "
+        "(média/guide/influenceur/agrégateur/compte perso) qui parle d'un lieu à la "
+        "3e personne ('@x s'installe', 'un nouveau resto ouvre').\n"
+        "B) freshness d'après des indices EXPLICITES dans la légende :\n"
+        "   - 'opening' : ouvre bientôt / pré-ouverture\n"
+        "   - 'just_opened' : a ouvert il y a peu (< ~3 mois)\n"
+        "   - 'established' : établi, AUCUN signal d'ouverture ; OU pas un vrai lieu "
+        "CHR (marque, produit, autre secteur)\n"
+        "   - 'unknown' : impossible à trancher\n"
+        "En cas de doute sur la fraîcheur -> 'unknown'/'established', JAMAIS "
+        "'opening'. En cas de doute sur l'identité -> is_venue_owner=false. "
         "Donne aussi un nom d'enseigne propre (sans emojis ni slogan). "
         "Réponds STRICTEMENT en JSON."
     )
     user = (
         f"Voici {len(candidates)} comptes.\n"
-        'Format EXACT : {"results":[{"index":0,"freshness":"opening|just_opened|'
-        'established|unknown","name":"Enseigne"}]}\n\n'
+        'Format EXACT : {"results":[{"index":0,"is_venue_owner":true,'
+        '"freshness":"opening|just_opened|established|unknown","name":"Enseigne"}]}\n\n'
         f"{listing}"
     )
     try:
@@ -201,7 +209,8 @@ def judge(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
     kept: List[Dict[str, str]] = []
     for i, c in enumerate(candidates):
         r = by_index.get(i)
-        if r and r.get("freshness") in FRESH_KEEP:
+        # Requiert les DEUX : vraie ouverture ET compte = le lieu (handle fiable).
+        if r and r.get("freshness") in FRESH_KEEP and r.get("is_venue_owner") is True:
             c2 = dict(c)
             if r.get("name"):
                 c2["name"] = str(r["name"]).strip()
