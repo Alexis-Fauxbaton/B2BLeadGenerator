@@ -7,7 +7,9 @@ from app.ingestion.enrichment.siret_matcher import (
     near_candidates,
     pick_by_address,
     arbitrate,
+    match,
 )
+import app.ingestion.enrichment.siret_matcher as sm
 
 
 def test_clean_name_strips_emojis_and_decorations():
@@ -230,3 +232,54 @@ def test_arbitrate_fails_soft():
     assert arbitrate("AURÉA", "bio", cands, client=None) is None
     assert arbitrate("AURÉA", "bio", cands, _FakeClient("pas du json")) is None
     assert arbitrate("AURÉA", "bio", [], _FakeClient('{"match_index": 0}')) is None
+
+
+_BAN_TREGUSTO = {"features": [{"geometry": {"coordinates": [2.1912, 48.9442]},
+                               "properties": {"label": "143 Av 78500 Sartrouville",
+                                              "score": 0.7}}]}
+
+
+def test_match_by_name_with_geo():
+    fetch = _fake_fetch({sm.SEARCH_URL: {"results": [HIT_MAIRIE, HIT_MOURE]}})
+    got = match("LE MOURE ROUGE - CANNES 🛟", city="Cannes", fetch=fetch)
+    assert got is not None
+    assert (got.siren, got.method, got.confidence) == ("899355770", "nom", "haute")
+
+
+def test_match_by_address_via_arbiter():
+    # Cas Tre Gusto : nom inconnu au registre, 2 CHR au 143 -> arbitre -> OCOIN.
+    fetch = _fake_fetch({
+        sm.SEARCH_URL: {"results": []},
+        sm.BAN_URL: _BAN_TREGUSTO,
+        sm.NEAR_URL: {"results": [HIT_CAFETERIA, HIT_SARFOOD, HIT_OCOIN]},
+    })
+    got = match("Tre Gusto", city="Sartrouville",
+                address="143 Av. du Général de Gaule Sartrouville",
+                context="resto italien qui démarre",
+                fetch=fetch, llm_client=_FakeClient('{"match_index": 1}'))
+    assert got is not None
+    assert (got.siren, got.siret, got.method) == ("989119201", "98911920100011", "arbitre")
+
+
+def test_match_single_chr_at_number_without_llm():
+    fetch = _fake_fetch({
+        sm.SEARCH_URL: {"results": []},
+        sm.BAN_URL: _BAN_TREGUSTO,
+        sm.NEAR_URL: {"results": [HIT_CAFETERIA, HIT_OCOIN]},
+    })
+    got = match("Tre Gusto", address="143 Av. du Général de Gaule",
+                fetch=fetch, llm_client=None)
+    assert got is not None and (got.method, got.confidence) == ("adresse", "moyenne")
+
+
+def test_match_name_only_without_geo_needs_arbiter():
+    # Piège Auréa : sans LLM -> None (conservateur) ; avec LLM qui rejette -> None.
+    fetch = _fake_fetch({sm.SEARCH_URL: {"results": [HIT_AUREA]}})
+    assert match("AURÉA", fetch=fetch, llm_client=None) is None
+    assert match("AURÉA", context="bijoux, Portugal", fetch=fetch,
+                 llm_client=_FakeClient('{"match_index": null}')) is None
+
+
+def test_match_returns_none_when_nothing():
+    fetch = _fake_fetch({})
+    assert match("MOKA", city="Paris", fetch=fetch) is None

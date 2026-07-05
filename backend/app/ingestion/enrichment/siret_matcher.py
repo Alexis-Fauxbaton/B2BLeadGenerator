@@ -13,6 +13,7 @@ import os
 import re
 import time
 import unicodedata
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
@@ -244,4 +245,67 @@ def arbitrate(name: str, context: Optional[str],
             return cands[idx]["siren"]
     except Exception:
         pass
+    return None
+
+
+@dataclass
+class MatchResult:
+    siren: Optional[str]
+    siret: Optional[str]
+    naf: Optional[str]
+    enseigne: Optional[str]
+    confidence: str  # "haute" | "moyenne"
+    method: str      # "nom" | "adresse" | "arbitre"
+
+
+# Sentinel : "résous le client OpenAI depuis l'env". Passer None = SANS arbitre
+# (déterministe, aucun appel LLM — indispensable pour les tests).
+_USE_ENV = object()
+
+
+def _result(cand: Dict[str, Any], confidence: str, method: str) -> MatchResult:
+    enseigne = (cand["enseignes"].split() and cand["enseignes"]) or cand["nom"] or None
+    return MatchResult(siren=cand["siren"], siret=cand["siret"], naf=cand["naf"],
+                       enseigne=enseigne, confidence=confidence, method=method)
+
+
+def match(name: str, city: Optional[str] = None, postal: Optional[str] = None,
+          address: Optional[str] = None, context: Optional[str] = None,
+          fetch: Fetch = _http_get, llm_client=_USE_ENV) -> Optional[MatchResult]:
+    """Chaîne complète nom -> adresse -> arbitre. Chaque étage ne traite que ce
+    que le précédent n'a pas résolu. None = pas de merge (le lead vit sans
+    SIREN, la réconciliation retentera)."""
+    if not name and not address:
+        return None
+
+    pool: List[Dict[str, Any]] = []  # candidats ambigus pour l'arbitre
+
+    # 1. Nom (auto-accept seulement si géo cohérente).
+    name_cands = search_by_name(name, city, postal, fetch) if name else []
+    got = pick_by_name(name_cands, name, city, postal)
+    if got:
+        return _result(got, "haute", "nom")
+    pool += [c for c in name_cands
+             if c["naf"] and classify_naf(c["naf"])
+             and _name_overlap(name, f'{c["nom"]} {c["enseignes"]}')]
+
+    # 2. Adresse (candidat CHR unique au même numéro = quasi décisif).
+    if address:
+        coords = geocode(address, fetch)
+        if coords:
+            near = near_candidates(coords[0], coords[1], fetch)
+            verdict, chosen = pick_by_address(near, street_number(address), name)
+            if verdict == "match":
+                return _result(chosen[0], "moyenne", "adresse")
+            if verdict == "ambiguous":
+                pool += chosen
+
+    # 3. Arbitre LLM sur le pool résiduel (dédupliqué par SIREN).
+    if pool:
+        uniq = list({c["siren"]: c for c in pool}.values())
+        client = _openai_client() if llm_client is _USE_ENV else llm_client
+        siren = arbitrate(name, context, uniq, client)
+        if siren:
+            cand = next(c for c in uniq if c["siren"] == siren)
+            return _result(cand, "moyenne", "arbitre")
     return None
