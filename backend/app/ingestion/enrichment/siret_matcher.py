@@ -264,7 +264,7 @@ _USE_ENV = object()
 
 
 def _result(cand: Dict[str, Any], confidence: str, method: str) -> MatchResult:
-    enseigne = (cand["enseignes"].split() and cand["enseignes"]) or cand["nom"] or None
+    enseigne = cand["enseignes"] or cand["nom"] or None
     return MatchResult(siren=cand["siren"], siret=cand["siret"], naf=cand["naf"],
                        enseigne=enseigne, confidence=confidence, method=method)
 

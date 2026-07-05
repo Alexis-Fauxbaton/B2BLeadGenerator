@@ -45,7 +45,7 @@ def test_name_overlap_uses_distinctive_tokens():
     assert _name_overlap("CHÈRES COUSINES", "CC ROQUETTE (CHERES COUSINES)") is True
 
 
-from app.ingestion.enrichment.siret_matcher import _candidates, pick_by_name
+from app.ingestion.enrichment.siret_matcher import _candidates, pick_by_name, _result
 
 # Extraits réels de l'API recherche-entreprises (test du 2026-07-04).
 HIT_MOURE = {
@@ -68,6 +68,13 @@ HIT_AUREA = {
     "siege": {"siret": "10572614500014", "activite_principale": "56.10A",
               "adresse": "8 RUE DU LANGUEDOC 06590 THEOULE-SUR-MER",
               "code_postal": "06590", "liste_enseignes": None},
+}
+HIT_COUSINES = {
+    "siren": "994929917", "nom_complet": "CC ROQUETTE (CHERES COUSINES)",
+    "activite_principale": "56.10C", "date_creation": "2025-12-15",
+    "siege": {"siret": "99492991700017", "activite_principale": "56.10C",
+              "adresse": "15 RUE DE LA ROQUETTE 75011 PARIS",
+              "code_postal": "75011", "liste_enseignes": ["CHERES COUSINES"]},
 }
 # Variante near_point : l'établissement matché est dans matching_etablissements.
 HIT_OCOIN = {
@@ -244,6 +251,7 @@ def test_match_by_name_with_geo():
     got = match("LE MOURE ROUGE - CANNES 🛟", city="Cannes", fetch=fetch)
     assert got is not None
     assert (got.siren, got.method, got.confidence) == ("899355770", "nom", "haute")
+    assert got.enseigne == "LE MOURE ROUGE"
 
 
 def test_match_by_address_via_arbiter():
@@ -283,3 +291,16 @@ def test_match_name_only_without_geo_needs_arbiter():
 def test_match_returns_none_when_nothing():
     fetch = _fake_fetch({})
     assert match("MOKA", city="Paris", fetch=fetch) is None
+
+
+def test_result_enseigne_prefers_enseignes_over_nom():
+    # Teste que _result utilise les enseignes si présentes, sinon le nom.
+    # Cas 1 : avec enseignes (HIT_COUSINES)
+    cousines_cands = _candidates([HIT_COUSINES])
+    result_with_enseignes = _result(cousines_cands[0], "haute", "nom")
+    assert result_with_enseignes.enseigne == "CHERES COUSINES"
+
+    # Cas 2 : sans enseignes (HIT_MOURE), fallback au nom
+    moure_cands = _candidates([HIT_MOURE])
+    result_without_enseignes = _result(moure_cands[0], "haute", "nom")
+    assert result_without_enseignes.enseigne == "LE MOURE ROUGE"
