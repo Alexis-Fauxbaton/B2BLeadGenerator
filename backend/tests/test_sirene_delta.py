@@ -2,6 +2,7 @@
 from datetime import date
 
 from app.ingestion.insee import build_query, fetch_new_etablissements
+from app.ingestion.sirene_delta import CHR_NAF_CODES, map_etablissement
 
 D1, D2 = date(2026, 6, 29), date(2026, 7, 5)
 NAFS = ["56.10A", "56.10C"]
@@ -67,3 +68,85 @@ def test_fetch_without_key_is_noop(monkeypatch):
     fake = _FakeInsee({})
     assert fetch_new_etablissements(D1, D2, NAFS, fetch=fake) == []
     assert fake.calls == []
+
+
+TODAY = date(2026, 7, 6)
+
+# Etablissement diffusible, societe, cree (forme reelle API 3.11).
+ETAB_OK = {
+    "siren": "105506737", "siret": "10550673700029",
+    "dateCreationEtablissement": "2026-07-01", "etablissementSiege": False,
+    "statutDiffusionEtablissement": "O",
+    "uniteLegale": {"denominationUniteLegale": "ACTIVE FOOD CONCEPT LE PUY",
+                    "categorieJuridiqueUniteLegale": "5710",
+                    "prenom1UniteLegale": None, "nomUniteLegale": None},
+    "adresseEtablissement": {"numeroVoieEtablissement": "13",
+                             "typeVoieEtablissement": "ROUTE",
+                             "libelleVoieEtablissement": "DE COUBON",
+                             "codePostalEtablissement": "43700",
+                             "libelleCommuneEtablissement": "BRIVES-CHARENSAC"},
+    "periodesEtablissement": [{"activitePrincipaleEtablissement": "56.10B",
+                               "etatAdministratifEtablissement": "A",
+                               "enseigne1Etablissement": None,
+                               "denominationUsuelleEtablissement": None}],
+}
+# Personne physique non-diffusible ([ND] partout, pas d'enseigne).
+ETAB_ND = {
+    "siren": "100731280", "siret": "10073128000010",
+    "dateCreationEtablissement": "2026-07-01", "etablissementSiege": True,
+    "statutDiffusionEtablissement": "P",
+    "uniteLegale": {"denominationUniteLegale": "[ND]", "nomUniteLegale": "[ND]",
+                    "prenom1UniteLegale": "[ND]",
+                    "categorieJuridiqueUniteLegale": "1000"},
+    "adresseEtablissement": {"codePostalEtablissement": "75011",
+                             "libelleCommuneEtablissement": "PARIS"},
+    "periodesEtablissement": [{"activitePrincipaleEtablissement": "56.10C",
+                               "etatAdministratifEtablissement": "A",
+                               "enseigne1Etablissement": None}],
+}
+
+
+def test_map_etablissement_nominal():
+    cand = map_etablissement(ETAB_OK, TODAY)
+    assert cand is not None
+    assert cand.source == "sirene" and cand.source_ref == "10550673700029"
+    assert cand.siren == "105506737" and cand.naf == "56.10B"
+    assert cand.establishment_name == "ACTIVE FOOD CONCEPT LE PUY"
+    assert cand.city == "Brives-Charensac"
+    assert cand.address == "13 ROUTE DE COUBON, 43700 Brives-Charensac"
+    assert cand.main_signal == "ouverture prochaine"
+    assert cand.activity_start_date == date(2026, 7, 1)
+    # Etablissement secondaire d'une societe = extension multi-sites.
+    assert "extension multi-sites" in cand.secondary_signals
+
+
+def test_map_enseigne_prime_sur_denomination():
+    etab = {**ETAB_OK, "periodesEtablissement": [{
+        **ETAB_OK["periodesEtablissement"][0], "enseigne1Etablissement": "CHEZ LUCIE"}]}
+    cand = map_etablissement(etab, TODAY)
+    assert cand.establishment_name == "CHEZ LUCIE"
+
+
+def test_map_nd_sans_enseigne_est_ecarte():
+    assert map_etablissement(ETAB_ND, TODAY) is None
+
+
+def test_map_nd_avec_enseigne_est_garde():
+    etab = {**ETAB_ND, "periodesEtablissement": [{
+        **ETAB_ND["periodesEtablissement"][0], "enseigne1Etablissement": "SNACK 11E"}]}
+    cand = map_etablissement(etab, TODAY)
+    assert cand is not None and cand.establishment_name == "SNACK 11E"
+
+
+def test_map_creation_future_marquee_pre_declaree():
+    etab = {**ETAB_OK, "dateCreationEtablissement": "2026-09-15"}
+    cand = map_etablissement(etab, TODAY)
+    # La date declaree AU FUTUR = ouverture annoncee au registre (signal fort).
+    assert "2026-09-15" in (cand.proof_text or "")
+    assert "pré-déclarée" in (cand.proof_text or "")
+
+
+def test_map_etat_ferme_est_ecarte():
+    etab = {**ETAB_OK, "periodesEtablissement": [{
+        **ETAB_OK["periodesEtablissement"][0], "etatAdministratifEtablissement": "F"}]}
+    assert map_etablissement(etab, TODAY) is None
