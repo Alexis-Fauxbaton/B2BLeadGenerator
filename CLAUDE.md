@@ -44,6 +44,10 @@ Modes CLI : `python -m app.ingestion.run --mode {window|incremental|reenrich|bac
 - `incremental` = nouveaux depuis le curseur ; `reenrich` = guérit `naf IS NULL`
   via SIREN stocké (Sirene-only, supprime les faux positifs confirmés) ;
   `backfill` = filet large ; détection de troncature via `total_count`.
+- Bootstrap source `sirene` : premier run en `--mode window --source sirene --since 30 --limit 5000`
+  avant de passer en `incremental` ; un `backfill` hebdomadaire est recommandé
+  (le délai de traitement INSEE peut dater des enregistrements en retard,
+  au-delà du chevauchement de l'incrémental).
 
 ## Conventions
 - **SQLModel** : modèles dans `models.py`. Champs liste (`secondary_signals`,

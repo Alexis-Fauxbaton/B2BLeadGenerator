@@ -20,6 +20,9 @@ from .insee import fetch_new_etablissements
 CHR_NAF_CODES = ["56.10A", "56.10B", "56.10C", "56.21Z", "56.30Z", "55.10Z", "55.20Z"]
 # Horizon des creations pre-declarees (date future au registre).
 FUTURE_HORIZON_DAYS = 120
+# Prefixes de departement Ile-de-France — defaut geographique aligne sur BODACC
+# (region_code=11) quand `departments` n'est pas precise.
+IDF_CP_PREFIXES = ["75", "77", "78", "91", "92", "93", "94", "95"]
 
 
 def _nd(value: Optional[str]) -> Optional[str]:
@@ -80,7 +83,6 @@ def map_etablissement(etab: Dict[str, Any], today: date) -> Optional[LeadCandida
     address, city = _address(etab)
 
     secondary: List[str] = []
-    ul = etab.get("uniteLegale") or {}
     if etab.get("etablissementSiege") is False:
         # Nouvel etablissement d'une societe existante = expansion multi-sites
         # (invisible dans BODACC — un des apports du delta).
@@ -123,7 +125,12 @@ def _ymd(value: Optional[str]) -> Optional[date]:
 
 
 class SireneDeltaConnector(Connector):
-    """Delta des nouveaux SIRET CHR (INSEE). `departments` = prefixes de CP.
+    """Delta des nouveaux SIRET CHR (INSEE). `departments` = prefixes de CP :
+    - None (defaut) -> Ile-de-France (`IDF_CP_PREFIXES`), aligne sur le defaut
+      BODACC (region_code=11) — meme perimetre geographique par defaut ;
+    - `["france"]` (valeur speciale) -> France entiere (aucun filtre CP,
+      `cp_prefixes=None` cote requete) ;
+    - toute autre liste -> prefixes explicites, tels quels.
     La fenetre remonte de `since_days` ET s'etend a +FUTURE_HORIZON_DAYS
     (creations pre-declarees). `since_date` (curseur incremental) prime sur
     since_days quand fourni."""
@@ -138,11 +145,20 @@ class SireneDeltaConnector(Connector):
         today = date.today()
         date_from = since_date or (today - timedelta(days=since_days or 7))
         date_to = today + timedelta(days=FUTURE_HORIZON_DAYS)
+        if departments is None:
+            cp_prefixes: Optional[List[str]] = IDF_CP_PREFIXES
+        elif departments == ["france"]:
+            cp_prefixes = None
+        else:
+            cp_prefixes = departments
+        meta: Dict[str, Any] = {}
         records = fetch_new_etablissements(
             date_from, date_to, CHR_NAF_CODES,
-            cp_prefixes=departments, limit=limit,
+            cp_prefixes=cp_prefixes, limit=limit, meta=meta,
         )
-        self.last_total_count = len(records)
+        # header.total (INSEE) fait autorite pour la troncature ; repli sur
+        # len(records) si absent (fake de test sans support `meta`, etc.).
+        self.last_total_count = meta.get("total") or len(records)
         return records
 
     def to_candidates(self, records: List[Dict[str, Any]]) -> List[LeadCandidate]:

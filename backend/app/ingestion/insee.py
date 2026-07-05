@@ -60,8 +60,11 @@ def fetch_new_etablissements(
     cp_prefixes: Optional[Sequence[str]] = None,
     limit: int = 3000,
     fetch: Optional[InseeFetch] = None,
+    meta: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Tous les etablissements crees dans la fenetre (pagination curseur)."""
+    """Tous les etablissements crees dans la fenetre (pagination curseur).
+    `meta`, si fourni, recoit `total` (header.total de la 1re page reussie) —
+    sert a detecter une fenetre tronquee (plus d'annonces que `limit`)."""
     key = os.getenv("INSEE_API_KEY")
     if not key:
         return []
@@ -70,13 +73,20 @@ def fetch_new_etablissements(
     q = build_query(date_from, date_to, naf_codes, cp_prefixes)
     out: List[Dict[str, Any]] = []
     curseur = "*"
+    first_page = True
     while len(out) < limit:
         nombre = min(_PAGE_SIZE, limit - len(out))
         data = fetch(SIRET_URL, {"q": q, "nombre": nombre, "curseur": curseur}, headers)
         header = data.get("header") or {}
         if header.get("statut") != 200:
             break  # fail-soft : on garde ce qu'on a
-        out.extend(data.get("etablissements") or [])
+        if first_page and meta is not None:
+            meta["total"] = header.get("total")
+            first_page = False
+        etablissements = data.get("etablissements") or []
+        if not etablissements:
+            break  # page vide : plus rien a recuperer (garde-fou boucle infinie)
+        out.extend(etablissements)
         suivant = header.get("curseurSuivant")
         if not suivant or suivant == curseur:
             break

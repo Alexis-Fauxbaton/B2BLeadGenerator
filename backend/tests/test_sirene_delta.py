@@ -158,7 +158,10 @@ def test_connector_fetch_window_and_future(monkeypatch):
     import app.ingestion.sirene_delta as sd
     captured = {}
 
-    def fake_fetch(date_from, date_to, naf_codes, cp_prefixes=None, limit=3000, fetch=None):
+    # Fake "ancien style" qui accepte `meta` mais ne le remplit jamais (bypass) :
+    # le connecteur doit alors se rabattre sur len(records) pour last_total_count.
+    def fake_fetch(date_from, date_to, naf_codes, cp_prefixes=None, limit=3000,
+                   fetch=None, meta=None):
         captured.update(date_from=date_from, date_to=date_to,
                         naf_codes=list(naf_codes), cp=cp_prefixes, limit=limit)
         return [dict(ETAB_OK)]
@@ -295,3 +298,277 @@ def test_pas_de_fusion_sans_siren(tmp_path):
         _process_candidate(s, b, st, set(), None)
         s.commit()
         assert len(s.exec(select(Opportunity)).all()) == 2
+
+
+# --- Revue finale B2 : fixes 1, 2, 3, 4, 6, 7, 8, 9 --------------------------
+
+
+def test_reprocessed_sirene_candidate_no_duplicate_signal(tmp_path):
+    """[Fix 1] Rejouer le meme candidat sirene (delta quotidien) sur une fiche
+    deja fusionnee ne doit PAS ajouter un second Signal ni re-incrementer
+    stats.updated : la fusion a deja eu lieu, il n'y a rien a refaire."""
+    from sqlmodel import SQLModel, Session, create_engine, select
+    from app.models import Opportunity, Signal
+    from app.ingestion.base import LeadCandidate
+    from app.ingestion.pipeline import _process_candidate, IngestStats
+    from datetime import date as _d
+
+    engine = create_engine(f"sqlite:///{tmp_path/'t.db'}")
+    SQLModel.metadata.create_all(engine)
+    insta = LeadCandidate(
+        source="instagram", source_ref="tregusto_sartrouville",
+        establishment_name="Tre Gusto", city="Sartrouville",
+        main_signal="ouverture prochaine", detection_date=_d(2026, 7, 5),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="989119201", instagram="tregusto_sartrouville",
+    )
+    sirene = LeadCandidate(
+        source="sirene", source_ref="98911920100011",
+        establishment_name="OCOIN", city="Sartrouville",
+        main_signal="ouverture prochaine", detection_date=_d(2026, 7, 6),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="989119201", siret="98911920100011",
+        address="143 AVENUE GENERAL DE GAULLE, 78500 Sartrouville",
+    )
+    stats = IngestStats(source="test")
+    with Session(engine) as s:
+        _process_candidate(s, insta, stats, set(), None)
+        _process_candidate(s, sirene, stats, set(), None)
+        # Re-fetch quotidien du delta INSEE : le meme candidat sirene revient.
+        sirene_again = LeadCandidate(
+            source="sirene", source_ref="98911920100011",
+            establishment_name="OCOIN", city="Sartrouville",
+            main_signal="ouverture prochaine", detection_date=_d(2026, 7, 7),
+            classification_text="restaurant", establishment_type="restaurant",
+            siren="989119201", siret="98911920100011",
+            address="143 AVENUE GENERAL DE GAULLE, 78500 Sartrouville",
+        )
+        _process_candidate(s, sirene_again, stats, set(), None)
+        s.commit()
+        assert len(s.exec(select(Opportunity)).all()) == 1
+        signals = s.exec(select(Signal)).all()
+        assert len(signals) == 2  # toujours 1 par provenance, pas de 3e au rejeu
+        assert stats.created == 1 and stats.updated == 1  # pas re-incremente
+
+
+def test_fusion_bodacc_sirene_pas_de_tag_instagram_dm_rempli(tmp_path):
+    """[Fix 2] Fusion BODACC x Sirene (deux registres, aucun Instagram) :
+    PAS de tag 'corrobore registre x instagram' (semantiquement faux et
+    score-bearing) ; mais decision_maker/dirigeants sont repris du candidat
+    entrant (BODACC apporte une valeur que Sirene n'a pas)."""
+    from sqlmodel import SQLModel, Session, create_engine, select
+    from app.models import Opportunity
+    from app.ingestion.base import LeadCandidate
+    from app.ingestion.pipeline import _process_candidate, IngestStats, CORROBORATION_TAG
+    from datetime import date as _d
+
+    engine = create_engine(f"sqlite:///{tmp_path/'t.db'}")
+    SQLModel.metadata.create_all(engine)
+    sirene = LeadCandidate(
+        source="sirene", source_ref="98911920100011",
+        establishment_name="OCOIN", city="Sartrouville",
+        main_signal="ouverture prochaine", detection_date=_d(2026, 7, 6),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="989119201", siret="98911920100011",
+    )
+    bodacc = LeadCandidate(
+        source="bodacc", source_ref="bodacc-1",
+        establishment_name="OCOIN", city="Sartrouville",
+        main_signal="création récente", detection_date=_d(2026, 7, 7),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="989119201", decision_maker="Samuel Afif, Président",
+        dirigeants=["Samuel Afif, Président"],
+    )
+    stats = IngestStats(source="test")
+    with Session(engine) as s:
+        _process_candidate(s, sirene, stats, set(), None)
+        _process_candidate(s, bodacc, stats, set(), None)
+        s.commit()
+        opps = s.exec(select(Opportunity)).all()
+        assert len(opps) == 1
+        opp = opps[0]
+        assert CORROBORATION_TAG not in (opp.secondary_signals or [])
+        assert opp.decision_maker == "Samuel Afif, Président"
+        assert opp.dirigeants == ["Samuel Afif, Président"]
+
+
+def test_same_source_reupsert_conserve_le_tag_corroboration(tmp_path):
+    """[Fix 3] Un upsert meme-source (ex: Instagram revoit son propre profil)
+    sur une fiche deja corroboree ne doit pas effacer le tag posé par la
+    fusion precedente."""
+    from sqlmodel import SQLModel, Session, create_engine, select
+    from app.models import Opportunity
+    from app.ingestion.base import LeadCandidate
+    from app.ingestion.pipeline import _process_candidate, IngestStats, CORROBORATION_TAG
+    from datetime import date as _d
+
+    engine = create_engine(f"sqlite:///{tmp_path/'t.db'}")
+    SQLModel.metadata.create_all(engine)
+    insta = LeadCandidate(
+        source="instagram", source_ref="tregusto_sartrouville",
+        establishment_name="Tre Gusto", city="Sartrouville",
+        main_signal="ouverture prochaine", detection_date=_d(2026, 7, 5),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="989119201", instagram="tregusto_sartrouville",
+    )
+    sirene = LeadCandidate(
+        source="sirene", source_ref="98911920100011",
+        establishment_name="OCOIN", city="Sartrouville",
+        main_signal="ouverture prochaine", detection_date=_d(2026, 7, 6),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="989119201", siret="98911920100011",
+    )
+    stats = IngestStats(source="test")
+    with Session(engine) as s:
+        _process_candidate(s, insta, stats, set(), None)
+        _process_candidate(s, sirene, stats, set(), None)
+        # Upsert meme-source (instagram) de la fiche d'origine : ne connait
+        # pas le tag pose par la fusion et ne doit pas l'effacer.
+        insta_again = LeadCandidate(
+            source="instagram", source_ref="tregusto_sartrouville",
+            establishment_name="Tre Gusto", city="Sartrouville",
+            main_signal="ouverture prochaine", detection_date=_d(2026, 7, 8),
+            classification_text="restaurant", establishment_type="restaurant",
+            siren="989119201", instagram="tregusto_sartrouville",
+        )
+        _process_candidate(s, insta_again, stats, set(), None)
+        s.commit()
+        opp = s.exec(select(Opportunity)).first()
+        assert CORROBORATION_TAG in (opp.secondary_signals or [])
+
+
+def test_fetch_new_etablissements_meta_recupere_le_total(monkeypatch):
+    """[Fix 4] `meta` recoit header.total de la 1re page reussie."""
+    monkeypatch.setenv("INSEE_API_KEY", "test-key")
+    fake = _FakeInsee({
+        "*": _page([{"siret": "1"}, {"siret": "2"}], "*", "CUR2", 42),
+        "CUR2": _page([{"siret": "3"}], "CUR2", "CUR2", 42),
+    })
+    meta: dict = {}
+    got = fetch_new_etablissements(D1, D2, NAFS, fetch=fake, meta=meta)
+    assert len(got) == 3
+    assert meta["total"] == 42
+
+
+def test_fetch_new_etablissements_page_vide_arrete_la_boucle(monkeypatch):
+    """[Fix 9] Garde-fou anti-boucle infinie : une page 200 avec
+    etablissements=[] arrete la pagination, meme si curseurSuivant continue
+    d'avancer (ne doit jamais atteindre la page suivante)."""
+    monkeypatch.setenv("INSEE_API_KEY", "test-key")
+    fake = _FakeInsee({
+        "*": _page([], "*", "CUR2", 0),
+        "CUR2": _page([{"siret": "x"}], "CUR2", "CUR2", 1),
+    })
+    got = fetch_new_etablissements(D1, D2, NAFS, fetch=fake)
+    assert got == []
+    assert len(fake.calls) == 1
+
+
+class _RecordingEnricher:
+    """Enrichisseur factice qui journalise les appels (et peut lever pour
+    prouver qu'il n'est jamais invoque pour la source a exclure)."""
+    def __init__(self, forbid: bool = False):
+        self.calls = []
+        self.forbid = forbid
+
+    def enrich(self, cand):
+        self.calls.append(cand.source)
+        if self.forbid:
+            raise AssertionError("enricher.enrich() ne doit pas etre appele pour source=sirene")
+        return cand
+
+    def lookup(self, siren):
+        return None
+
+
+def test_sirene_candidate_saute_lenrichisseur(tmp_path):
+    """[Fix 6] L'enrichissement Sirene est saute pour source='sirene' (donnees
+    INSEE deja autoritatives) mais reste applique pour les autres sources."""
+    from sqlmodel import SQLModel, Session, create_engine
+    from app.ingestion.base import LeadCandidate
+    from app.ingestion.pipeline import _process_candidate, IngestStats
+    from datetime import date as _d
+
+    engine = create_engine(f"sqlite:///{tmp_path/'t.db'}")
+    SQLModel.metadata.create_all(engine)
+
+    forbidding_enricher = _RecordingEnricher(forbid=True)
+    sirene = LeadCandidate(
+        source="sirene", source_ref="10550673700029",
+        establishment_name="ACTIVE FOOD CONCEPT", city="Brives-Charensac",
+        main_signal="ouverture prochaine", detection_date=_d(2026, 7, 6),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="105506737", naf="56.10B", siret="10550673700029",
+    )
+    with Session(engine) as s:
+        _process_candidate(s, sirene, IngestStats(source="sirene"), set(), forbidding_enricher)
+        s.commit()
+    assert forbidding_enricher.calls == []  # jamais appele pour sirene
+
+    recording_enricher = _RecordingEnricher(forbid=False)
+    bodacc = LeadCandidate(
+        source="bodacc", source_ref="bodacc-x",
+        establishment_name="Chez Test", city="Paris",
+        main_signal="création récente", detection_date=_d(2026, 7, 6),
+        classification_text="restaurant", establishment_type="restaurant",
+    )
+    with Session(engine) as s:
+        _process_candidate(s, bodacc, IngestStats(source="bodacc"), set(), recording_enricher)
+        s.commit()
+    assert recording_enricher.calls == ["bodacc"]  # applique pour les autres sources
+
+
+def test_siret_mismatch_meme_siren_pas_de_fusion(tmp_path):
+    """[Fix 7] Meme SIREN mais SIRET differents des deux cotes = deux
+    etablissements distincts de la meme entreprise (chaine multi-sites),
+    PAS une fusion (sinon on perdrait un vrai lead d'un site different)."""
+    from sqlmodel import SQLModel, Session, create_engine, select
+    from app.models import Opportunity
+    from app.ingestion.base import LeadCandidate
+    from app.ingestion.pipeline import _process_candidate, IngestStats
+    from datetime import date as _d
+
+    engine = create_engine(f"sqlite:///{tmp_path/'t.db'}")
+    SQLModel.metadata.create_all(engine)
+    a = LeadCandidate(
+        source="bodacc", source_ref="bodacc-a",
+        establishment_name="Chaine A - Site 1", city="Paris",
+        main_signal="création récente", detection_date=_d(2026, 7, 6),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="111222333", siret="11122233300010",
+    )
+    b = LeadCandidate(
+        source="sirene", source_ref="11122233300028",
+        establishment_name="Chaine A - Site 2", city="Lyon",
+        main_signal="ouverture prochaine", detection_date=_d(2026, 7, 6),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="111222333", siret="11122233300028",
+    )
+    stats = IngestStats(source="test")
+    with Session(engine) as s:
+        _process_candidate(s, a, stats, set(), None)
+        _process_candidate(s, b, stats, set(), None)
+        s.commit()
+        assert len(s.exec(select(Opportunity)).all()) == 2  # deux sites, pas de fusion
+        assert stats.created == 2
+
+
+def test_connector_default_departments_idf_et_france(monkeypatch):
+    """[Fix 8] `departments=None` -> defaut IdF (aligne sur BODACC) ;
+    `["france"]` (valeur speciale) -> cp_prefixes=None (France entiere)."""
+    import app.ingestion.sirene_delta as sd
+    captured = {}
+
+    def fake_fetch(date_from, date_to, naf_codes, cp_prefixes=None, limit=3000,
+                    fetch=None, meta=None):
+        captured["cp"] = cp_prefixes
+        return []
+
+    monkeypatch.setattr(sd, "fetch_new_etablissements", fake_fetch)
+    conn = sd.SireneDeltaConnector()
+
+    conn.fetch(since_days=7, limit=100)
+    assert captured["cp"] == sd.IDF_CP_PREFIXES
+
+    conn.fetch(since_days=7, limit=100, departments=["france"])
+    assert captured["cp"] is None

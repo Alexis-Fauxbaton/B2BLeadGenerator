@@ -331,10 +331,15 @@ def _reset_source(session: Session, source: str) -> None:
 
 CORROBORATION_TAG = "corroboré registre × instagram"
 
+# Libellé Signal par source — réutilisé par la fusion cross-source et par le
+# garde-fou anti-duplication (Signal déjà posé pour cette provenance).
+SOURCE_LABELS = {"bodacc": "BODACC", "instagram": "Instagram", "sirene": "Sirene (délta)"}
+
 
 def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate) -> None:
     """Fusionne un candidat cross-source dans la fiche existante (ne remplit
-    que les trous, n'ecrase rien), tague la corroboration et rescore."""
+    que les trous, n'ecrase rien), tague la corroboration (si Instagram est
+    impliqué) et rescore."""
     opp.siret = opp.siret or cand.siret
     opp.address = opp.address or cand.address
     opp.email = opp.email or cand.email
@@ -342,8 +347,18 @@ def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate
     opp.instagram = opp.instagram or cand.instagram
     opp.naf = opp.naf or cand.naf
     opp.activity_start_date = opp.activity_start_date or cand.activity_start_date
+    # BODACC/Sirene apportent chacun une valeur propre (dirigeants, preuve) :
+    # on la garde même quand la fusion n'est pas de nature "corroboré instagram".
+    opp.decision_maker = opp.decision_maker or cand.decision_maker
+    opp.dirigeants = opp.dirigeants or cand.dirigeants
+    opp.proof_text = opp.proof_text or cand.proof_text
+    opp.proof_url = opp.proof_url or cand.proof_url
     sigs = list(opp.secondary_signals or [])
-    if CORROBORATION_TAG not in sigs:
+    # Le tag "corroboré registre × instagram" n'a de sens que si Instagram est
+    # l'une des deux sources ; une fusion BODACC×Sirene (deux registres) n'est
+    # pas une corroboration "registre × instagram" — et ce libellé est
+    # score-bearing (famille de signal inconnue = +1 en scoring).
+    if "instagram" in (opp.source, cand.source) and CORROBORATION_TAG not in sigs:
         sigs.append(CORROBORATION_TAG)
     opp.secondary_signals = sigs
     channel = recommend_channel(
@@ -372,7 +387,7 @@ def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate
     session.add(Signal(
         opportunity_id=opp.id,
         signal_type=cand.main_signal,
-        source={"bodacc": "BODACC", "instagram": "Instagram", "sirene": "Sirene (délta)"}.get(cand.source, cand.source),
+        source=SOURCE_LABELS.get(cand.source, cand.source),
         source_url=cand.proof_url,
         signal_date=cand.detection_date,
         confidence_score=0.9,
@@ -388,7 +403,11 @@ def _process_candidate(
     enricher: Optional[SireneEnricher] = None,
 ) -> None:
     # 1. Enrichissement Sirene (NAF, enseigne, adresse, état) si activé.
-    if enricher is not None:
+    # Source "sirene" exclue : données INSEE déjà autoritatives et fraîches
+    # (l'enrichisseur écraserait l'adresse d'un établissement secondaire par
+    # celle du siège — extension multi-sites) ; la passe `refresh` gère les
+    # fermetures pour cette source, sans le coût réseau (~0,5 s/candidat/run).
+    if enricher is not None and cand.source != "sirene":
         enricher.enrich(cand)
         # Reprise : dater l'origine réelle du local via le précédent exploitant
         # (2e lookup Sirene) -> un vieux local repris = lieu "établi".
@@ -467,12 +486,62 @@ def _process_candidate(
                 Opportunity.source != cand.source,
             )
         ).first()
+
+    if (
+        corroborated is not None
+        and corroborated.siret
+        and cand.siret
+        and corroborated.siret != cand.siret
+    ):
+        # Même SIREN mais SIRET différent : un autre établissement de la même
+        # entreprise (chaînes multi-sites), pas le même site -> pas de fusion,
+        # c'est un lead à part entière (retombe sur la création normale).
+        corroborated = None
+
     if corroborated is not None:
+        # Anti-duplication [revue finale] : si un Signal existe déjà pour
+        # cette fiche avec la même provenance (source) ET le même type de
+        # signal, la fusion a déjà eu lieu lors d'un run précédent (ex. delta
+        # Sirene quotidien qui revoit le même candidat) — ne rien refaire (pas
+        # de re-remplissage, pas de rescore, pas de nouveau Signal, pas de
+        # stats.updated) pour éviter d'empiler des Signal dupliqués.
+        label = SOURCE_LABELS.get(cand.source, cand.source)
+        already = session.exec(
+            select(Signal).where(
+                Signal.opportunity_id == corroborated.id,
+                Signal.source == label,
+                Signal.signal_type == cand.main_signal,
+            )
+        ).first()
+        if already is not None:
+            return
         _merge_corroboration(session, corroborated, cand)
         stats.updated += 1
         return
 
     if existing:
+        sigs = list(cand.secondary_signals or [])
+        if CORROBORATION_TAG in (existing.secondary_signals or []) and CORROBORATION_TAG not in sigs:
+            # Ne pas effacer le tag de corroboration posé par une fusion
+            # précédente : cet upsert même-source ne le sait pas, il faut le
+            # préserver explicitement (sinon écrasé par cand.secondary_signals).
+            sigs.append(CORROBORATION_TAG)
+        channel = recommend_channel(
+            establishment_type=etype,
+            main_signal=cand.main_signal,
+            secondary_signals=sigs,
+            decision_maker=cand.decision_maker,
+            has_social_presence=False,
+        )
+        score = compute_score(
+            main_signal=cand.main_signal,
+            secondary_signals=sigs,
+            detection_date=cand.detection_date,
+            probable_needs=needs,
+            decision_maker=cand.decision_maker,
+            recommended_channel=channel.channel,
+            segment=classify_segment(etype, cand.naf, cand.establishment_name),
+        )
         existing.establishment_name = cand.establishment_name
         existing.establishment_type = etype
         existing.address = cand.address
@@ -484,7 +553,7 @@ def _process_candidate(
         # Signaux & décideur : à rafraîchir aussi (sinon une amélioration du
         # parsing — origineFonds, administration — ne corrige jamais l'existant).
         existing.main_signal = cand.main_signal
-        existing.secondary_signals = cand.secondary_signals
+        existing.secondary_signals = sigs
         existing.decision_maker = cand.decision_maker
         existing.dirigeants = cand.dirigeants
         if cand.instagram:
