@@ -4,6 +4,8 @@ PoC/MVP en cours : SaaS B2B qui détecte, qualifie et suit des opportunités
 commerciales dans le CHR (cafés/hôtels/restaurants) pour des fournisseurs
 (fournisseur de démo : **LumaPro**, luminaires/mobilier/ambiance).
 
+**Architecture complète (overview + deep dive)** : `docs/ARCHITECTURE.md`.
+
 ## Stack
 - **Frontend** : Next.js 14 (App Router) + TypeScript + Tailwind — dossier `frontend/`
 - **Backend** : FastAPI + SQLModel + SQLite — dossier `backend/`
