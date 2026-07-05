@@ -317,3 +317,29 @@ def test_result_enseigne_prefers_enseignes_over_nom():
     moure_cands = _candidates([HIT_MOURE])
     result_without_enseignes = _result(moure_cands[0], "haute", "nom")
     assert result_without_enseignes.enseigne == "LE MOURE ROUGE"
+
+
+def test_pipeline_uses_matcher(monkeypatch):
+    """run_instagram doit appeler siret_matcher.match (plus backfill_siren)."""
+    import app.ingestion.pipeline as pl
+    from app.ingestion.enrichment.siret_matcher import MatchResult
+
+    calls = {}
+
+    def fake_match(name, city=None, postal=None, address=None, context=None, **kw):
+        calls["name"] = name
+        return MatchResult(siren="989119201", siret="98911920100011",
+                           naf="56.10C", enseigne="OCOIN",
+                           confidence="moyenne", method="arbitre")
+
+    monkeypatch.setattr(pl, "match_siret", fake_match)
+    got = pl._match_lead({"handle": "x", "name": "Tre Gusto", "city": "Sartrouville",
+                          "address": "143 Av. du Général de Gaule",
+                          "bio_snippet": "resto italien"})
+    assert calls["name"] == "Tre Gusto"
+    assert got == {"siren": "989119201", "naf": "56.10C", "enseigne": "OCOIN"}
+
+
+def test_match_lead_none_is_empty_dict():
+    import app.ingestion.pipeline as pl
+    assert pl._match_lead({"handle": "x", "name": "", "city": ""}) == {}
