@@ -225,3 +225,73 @@ def test_process_candidate_persists_tracabilite(tmp_path):
         s.commit()
         opp = s.exec(select(Opportunity)).first()
         assert opp.siret == "10550673700029"
+
+
+def test_fusion_par_siren_cross_source(tmp_path):
+    """Un lead sirene entrant dont le SIREN existe deja cote instagram
+    FUSIONNE (pas de doublon) : signal ajoute, corroboration, rescore."""
+    from sqlmodel import SQLModel, Session, create_engine, select
+    from app.models import Opportunity, Signal
+    from app.ingestion.base import LeadCandidate
+    from app.ingestion.pipeline import _process_candidate, IngestStats
+    from datetime import date as _d
+
+    engine = create_engine(f"sqlite:///{tmp_path/'t.db'}")
+    SQLModel.metadata.create_all(engine)
+    insta = LeadCandidate(
+        source="instagram", source_ref="tregusto_sartrouville",
+        establishment_name="Tre Gusto", city="Sartrouville",
+        main_signal="ouverture prochaine", detection_date=_d(2026, 7, 5),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="989119201", instagram="tregusto_sartrouville",
+    )
+    sirene = LeadCandidate(
+        source="sirene", source_ref="98911920100011",
+        establishment_name="OCOIN", city="Sartrouville",
+        main_signal="ouverture prochaine", detection_date=_d(2026, 7, 6),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="989119201", siret="98911920100011",
+        address="143 AVENUE GENERAL DE GAULLE, 78500 Sartrouville",
+    )
+    stats = IngestStats(source="test")
+    with Session(engine) as s:
+        _process_candidate(s, insta, stats, set(), None)
+        _process_candidate(s, sirene, stats, set(), None)
+        s.commit()
+        opps = s.exec(select(Opportunity)).all()
+        assert len(opps) == 1  # fusion, pas de doublon
+        opp = opps[0]
+        assert opp.source == "instagram"          # la fiche d'origine est conservee
+        assert opp.instagram == "tregusto_sartrouville"
+        assert opp.siret == "98911920100011"      # complete par le registre
+        assert opp.address                         # adresse registre posee
+        assert "corroboré registre × instagram" in (opp.secondary_signals or [])
+        signals = s.exec(select(Signal)).all()
+        assert len(signals) == 2                   # 1 par provenance
+        assert stats.created == 1 and stats.updated == 1
+
+
+def test_pas_de_fusion_sans_siren(tmp_path):
+    """Deux sources sans SIREN commun -> deux fiches (comportement inchange)."""
+    from sqlmodel import SQLModel, Session, create_engine, select
+    from app.models import Opportunity
+    from app.ingestion.base import LeadCandidate
+    from app.ingestion.pipeline import _process_candidate, IngestStats
+    from datetime import date as _d
+
+    engine = create_engine(f"sqlite:///{tmp_path/'t.db'}")
+    SQLModel.metadata.create_all(engine)
+    a = LeadCandidate(source="instagram", source_ref="h1", establishment_name="A",
+                      city="Paris", main_signal="ouverture prochaine",
+                      detection_date=_d(2026, 7, 6), classification_text="restaurant",
+                      establishment_type="restaurant")
+    b = LeadCandidate(source="sirene", source_ref="s1", establishment_name="B",
+                      city="Paris", main_signal="ouverture prochaine",
+                      detection_date=_d(2026, 7, 6), classification_text="restaurant",
+                      establishment_type="restaurant", siren="111222333")
+    with Session(engine) as s:
+        st = IngestStats(source="test")
+        _process_candidate(s, a, st, set(), None)
+        _process_candidate(s, b, st, set(), None)
+        s.commit()
+        assert len(s.exec(select(Opportunity)).all()) == 2

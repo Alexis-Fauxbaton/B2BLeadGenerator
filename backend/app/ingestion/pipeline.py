@@ -329,6 +329,57 @@ def _reset_source(session: Session, source: str) -> None:
         session.commit()
 
 
+CORROBORATION_TAG = "corroboré registre × instagram"
+
+
+def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate) -> None:
+    """Fusionne un candidat cross-source dans la fiche existante (ne remplit
+    que les trous, n'ecrase rien), tague la corroboration et rescore."""
+    opp.siret = opp.siret or cand.siret
+    opp.address = opp.address or cand.address
+    opp.email = opp.email or cand.email
+    opp.website = opp.website or cand.website
+    opp.instagram = opp.instagram or cand.instagram
+    opp.naf = opp.naf or cand.naf
+    opp.activity_start_date = opp.activity_start_date or cand.activity_start_date
+    sigs = list(opp.secondary_signals or [])
+    if CORROBORATION_TAG not in sigs:
+        sigs.append(CORROBORATION_TAG)
+    opp.secondary_signals = sigs
+    channel = recommend_channel(
+        establishment_type=opp.establishment_type,
+        main_signal=opp.main_signal,
+        secondary_signals=sigs,
+        decision_maker=opp.decision_maker,
+        has_social_presence=bool(opp.instagram),
+    )
+    score = compute_score(
+        main_signal=opp.main_signal,
+        secondary_signals=sigs,
+        detection_date=opp.detection_date,
+        probable_needs=opp.probable_needs,
+        decision_maker=opp.decision_maker,
+        recommended_channel=channel.channel,
+        segment=classify_segment(opp.establishment_type, opp.naf, opp.establishment_name),
+        review_count=opp.review_count,
+    )
+    opp.opportunity_score = score.score
+    opp.score_reason = score.reason
+    opp.recommended_channel = channel.channel
+    opp.channel_reason = channel.reason
+    opp.updated_at = datetime.utcnow()
+    session.add(opp)
+    session.add(Signal(
+        opportunity_id=opp.id,
+        signal_type=cand.main_signal,
+        source={"bodacc": "BODACC", "instagram": "Instagram", "sirene": "Sirene (délta)"}.get(cand.source, cand.source),
+        source_url=cand.proof_url,
+        signal_date=cand.detection_date,
+        confidence_score=0.9,
+        raw_text=cand.proof_text,
+    ))
+
+
 def _process_candidate(
     session: Session,
     cand: LeadCandidate,
@@ -403,6 +454,23 @@ def _process_candidate(
     ).first()
 
     now = datetime.utcnow()
+
+    # FUSION PAR SIREN [BRIQUE 2] : le meme etablissement vu par une AUTRE
+    # source ne cree pas de doublon — il CORROBORE (registre x instagram =
+    # quasi-certitude d'ouverture). La fiche d'origine est conservee, la
+    # provenance entrante est journalisee en Signal.
+    corroborated = None
+    if existing is None and cand.siren:
+        corroborated = session.exec(
+            select(Opportunity).where(
+                Opportunity.siren == cand.siren,
+                Opportunity.source != cand.source,
+            )
+        ).first()
+    if corroborated is not None:
+        _merge_corroboration(session, corroborated, cand)
+        stats.updated += 1
+        return
 
     if existing:
         existing.establishment_name = cand.establishment_name
