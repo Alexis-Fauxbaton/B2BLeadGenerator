@@ -25,17 +25,22 @@ cd frontend
 npm install
 npm run dev                                           # http://localhost:3000
 ```
-`.env` backend : `OPENAI_API_KEY=`, `DATABASE_URL=sqlite:///./chr_signal_radar.db`.
+`.env` backend : `OPENAI_API_KEY=`, `DATABASE_URL=sqlite:///./chr_signal_radar.db`,
+`INSEE_API_KEY=` (portail-api.insee.fr, gratuite — source `sirene`, fail-soft
+sans clé).
 `.env.local` frontend : `NEXT_PUBLIC_API_URL=http://localhost:8000`.
 
 ## Ingestion de leads réels (ETL) — `app/ingestion/`
-- **Extract** : `bodacc.py` (API BODACC opendatasoft, sans clé) → signal/date/SIREN.
+- **Extract** : `bodacc.py` (API BODACC opendatasoft, sans clé) → signal/date/SIREN ;
+  `sirene_delta.py` (API Sirene INSEE, clé `INSEE_API_KEY`) → délta des
+  nouveaux SIRET CHR (NAF 55/56), fenêtre passée + créations pré-déclarées
+  (date future au registre), fusion cross-source par SIREN avec BODACC.
 - **Transform** : `enrichment/sirene.py` (via `recherche-entreprises.api.gouv.fr`,
   sans clé) → NAF/enseigne/adresse/état ; `enrichment/naf_classifier.py` (NAF
   fait autorité pour le type CHR) ; `chr_classifier.py` (repli mots-clés).
 - **Load** : `pipeline.py` → scoring/canal + upsert SQLite (dédup sur `source_ref`).
 
-Modes CLI : `python -m app.ingestion.run --mode {window|incremental|reenrich|backfill}`.
+Modes CLI : `python -m app.ingestion.run --mode {window|incremental|reenrich|backfill} --source {bodacc|sirene}`.
 - `incremental` = nouveaux depuis le curseur ; `reenrich` = guérit `naf IS NULL`
   via SIREN stocké (Sirene-only, supprime les faux positifs confirmés) ;
   `backfill` = filet large ; détection de troncature via `total_count`.

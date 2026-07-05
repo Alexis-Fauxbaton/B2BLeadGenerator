@@ -1,6 +1,6 @@
 # Architecture — CHR Signal Radar
 
-Dernière mise à jour : 2026-07-06 (post-merge brique 1 « siret_matcher »).
+Dernière mise à jour : 2026-07-06 (post-merge brique 2 « délta-Sirene »).
 Ce document décrit le système en deux temps : une **vue d'ensemble** (ce que fait
 le produit et comment les morceaux s'emboîtent), puis un **deep dive** par
 sous-système. Les docs de design historiques (dans `docs/`) restent la référence
@@ -37,7 +37,7 @@ enrichis en contacts, avec canal d'approche recommandé et messages générés.
 ┌──────────────────────────┐   ┌─────────────────────────┐   ┌─────────────────────────────┐
 │ BODACC (annonces légales)│   │ SireneEnricher          │   │ Upsert SQLite               │
 │  créations/ventes/modifs │──►│  NAF, enseigne, adresse,│──►│  dédup (source, source_ref) │
-│                          │   │  état, lat/lon          │   │  + Signal + ContactHistory  │
+│ Sirene délta (INSEE)     │   │  état, lat/lon          │   │  + Signal + ContactHistory  │
 │ Instagram via Apify      │   │ naf_classifier /        │   └──────────────┬──────────────┘
 │  hashtags → posts bruts  │──►│  chr_classifier (type)  │                  │
 │  → profils               │   │ siret_matcher (SIREN)   │   ┌──────────────▼──────────────┐
@@ -141,6 +141,30 @@ temporelle ; pagination avec retry. Décisions clés de parsing :
 - extraction des `dirigeants` depuis le texte libre `administration`
   (hiérarchie Président > Gérant > DG > ...), qui alimente le bonus
   « décideur nommé » du score.
+
+### Connecteur delta-Sirene (`sirene_delta.py`) — brique 2 du pivot
+
+Rôle : recall ~100 % sur les ouvertures CHR (l'immatriculation au registre
+Sirene est obligatoire avant l'ouverture), y compris les établissements
+secondaires (extension multi-sites, invisibles dans BODACC). Utilise l'API
+Sirene INSEE (`api.insee.fr/api-sirene/3.11/siret`, clé `INSEE_API_KEY`),
+contrairement à `recherche-entreprises` (enrichissement) qui ne filtre pas par
+date de création.
+
+- **Fenêtre** : remonte de `since_days` (passé) ET s'étend à
+  `+FUTURE_HORIZON_DAYS` (120 j) pour capter les créations **pré-déclarées**
+  (date de création future au registre) ; `since_date` (curseur incremental)
+  prime sur `since_days` quand fourni.
+- **Filtre NAF** 55/56 (mêmes codes que `naf_classifier`, le NAF fait autorité).
+- **Mapping** (`map_etablissement`, fonction pure) : écarte les établissements
+  fermés, hors CHR, ou anonymes (`[ND]` sans enseigne/dénomination exploitable
+  — personne physique non-diffusible) ; le nom retenu suit la priorité
+  enseigne > dénomination usuelle > dénomination unité légale > prénom+nom ;
+  `proof_text` distingue création passée vs pré-déclarée.
+- **Fusion par SIREN** : le tronc commun (`_process_candidate`) dédup/upsert
+  sur `(source, source_ref)` mais corrobore aussi par SIREN les leads déjà
+  connus via BODACC (met à jour `siret`/`siren_match_method`/
+  `siren_match_confidence` sur l'Opportunity existante plutôt que dupliquer).
 
 ### Source Instagram (`instagram.py` + `run_instagram`)
 
@@ -323,7 +347,7 @@ segment de tête, qualité par corroboration registre × Instagram).
 | Brique | Contenu | État |
 |---|---|---|
 | 1. `siret_matcher` | matching Insta↔SIRET (nom → adresse → arbitre) + éval fixtures | **Fait** (mergé 2026-07-06) |
-| 2. Délta-Sirene | nouveaux SIRET NAF 55/56 par jour = recall ~100 % sur les ouvertures ; corroboration croisée | À faire (prochaine) |
+| 2. Délta-Sirene | nouveaux SIRET NAF 55/56 par jour = recall ~100 % sur les ouvertures ; corroboration croisée | **Fait** (2026-07-06) |
 | 3. Funnel v2 + cache verdicts | juge unique par compte sur dossier complet, labels de cycle de vie, `handle_verdicts` avec fenêtres de revisite (not_venue 12 mois, established 6, noise 2, opening = watchlist) | À faire |
 | 4. Watchlist + réconciliation | re-scrape hebdo des opening-soon, re-matching des leads sans SIREN | À faire |
 
@@ -337,7 +361,7 @@ vérité terrain sur des échecs réels.
 **Contrainte API découverte (2026-07-06)** : recherche-entreprises n'a **pas
 de filtre par date de création** (paramètre inconnu ignoré en silence) et
 plafonne à 10 000 résultats paginés → impossible d'y faire le délta. La brique
-2 passera par l'**API Sirene INSEE** (`api.insee.fr/api-sirene/3.11/siret`,
+2 passe par l'**API Sirene INSEE** (`api.insee.fr/api-sirene/3.11/siret`,
 requête `dateCreationEtablissement:...`), clé gratuite requise (portail
 portail-api.insee.fr), fail-soft sans clé.
 
