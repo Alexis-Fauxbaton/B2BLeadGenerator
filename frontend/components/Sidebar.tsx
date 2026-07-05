@@ -7,6 +7,7 @@ import {
   Target,
   KanbanSquare,
   Settings as SettingsIcon,
+  FlaskConical,
   Radar,
 } from "lucide-react";
 
@@ -14,6 +15,7 @@ const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/opportunities", label: "Opportunités", icon: Target },
   { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
+  { href: "/eval", label: "Éval Instagram", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 

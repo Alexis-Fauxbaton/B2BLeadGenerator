@@ -20,6 +20,7 @@ import argparse
 import csv
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -28,8 +29,20 @@ from .metrics import A_CONTACTER, summarize
 ROOT = Path(__file__).resolve().parent
 CSV_PATH = ROOT / "instagram_groundtruth.csv"
 SNAP_DIR = ROOT / "snapshots"
+RESULT_PATH = ROOT / "eval_result.json"  # cache du dernier résultat détaillé
 
 ECARTE = "ecarte"
+
+# Bucket cible par label vérité (cf. README). Sert à l'affichage : le statut
+# "véridique" attendu. La prédiction actuelle est binaire (a_contacter/ecarte).
+TRUE_BUCKET = {
+    "opening": "a_contacter",
+    "just_opened": "a_surveiller",
+    "established": "ecarte",
+    "chain_multisite": "ecarte",
+    "not_venue": "ecarte",
+    "noise": "a_reverifier",
+}
 
 
 def load_groundtruth() -> List[dict]:
@@ -118,6 +131,62 @@ def run_eval(strict: bool = False) -> dict:
         "predictions": predictions,
         "label_by_handle": label_by_handle,
     }
+
+
+def detailed_result(strict: bool = False) -> dict:
+    """Résultat détaillé par handle (pour l'API / l'inspection dans l'app) :
+    statut véridique (label + bucket cible) vs statut inféré (bucket prédit),
+    + confiance/provenance/justification + lien Instagram."""
+    res = run_eval(strict=strict)
+    r = res["report"]
+    preds = res["predictions"]
+    missing = set(res["missing_snapshots"])
+    rows: List[dict] = []
+    for row in load_groundtruth():
+        h = row["handle"].strip()
+        label = row["label"].strip()
+        pred = preds.get(h)  # 'a_contacter' | 'ecarte' | None (snapshot manquant/exclu)
+        rows.append({
+            "handle": h,
+            "name": row.get("name", "").strip(),
+            "true_label": label,
+            "true_bucket": TRUE_BUCKET.get(label, "?"),
+            "predicted_bucket": pred,
+            "confidence": row.get("confidence", "").strip(),
+            "provenance": row.get("provenance", "").strip(),
+            "rationale": row.get("rationale", "").strip(),
+            "ig_url": f"https://instagram.com/{h}",
+            "false_positive": pred == A_CONTACTER and label != "opening",
+            "missed_opening": label == "opening" and pred == ECARTE,
+            "has_snapshot": h not in missing,
+        })
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "precision_a_contacter": r.precision_a_contacter,
+        "recall_opening": r.recall_opening,
+        "n": r.n,
+        "n_a_contacter": r.n_a_contacter,
+        "tp_opening": r.tp_opening,
+        "n_opening": r.n_opening,
+        "confusion": r.confusion,
+        "rows": rows,
+    }
+
+
+def cached_result(refresh: bool = False) -> dict:
+    """Sert le dernier résultat détaillé depuis le cache fichier (évite de relancer
+    le LLM à chaque affichage). `refresh=True` recalcule et réécrit le cache."""
+    if not refresh and RESULT_PATH.exists():
+        try:
+            return json.loads(RESULT_PATH.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            pass
+    result = detailed_result()
+    try:
+        RESULT_PATH.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    return result
 
 
 def _fmt_pct(x: Optional[float]) -> str:

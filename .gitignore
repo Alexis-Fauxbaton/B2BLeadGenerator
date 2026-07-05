@@ -15,3 +15,6 @@ frontend/next-env.d.ts
 # Divers
 .playwright-mcp/
 *.log
+
+# Cache dérivé de l'éval (régénéré à la demande)
+backend/app/ingestion/eval/eval_result.json

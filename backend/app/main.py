@@ -169,3 +169,22 @@ def run_instagram_endpoint(limit: int = 40):
 
 
 app.include_router(dev_router)
+
+
+# --- Éval : inspection du jeu de vérité vs classification --------------------
+eval_router = APIRouter(prefix="/api/eval", tags=["eval"])
+
+
+@eval_router.get("/instagram")
+def eval_instagram(refresh: bool = False):
+    """Jeu de vérité Instagram : par handle, statut véridique vs statut inféré
+    (+ métriques). Sert un cache fichier ; `?refresh=true` recalcule (LLM)."""
+    from .ingestion.eval.run import cached_result
+
+    try:
+        return cached_result(refresh=refresh)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Éval échouée : {exc}")
+
+
+app.include_router(eval_router)
