@@ -235,7 +235,10 @@ def _match_lead(lead: dict) -> dict:
     )
     if got is None:
         return {}
-    return {"siren": got.siren, "naf": got.naf, "enseigne": got.enseigne}
+    return {
+        "siren": got.siren, "naf": got.naf, "enseigne": got.enseigne,
+        "siret": got.siret, "method": got.method, "confidence": got.confidence,
+    }
 
 
 def run_instagram(
@@ -290,6 +293,9 @@ def run_instagram(
                     instagram=lead["handle"],
                     siren=bf.get("siren"),
                     naf=bf.get("naf"),
+                    siret=bf.get("siret"),
+                    siren_match_method=bf.get("method"),
+                    siren_match_confidence=bf.get("confidence"),
                 )
                 _process_candidate(session, cand, stats, seen_refs, enricher)
             except Exception:
@@ -404,6 +410,9 @@ def _process_candidate(
         existing.address = cand.address
         existing.siren = cand.siren
         existing.naf = cand.naf
+        existing.siret = cand.siret or existing.siret
+        existing.siren_match_method = cand.siren_match_method or existing.siren_match_method
+        existing.siren_match_confidence = cand.siren_match_confidence or existing.siren_match_confidence
         # Signaux & décideur : à rafraîchir aussi (sinon une amélioration du
         # parsing — origineFonds, administration — ne corrige jamais l'existant).
         existing.main_signal = cand.main_signal
@@ -466,6 +475,9 @@ def _process_candidate(
         source_ref=cand.source_ref,
         siren=cand.siren,
         naf=cand.naf,
+        siret=cand.siret,
+        siren_match_method=cand.siren_match_method,
+        siren_match_confidence=cand.siren_match_confidence,
         instagram=cand.instagram,
         email=cand.email,
         website=cand.website,

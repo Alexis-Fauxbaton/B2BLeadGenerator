@@ -183,3 +183,45 @@ def test_connector_registered_in_pipeline():
     from app.ingestion.pipeline import get_connector
     conn = get_connector("sirene")
     assert conn.name == "sirene"
+
+
+def test_map_etablissement_poses_siret_et_methode_source():
+    """Le SIRET vient de la source elle-meme (pas d'un matching) ; methode 'source'."""
+    cand = map_etablissement(ETAB_OK, TODAY)
+    assert cand.siret == "10550673700029"
+    assert cand.siren_match_method == "source"
+
+
+def test_match_lead_exposes_tracabilite(monkeypatch):
+    import app.ingestion.pipeline as pl
+    from app.ingestion.enrichment.siret_matcher import MatchResult
+
+    monkeypatch.setattr(pl, "match_siret", lambda **kw: MatchResult(
+        siren="989119201", siret="98911920100011", naf="56.10C",
+        enseigne="OCOIN", confidence="moyenne", method="arbitre"))
+    got = pl._match_lead({"handle": "x", "name": "Tre Gusto", "city": "Sartrouville"})
+    assert got["siret"] == "98911920100011"
+    assert got["method"] == "arbitre" and got["confidence"] == "moyenne"
+
+
+def test_process_candidate_persists_tracabilite(tmp_path):
+    from sqlmodel import SQLModel, Session, create_engine, select
+    from app.models import Opportunity
+    from app.ingestion.base import LeadCandidate
+    from app.ingestion.pipeline import _process_candidate, IngestStats
+    from datetime import date as _d
+
+    engine = create_engine(f"sqlite:///{tmp_path/'t.db'}")
+    SQLModel.metadata.create_all(engine)
+    cand = LeadCandidate(
+        source="sirene", source_ref="10550673700029",
+        establishment_name="ACTIVE FOOD CONCEPT", city="Brives-Charensac",
+        main_signal="ouverture prochaine", detection_date=_d(2026, 7, 6),
+        classification_text="restaurant", establishment_type="restaurant",
+        siren="105506737", naf="56.10B", siret="10550673700029",
+    )
+    with Session(engine) as s:
+        _process_candidate(s, cand, IngestStats(source="sirene"), set(), None)
+        s.commit()
+        opp = s.exec(select(Opportunity)).first()
+        assert opp.siret == "10550673700029"

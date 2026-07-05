@@ -106,6 +106,8 @@ def map_etablissement(etab: Dict[str, Any], today: date) -> Optional[LeadCandida
         classification_text=name,
         siren=etab.get("siren"),
         naf=naf,
+        siret=etab.get("siret"),
+        siren_match_method="source",
         proof_text=proof,
         raw=etab,
     )
