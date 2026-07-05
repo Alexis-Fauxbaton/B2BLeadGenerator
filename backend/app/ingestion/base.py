@@ -48,6 +48,9 @@ class LeadCandidate:
     # Identifiants / enrichissement
     siren: Optional[str] = None
     naf: Optional[str] = None
+    siret: Optional[str] = None
+    siren_match_method: Optional[str] = None      # nom | adresse | arbitre | source
+    siren_match_confidence: Optional[str] = None  # haute | moyenne
     activity_start_date: Optional[date] = None  # BODACC dateCommencementActivite
     previous_siren: Optional[str] = None  # précédent exploitant (reprise)
     venue_origin_date: Optional[date] = None  # date de création du précédent -> âge du local

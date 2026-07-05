@@ -350,7 +350,8 @@ def test_pipeline_uses_matcher(monkeypatch):
                           "bio_snippet": "resto italien"})
     assert calls["name"] == "Tre Gusto"
     assert calls["postal"] is None
-    assert got == {"siren": "989119201", "naf": "56.10C", "enseigne": "OCOIN"}
+    assert got == {"siren": "989119201", "naf": "56.10C", "enseigne": "OCOIN",
+                   "siret": "98911920100011", "method": "arbitre", "confidence": "moyenne"}
 
 
 def test_match_lead_extracts_postal_from_address(monkeypatch):

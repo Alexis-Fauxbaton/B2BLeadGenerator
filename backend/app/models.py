@@ -91,6 +91,10 @@ class Opportunity(SQLModel, table=True):
     # Code NAF/APE (rempli par l'enrichissement). NULL = lead non encore
     # validé par Sirene -> cible de la passe de ré-enrichissement.
     naf: Optional[str] = Field(default=None, index=True)
+    # SIRET matché (établissement précis) — traçabilité pour la fusion/corroboration.
+    siret: Optional[str] = None
+    siren_match_method: Optional[str] = None      # nom | adresse | arbitre | source
+    siren_match_confidence: Optional[str] = None  # haute | moyenne
 
     # Contact (enrichissement gratuit : OSM + scrape de site).
     phone: Optional[str] = None
