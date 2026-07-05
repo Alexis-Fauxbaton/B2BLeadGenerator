@@ -219,6 +219,17 @@ class _FakeClient:
         self.chat = type("Chat", (), {"completions": _Completions()})()
 
 
+def test_age_label_precomputes_relative_ages():
+    from datetime import date as _d
+    from app.ingestion.enrichment.siret_matcher import _age_label
+    today = _d(2026, 7, 5)
+    assert _age_label("2025-07-04", today) == "il y a 12 mois"
+    assert _age_label("2023-03-24", today) == "il y a 3 ans"
+    assert _age_label("2026-06-01", today) == "il y a 1 mois"
+    assert _age_label("2026-07-20", today) == "ce mois-ci"
+    assert _age_label(None, today) == "?"
+
+
 def test_arbitrate_returns_chosen_siren():
     cands = _candidates([HIT_SARFOOD, HIT_OCOIN])
     client = _FakeClient('{"match_index": 1}')

@@ -14,6 +14,7 @@ import re
 import time
 import unicodedata
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
@@ -107,8 +108,29 @@ def _candidates(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "adresse": etab.get("adresse") or "",
             "cp": etab.get("code_postal") or "",
             "date_creation": etab.get("date_creation") or res.get("date_creation"),
+            "date_debut_activite": etab.get("date_debut_activite"),
         })
     return out
+
+
+def _age_label(date_str: Optional[str], today: Optional[date] = None) -> str:
+    """'2025-07-04' -> 'il y a 12 mois' (arithmétique faite en CODE : les
+    petits LLM ratent les comparaisons de dates brutes — vécu rounds 1-3)."""
+    if not date_str:
+        return "?"
+    try:
+        d = date.fromisoformat(str(date_str)[:10])
+    except ValueError:
+        return "?"
+    today = today or date.today()
+    months = (today.year - d.year) * 12 + (today.month - d.month)
+    if months < 0:
+        return "dans le futur"
+    if months == 0:
+        return "ce mois-ci"
+    if months < 24:
+        return f"il y a {months} mois"
+    return f"il y a {months // 12} ans"
 
 
 def search_by_name(name: str, city: Optional[str], postal: Optional[str],
@@ -201,9 +223,15 @@ _ARBITER_SYSTEM = (
     "candidats du registre (nom légal, enseignes, NAF, adresse, date de "
     "création). Le nom légal peut être SANS RAPPORT avec le nom commercial "
     "(holding, patronyme) : juge sur le faisceau adresse/NAF/récence/enseigne. "
+    "Si plusieurs candidats occupent la MÊME adresse (succession d'exploitants), "
+    "privilégie celui dont la date de création est cohérente avec les signaux "
+    "du compte (compte annonçant une ouverture récente/à venir -> candidat le "
+    "plus récent). "
     "Si le compte n'est manifestement PAS un établissement CHR français "
     "(marque, hors France, média), ou si aucun candidat ne colle : null. "
-    'Réponds STRICTEMENT en JSON : {"match_index": <int|null>}.'
+    "Raisonne d'abord brièvement (cohérence géo, temporelle, enseigne) puis "
+    'décide. Réponds STRICTEMENT en JSON : {"reasoning": "<2 phrases max>", '
+    '"match_index": <int|null>}.'
 )
 
 
@@ -226,12 +254,15 @@ def arbitrate(name: str, context: Optional[str],
         return None
     listing = "\n".join(
         f'{i}. {c["nom"]} | enseignes: {c["enseignes"] or "-"} | NAF {c["naf"]} '
-        f'| {c["adresse"]} | créé {c["date_creation"]}'
+        f'| {c["adresse"]} | société créée {_age_label(c["date_creation"])}'
+        + (f' | activité démarrée {_age_label(c.get("date_debut_activite"))}'
+           if c.get("date_debut_activite") else "")
         for i, c in enumerate(cands)
     )
-    user = (f"Compte Insta : {name}\nBio/contexte : {(context or '')[:300]}\n\n"
+    user = (f"Date du jour : {date.today().isoformat()}\n"
+            f"Compte Insta : {name}\nBio/contexte : {(context or '')[:300]}\n\n"
             f"Candidats registre :\n{listing}\n\n"
-            f'Format EXACT : {{"match_index": <int|null>}}')
+            f'Format EXACT : {{"reasoning": "...", "match_index": <int|null>}}')
     try:
         completion = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),

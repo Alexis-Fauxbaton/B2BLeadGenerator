@@ -1,0 +1,9 @@
+{
+ "https://recherche-entreprises.api.gouv.fr/search?{\"per_page\": 5, \"q\": \"Chez Gratien Hôtel Bistro & Spa\"}": {
+  "results": [],
+  "total_results": 0,
+  "page": 1,
+  "per_page": 5,
+  "total_pages": 0
+ }
+}
