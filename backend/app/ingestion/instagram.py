@@ -376,6 +376,8 @@ def profile_enrich(
         website = _external_url(prof)
         if website:
             c["website"] = website
+        # Contexte pour l'arbitre du matching SIREN (pipeline).
+        c["bio_snippet"] = (prof.get("biography") or "")[:300]
         kept.append(c)
     return kept
 

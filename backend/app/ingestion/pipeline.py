@@ -26,10 +26,10 @@ from ..services.segment import classify_segment
 from .base import Connector, LeadCandidate
 from .bodacc import BodaccConnector
 from .chr_classifier import classify
-from .enrichment.backfill import backfill_siren
 from .enrichment.contact_enricher import ContactEnricher
 from .enrichment.naf_classifier import classify_naf
 from .enrichment.sirene import SireneEnricher
+from .enrichment.siret_matcher import match as match_siret
 from .instagram import discover, judge, profile_enrich, scrape_hashtags
 
 # Besoins probables par type d'établissement (alignés sur l'offre LumaPro).
@@ -216,6 +216,26 @@ def run_backfill(
     )
 
 
+def _match_lead(lead: dict) -> dict:
+    """Lead Insta -> {siren, naf, enseigne} via le matcher, ou {} (fail-soft).
+    Remplace backfill_siren : mêmes clés consommées par run_instagram.
+    Contexte de l'arbitre : bio_snippet (profile_enrich) + caption de découverte
+    (discover) — la bio seule a fait rater un cas à l'éval Task 6."""
+    parts = [p for p in (lead.get("bio_snippet"), lead.get("caption")) if p]
+    context = " | post: ".join(parts)[:600] if parts else None
+    m = re.search(r"\b(\d{5})\b", lead.get("address") or "")
+    got = match_siret(
+        name=lead.get("name") or "",
+        city=lead.get("city"),
+        postal=m.group(1) if m else None,
+        address=lead.get("address"),
+        context=context,
+    )
+    if got is None:
+        return {}
+    return {"siren": got.siren, "naf": got.naf, "enseigne": got.enseigne}
+
+
 def run_instagram(
     hashtags: Optional[List[str]] = None,
     limit: int = 40,
@@ -223,8 +243,9 @@ def run_instagram(
     posts: Optional[List[dict]] = None,
 ) -> IngestStats:
     """Source Instagram-first [PHASE 2] : Apify (hashtags) -> filtre CHR + IdF ->
-    backfill SIREN (nom+ville) -> pipeline existant (Sirene/dirigeants/contact/
-    score/cycle de vie). Upsert `source="instagram"`, dédup par handle."""
+    matching SIREN (nom/adresse/arbitre, siret_matcher) -> pipeline existant
+    (Sirene/dirigeants/contact/score/cycle de vie). Upsert `source="instagram"`,
+    dédup par handle."""
     init_db()
     own_session = session is None
     session = session or Session(engine)
@@ -243,7 +264,7 @@ def run_instagram(
         for lead in leads:
             try:
                 # Ville désormais issue du profil quand dispo -> meilleur match SIREN.
-                bf = backfill_siren(lead["name"], lead["city"]) or {}
+                bf = _match_lead(lead)
                 # Signal déduit du verdict de fraîcheur (tous famille "opening",
                 # +3 au score). Défaut si le juge n'a pas tourné (fail-soft).
                 main_signal = {

@@ -711,37 +711,6 @@ def test_instagram_discover_filters_chr_idf():
     assert next(d for d in got if d["handle"] == "cafe_92")["type"] == "café"
 
 
-def test_backfill_siren_match():
-    from app.ingestion.enrichment.backfill import _best_match
-
-    results = [
-        {  # bon : NAF CHR + nom concordant + bon dép
-            "siren": "111222333", "nom_complet": "CALCIFER",
-            "siege": {"activite_principale": "56.10A", "code_postal": "75003",
-                      "liste_enseignes": ["CALCIFER"]},
-        },
-    ]
-    m = _best_match(results, "Calcifer", "75")
-    assert m and m["siren"] == "111222333"
-
-    # NAF non-CHR -> rejeté.
-    non_chr = [{"siren": "1", "nom_complet": "CALCIFER SCI",
-                "siege": {"activite_principale": "68.20B", "code_postal": "75003"}}]
-    assert _best_match(non_chr, "Calcifer", "75") is None
-
-    # Nom discordant (homonyme) -> rejeté.
-    other = [{"siren": "2", "nom_complet": "AUTRE CHOSE",
-              "siege": {"activite_principale": "56.10A", "code_postal": "75003",
-                        "liste_enseignes": ["AUTRE CHOSE"]}}]
-    assert _best_match(other, "Calcifer", "75") is None
-
-    # Mauvais département -> rejeté.
-    farbg = [{"siren": "3", "nom_complet": "CALCIFER",
-              "siege": {"activite_principale": "56.10A", "code_postal": "69001",
-                        "liste_enseignes": ["CALCIFER"]}}]
-    assert _best_match(farbg, "Calcifer", "75") is None
-
-
 def test_osm_name_matching():
     from app.ingestion.enrichment.osm import _name_matches
 
