@@ -3,6 +3,9 @@ from app.ingestion.enrichment.siret_matcher import (
     clean_name,
     street_number,
     _name_overlap,
+    geocode,
+    near_candidates,
+    pick_by_address,
 )
 
 
@@ -113,3 +116,74 @@ def test_http_get_fails_soft(monkeypatch):
 
     monkeypatch.setattr(sm.requests, "get", boom)
     assert sm._http_get(sm.SEARCH_URL, {"q": "x"}) == {}
+
+
+HIT_SARFOOD = {
+    "siren": "948225982", "nom_complet": "SAR FOOD",
+    "matching_etablissements": [{
+        "siret": "94822598200014", "activite_principale": "56.10C",
+        "adresse": "143 AVENUE GENERAL DE GAULLE 78500 SARTROUVILLE",
+        "code_postal": "78500", "liste_enseignes": None,
+        "date_creation": "2023-03-24",
+    }],
+}
+HIT_CAFETERIA = {
+    "siren": "427984489", "nom_complet": "ASS CAFETERIA DES PTT",
+    "matching_etablissements": [{
+        "siret": "42798448900011", "activite_principale": "56.10A",
+        "adresse": "145 AVENUE GENERAL DE GAULLE 78500 SARTROUVILLE",
+        "code_postal": "78500", "liste_enseignes": None,
+        "date_creation": "1989-05-31",
+    }],
+}
+
+
+def _fake_fetch(responses):
+    """Fetch factice : {url: réponse}. Enregistre les params reçus."""
+    calls = []
+
+    def fetch(url, params):
+        calls.append((url, dict(params)))
+        return responses.get(url, {})
+
+    fetch.calls = calls
+    return fetch
+
+
+def test_geocode_returns_coords_above_score_threshold():
+    import app.ingestion.enrichment.siret_matcher as sm
+    ban = {"features": [{"geometry": {"coordinates": [2.1912, 48.9442]},
+                         "properties": {"label": "143 Avenue General de Gaulle 78500 Sartrouville",
+                                        "score": 0.7}}]}
+    fetch = _fake_fetch({sm.BAN_URL: ban})
+    assert geocode("143 Av. du Général de Gaule Sartrouville", fetch) == (48.9442, 2.1912)
+
+
+def test_geocode_rejects_low_score():
+    # Cas l'Artémise : BAN géocode "Avenue d'Alsace" à 0.47 -> il faut refuser
+    # (sinon on compare aux mauvais voisins).
+    import app.ingestion.enrichment.siret_matcher as sm
+    ban = {"features": [{"geometry": {"coordinates": [7.36, 48.08]},
+                         "properties": {"label": "Avenue d'Alsace 68000 Colmar",
+                                        "score": 0.47}}]}
+    fetch = _fake_fetch({sm.BAN_URL: ban})
+    assert geocode("10 rue des écoles, 68000, Colmar, Alsace", fetch) is None
+
+
+def test_pick_by_address_single_chr_at_same_number_is_match():
+    cands = _candidates([HIT_CAFETERIA, HIT_OCOIN])
+    verdict, chosen = pick_by_address(cands, num="143", name="Tre Gusto")
+    assert verdict == "match" and chosen[0]["siren"] == "989119201"
+
+
+def test_pick_by_address_two_chr_at_same_number_is_ambiguous():
+    # Cas Tre Gusto réel : SAR FOOD (2023) et OCOIN (2025) au 143 -> arbitre.
+    cands = _candidates([HIT_CAFETERIA, HIT_SARFOOD, HIT_OCOIN])
+    verdict, pool = pick_by_address(cands, num="143", name="Tre Gusto")
+    assert verdict == "ambiguous" and {c["siren"] for c in pool} == {"948225982", "989119201"}
+
+
+def test_pick_by_address_no_number_or_no_chr_is_none():
+    cands = _candidates([HIT_CAFETERIA])
+    assert pick_by_address(cands, num=None, name="X") == ("none", [])
+    assert pick_by_address([], num="143", name="X") == ("none", [])

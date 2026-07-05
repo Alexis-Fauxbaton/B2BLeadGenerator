@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import time
 import unicodedata
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
@@ -145,3 +145,48 @@ def pick_by_name(cands: List[Dict[str, Any]], name: str,
         if _geo_consistent(cand, city, postal):
             return cand
     return None
+
+
+_BAN_MIN_SCORE = 0.6  # en dessous, le géocodage pointe souvent la mauvaise rue
+
+
+def geocode(address: Optional[str], fetch: Fetch) -> Optional[Tuple[float, float]]:
+    """Adresse libre -> (lat, lon) via BAN, None si introuvable ou score faible."""
+    if not address:
+        return None
+    data = fetch(BAN_URL, {"q": address, "limit": 1})
+    feats = data.get("features") or []
+    if not feats:
+        return None
+    props = feats[0].get("properties") or {}
+    if (props.get("score") or 0) < _BAN_MIN_SCORE:
+        return None
+    lon, lat = feats[0]["geometry"]["coordinates"]
+    return (lat, lon)
+
+
+def near_candidates(lat: float, lon: float, fetch: Fetch,
+                    radius: float = 0.1) -> List[Dict[str, Any]]:
+    """Établissements hébergement-restauration (section I) autour d'un point."""
+    data = fetch(NEAR_URL, {"lat": lat, "long": lon, "radius": radius,
+                            "section_activite_principale": "I", "per_page": 10})
+    return _candidates(data.get("results") or [])
+
+
+def pick_by_address(cands: List[Dict[str, Any]], num: Optional[str],
+                    name: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """Sélection PURE par adresse. Candidats CHR au MÊME numéro de voie :
+    1 -> match ; plusieurs -> ambigu (arbitre) ; 0 -> none. L'overlap de nom
+    court-circuite l'ambiguïté (ex. enseigne identique au bon numéro)."""
+    if not num:
+        return ("none", [])
+    same = [c for c in cands
+            if c["naf"] and classify_naf(c["naf"]) and street_number(c["adresse"]) == num]
+    if not same:
+        return ("none", [])
+    named = [c for c in same if _name_overlap(name, f'{c["nom"]} {c["enseignes"]}')]
+    if len(named) == 1:
+        return ("match", named)
+    if len(same) == 1:
+        return ("match", same)
+    return ("ambiguous", same)
