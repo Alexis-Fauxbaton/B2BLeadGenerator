@@ -62,6 +62,16 @@ def _tokens(text: Optional[str]) -> set:
             if len(t) > 1 and t not in _GENERIC and not t.isdigit()}
 
 
+def _city_tokens(text: Optional[str]) -> set:
+    """Tokens de VILLE : sans le filtre _GENERIC (sinon 'Paris' disparaît —
+    correct pour les noms d'enseigne, fatal pour la cohérence géo)."""
+    text = (text or "").lower()
+    text = "".join(c for c in unicodedata.normalize("NFD", text)
+                   if unicodedata.category(c) != "Mn")
+    return {t for t in re.split(r"[^a-z0-9]+", text)
+            if len(t) > 2 and not t.isdigit()}
+
+
 def _name_overlap(ig_name: str, sirene_text: str) -> bool:
     """Au moins un token distinctif du nom Insta présent côté Sirene."""
     want = _tokens(ig_name)
@@ -153,8 +163,8 @@ def _geo_consistent(cand: Dict[str, Any], city: Optional[str],
     if postal and cand["cp"].startswith(postal[:2]):
         return True
     if city:
-        c = _tokens(city)
-        return bool(c) and bool(c & _tokens(cand["adresse"]))
+        c = _city_tokens(city)
+        return bool(c) and c.issubset(_city_tokens(cand["adresse"]))
     return False
 
 

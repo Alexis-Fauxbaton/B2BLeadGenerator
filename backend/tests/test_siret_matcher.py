@@ -106,6 +106,17 @@ def test_pick_by_name_accepts_with_geo_consistency():
     assert got is not None and got["siren"] == "899355770"
 
 
+def test_pick_by_name_geo_works_for_paris():
+    # 'paris' est dans _GENERIC (noms) mais NE DOIT PAS etre filtre comme VILLE.
+    hit = {"siren": "994929917", "nom_complet": "CC ROQUETTE (CHERES COUSINES)",
+           "activite_principale": "56.10C", "date_creation": "2025-12-15",
+           "siege": {"siret": "99492991700017", "activite_principale": "56.10C",
+                     "adresse": "15 RUE DE LA ROQUETTE 75011 PARIS",
+                     "code_postal": "75011", "liste_enseignes": ["CHERES COUSINES"]}}
+    got = pick_by_name(_candidates([hit]), "CHÈRES COUSINES", city="Paris", postal=None)
+    assert got is not None and got["siren"] == "994929917"
+
+
 def test_pick_by_name_refuses_without_geo():
     # Piège Auréa : nom+NAF collent mais aucune géo connue -> PAS d'auto-accept
     # (ira à l'arbitre). Le backfill actuel aurait mergé à tort.
@@ -328,6 +339,7 @@ def test_pipeline_uses_matcher(monkeypatch):
 
     def fake_match(name, city=None, postal=None, address=None, context=None, **kw):
         calls["name"] = name
+        calls["postal"] = postal
         return MatchResult(siren="989119201", siret="98911920100011",
                            naf="56.10C", enseigne="OCOIN",
                            confidence="moyenne", method="arbitre")
@@ -337,7 +349,22 @@ def test_pipeline_uses_matcher(monkeypatch):
                           "address": "143 Av. du Général de Gaule",
                           "bio_snippet": "resto italien"})
     assert calls["name"] == "Tre Gusto"
+    assert calls["postal"] is None
     assert got == {"siren": "989119201", "naf": "56.10C", "enseigne": "OCOIN"}
+
+
+def test_match_lead_extracts_postal_from_address(monkeypatch):
+    import app.ingestion.pipeline as pl
+    calls = {}
+
+    def fake_match(name, city=None, postal=None, address=None, context=None, **kw):
+        calls["postal"] = postal
+        return None
+
+    monkeypatch.setattr(pl, "match_siret", fake_match)
+    assert pl._match_lead({"handle": "x", "name": "Y", "city": "Paris",
+                           "address": "15 rue de la Roquette, 75011, Paris"}) == {}
+    assert calls["postal"] == "75011"
 
 
 def test_match_lead_none_is_empty_dict():

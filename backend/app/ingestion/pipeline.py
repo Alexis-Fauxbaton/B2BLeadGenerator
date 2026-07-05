@@ -223,15 +223,17 @@ def _match_lead(lead: dict) -> dict:
     (discover) — la bio seule a fait rater un cas à l'éval Task 6."""
     parts = [p for p in (lead.get("bio_snippet"), lead.get("caption")) if p]
     context = " | post: ".join(parts)[:600] if parts else None
-    m = match_siret(
+    m = re.search(r"\b(\d{5})\b", lead.get("address") or "")
+    got = match_siret(
         name=lead.get("name") or "",
         city=lead.get("city"),
+        postal=m.group(1) if m else None,
         address=lead.get("address"),
         context=context,
     )
-    if m is None:
+    if got is None:
         return {}
-    return {"siren": m.siren, "naf": m.naf, "enseigne": m.enseigne}
+    return {"siren": got.siren, "naf": got.naf, "enseigne": got.enseigne}
 
 
 def run_instagram(

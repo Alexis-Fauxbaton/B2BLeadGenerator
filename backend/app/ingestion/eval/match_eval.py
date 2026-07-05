@@ -14,8 +14,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..enrichment import siret_matcher as sm
 from .run import load_groundtruth, load_snapshot
@@ -57,9 +58,13 @@ def _recording_fetch(store: Dict[str, Any]):
     return fetch
 
 
-def _replay_fetch(store: Dict[str, Any]):
+def _replay_fetch(store: Dict[str, Any], misses: List[str]):
     def fetch(url, params):
-        return store.get(_key(url, params), {})
+        k = _key(url, params)
+        if k not in store:
+            misses.append(k)
+            return {}
+        return store[k]
     return fetch
 
 
@@ -103,6 +108,7 @@ def run_match_eval(mode: str = "offline") -> dict:
                             "expected": expected, "got": None})
             continue
         fix_path = FIX_DIR / f"{handle}.json"
+        misses: List[str] = []
         if mode == "record":
             store: Dict[str, Any] = {}
             fetch = _recording_fetch(store)
@@ -113,7 +119,7 @@ def run_match_eval(mode: str = "offline") -> dict:
                 results.append({"handle": handle, "status": "no_fixture",
                                 "expected": expected, "got": None})
                 continue
-            fetch = _replay_fetch(json.loads(fix_path.read_text(encoding="utf-8")))
+            fetch = _replay_fetch(json.loads(fix_path.read_text(encoding="utf-8")), misses)
         inputs = _inputs_from_snapshot(handle, snap)
         got = sm.match(fetch=fetch, **inputs)
         if mode == "record":
@@ -134,7 +140,8 @@ def run_match_eval(mode: str = "offline") -> dict:
         results.append({"handle": handle, "status": status, "expected": expected,
                         "got": got_siren,
                         "method": got.method if got else None,
-                        "confidence": got.confidence if got else None})
+                        "confidence": got.confidence if got else None,
+                        "fixture_misses": len(misses)})
 
     n_expected = sum(1 for r in results if r["expected"])
     ok = sum(1 for r in results if r["status"] == "ok_match")
@@ -164,6 +171,14 @@ def main() -> None:
     if rep["false_merges"]:
         print(f'\n!! FAUX MERGES ({len(rep["false_merges"])}) — GATE ROUGE, à corriger avant de continuer')
     print("=" * 64)
+
+    missing = [r for r in rep["results"] if r.get("fixture_misses")]
+    if missing:
+        detail = " ".join(f'{r["handle"]}={r["fixture_misses"]}' for r in missing)
+        print(f'!! FIXTURES MANQUANTES: {detail} -> relancer --record')
+
+    if rep["false_merges"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
