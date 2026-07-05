@@ -6,6 +6,7 @@ from app.ingestion.enrichment.siret_matcher import (
     geocode,
     near_candidates,
     pick_by_address,
+    arbitrate,
 )
 
 
@@ -187,3 +188,45 @@ def test_pick_by_address_no_number_or_no_chr_is_none():
     cands = _candidates([HIT_CAFETERIA])
     assert pick_by_address(cands, num=None, name="X") == ("none", [])
     assert pick_by_address([], num="143", name="X") == ("none", [])
+
+
+class _FakeCompletion:
+    def __init__(self, content):
+        self.choices = [type("C", (), {"message": type("M", (), {"content": content})()})()]
+
+
+class _FakeClient:
+    """Client OpenAI factice qui renvoie un JSON fixe et capture le prompt."""
+    def __init__(self, content):
+        self._content = content
+        self.last_messages = None
+        outer = self
+
+        class _Completions:
+            def create(self, **kwargs):
+                outer.last_messages = kwargs.get("messages")
+                return _FakeCompletion(outer._content)
+
+        self.chat = type("Chat", (), {"completions": _Completions()})()
+
+
+def test_arbitrate_returns_chosen_siren():
+    cands = _candidates([HIT_SARFOOD, HIT_OCOIN])
+    client = _FakeClient('{"match_index": 1}')
+    assert arbitrate("Tre Gusto", "resto italien qui démarre", cands, client) == "989119201"
+    # Le contexte (bio) doit être dans le prompt : c'est lui qui évite Auréa.
+    joined = " ".join(m["content"] for m in client.last_messages)
+    assert "resto italien qui démarre" in joined
+
+
+def test_arbitrate_null_means_no_match():
+    cands = _candidates([HIT_AUREA])
+    client = _FakeClient('{"match_index": null}')
+    assert arbitrate("AURÉA", "bijoux, Portugal", cands, client) is None
+
+
+def test_arbitrate_fails_soft():
+    cands = _candidates([HIT_AUREA])
+    assert arbitrate("AURÉA", "bio", cands, client=None) is None
+    assert arbitrate("AURÉA", "bio", cands, _FakeClient("pas du json")) is None
+    assert arbitrate("AURÉA", "bio", [], _FakeClient('{"match_index": 0}')) is None

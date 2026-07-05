@@ -8,6 +8,8 @@ Fail-soft partout. Cf. docs/inventory-pivot-design.md.
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import time
 import unicodedata
@@ -190,3 +192,56 @@ def pick_by_address(cands: List[Dict[str, Any]], num: Optional[str],
     if len(same) == 1:
         return ("match", same)
     return ("ambiguous", same)
+
+
+_ARBITER_SYSTEM = (
+    "Tu relies un compte Instagram d'établissement CHR à son entreprise au "
+    "registre Sirene. On te donne le nom Insta, un extrait de bio, et des "
+    "candidats du registre (nom légal, enseignes, NAF, adresse, date de "
+    "création). Le nom légal peut être SANS RAPPORT avec le nom commercial "
+    "(holding, patronyme) : juge sur le faisceau adresse/NAF/récence/enseigne. "
+    "Si le compte n'est manifestement PAS un établissement CHR français "
+    "(marque, hors France, média), ou si aucun candidat ne colle : null. "
+    'Réponds STRICTEMENT en JSON : {"match_index": <int|null>}.'
+)
+
+
+def _openai_client():
+    """Client OpenAI ou None (fail-soft), même convention qu'instagram.py."""
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        return None
+    try:
+        from openai import OpenAI
+        return OpenAI(api_key=key)
+    except Exception:
+        return None
+
+
+def arbitrate(name: str, context: Optional[str],
+              cands: List[Dict[str, Any]], client=None) -> Optional[str]:
+    """Arbitre LLM : SIREN du candidat retenu, ou None (rejet / fail-soft)."""
+    if client is None or not cands:
+        return None
+    listing = "\n".join(
+        f'{i}. {c["nom"]} | enseignes: {c["enseignes"] or "-"} | NAF {c["naf"]} '
+        f'| {c["adresse"]} | créé {c["date_creation"]}'
+        for i, c in enumerate(cands)
+    )
+    user = (f"Compte Insta : {name}\nBio/contexte : {(context or '')[:300]}\n\n"
+            f"Candidats registre :\n{listing}\n\n"
+            f'Format EXACT : {{"match_index": <int|null>}}')
+    try:
+        completion = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            messages=[{"role": "system", "content": _ARBITER_SYSTEM},
+                      {"role": "user", "content": user}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        idx = json.loads(completion.choices[0].message.content).get("match_index")
+        if isinstance(idx, int) and 0 <= idx < len(cands):
+            return cands[idx]["siren"]
+    except Exception:
+        pass
+    return None
