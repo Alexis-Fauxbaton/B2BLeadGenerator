@@ -118,3 +118,36 @@ def _ymd(value: Optional[str]) -> Optional[date]:
         return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
     except (ValueError, TypeError):
         return None
+
+
+class SireneDeltaConnector(Connector):
+    """Delta des nouveaux SIRET CHR (INSEE). `departments` = prefixes de CP.
+    La fenetre remonte de `since_days` ET s'etend a +FUTURE_HORIZON_DAYS
+    (creations pre-declarees). `since_date` (curseur incremental) prime sur
+    since_days quand fourni."""
+    name = "sirene"
+
+    def __init__(self) -> None:
+        self.last_total_count = 0
+
+    def fetch(self, since_days: int = 7, limit: int = 3000,
+              departments: Optional[List[str]] = None,
+              since_date: Optional[date] = None, **_: Any) -> List[Dict[str, Any]]:
+        today = date.today()
+        date_from = since_date or (today - timedelta(days=since_days or 7))
+        date_to = today + timedelta(days=FUTURE_HORIZON_DAYS)
+        records = fetch_new_etablissements(
+            date_from, date_to, CHR_NAF_CODES,
+            cp_prefixes=departments, limit=limit,
+        )
+        self.last_total_count = len(records)
+        return records
+
+    def to_candidates(self, records: List[Dict[str, Any]]) -> List[LeadCandidate]:
+        today = date.today()
+        out: List[LeadCandidate] = []
+        for etab in records:
+            cand = map_etablissement(etab, today)
+            if cand:
+                out.append(cand)
+        return out

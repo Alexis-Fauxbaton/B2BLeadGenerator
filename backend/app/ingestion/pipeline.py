@@ -26,6 +26,7 @@ from ..services.segment import classify_segment
 from .base import Connector, LeadCandidate
 from .bodacc import BodaccConnector
 from .chr_classifier import classify
+from .sirene_delta import SireneDeltaConnector
 from .enrichment.contact_enricher import ContactEnricher
 from .enrichment.naf_classifier import classify_naf
 from .enrichment.sirene import SireneEnricher
@@ -51,6 +52,7 @@ TIMING_BY_SIGNAL = {
 
 CONNECTORS = {
     "bodacc": BodaccConnector,
+    "sirene": SireneDeltaConnector,
 }
 
 

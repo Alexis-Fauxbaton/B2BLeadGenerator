@@ -150,3 +150,36 @@ def test_map_etat_ferme_est_ecarte():
     etab = {**ETAB_OK, "periodesEtablissement": [{
         **ETAB_OK["periodesEtablissement"][0], "etatAdministratifEtablissement": "F"}]}
     assert map_etablissement(etab, TODAY) is None
+
+
+def test_connector_fetch_window_and_future(monkeypatch):
+    """La fenetre couvre [today-since_days ; today+FUTURE_HORIZON_DAYS] :
+    le passe recent ET les ouvertures pre-declarees."""
+    import app.ingestion.sirene_delta as sd
+    captured = {}
+
+    def fake_fetch(date_from, date_to, naf_codes, cp_prefixes=None, limit=3000, fetch=None):
+        captured.update(date_from=date_from, date_to=date_to,
+                        naf_codes=list(naf_codes), cp=cp_prefixes, limit=limit)
+        return [dict(ETAB_OK)]
+
+    monkeypatch.setattr(sd, "fetch_new_etablissements", fake_fetch)
+    conn = sd.SireneDeltaConnector()
+    records = conn.fetch(since_days=7, limit=500, departments=["75", "92"])
+    assert len(records) == 1 and conn.last_total_count == 1
+    assert (captured["date_to"] - captured["date_from"]).days == 7 + sd.FUTURE_HORIZON_DAYS
+    assert captured["naf_codes"] == sd.CHR_NAF_CODES
+    assert captured["cp"] == ["75", "92"] and captured["limit"] == 500
+
+
+def test_connector_to_candidates_filters_unusable():
+    import app.ingestion.sirene_delta as sd
+    conn = sd.SireneDeltaConnector()
+    cands = conn.to_candidates([dict(ETAB_OK), dict(ETAB_ND)])
+    assert len(cands) == 1 and cands[0].source_ref == "10550673700029"
+
+
+def test_connector_registered_in_pipeline():
+    from app.ingestion.pipeline import get_connector
+    conn = get_connector("sirene")
+    assert conn.name == "sirene"
