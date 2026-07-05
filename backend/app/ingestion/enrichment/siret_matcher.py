@@ -123,9 +123,9 @@ def _age_label(date_str: Optional[str], today: Optional[date] = None) -> str:
     except ValueError:
         return "?"
     today = today or date.today()
-    months = (today.year - d.year) * 12 + (today.month - d.month)
-    if months < 0:
+    if d > today:
         return "dans le futur"
+    months = (today.year - d.year) * 12 + (today.month - d.month)
     if months == 0:
         return "ce mois-ci"
     if months < 24:
@@ -260,7 +260,7 @@ def arbitrate(name: str, context: Optional[str],
         for i, c in enumerate(cands)
     )
     user = (f"Date du jour : {date.today().isoformat()}\n"
-            f"Compte Insta : {name}\nBio/contexte : {(context or '')[:300]}\n\n"
+            f"Compte Insta : {name}\nBio/contexte : {(context or '')[:600]}\n\n"
             f"Candidats registre :\n{listing}\n\n"
             f'Format EXACT : {{"reasoning": "...", "match_index": <int|null>}}')
     try:

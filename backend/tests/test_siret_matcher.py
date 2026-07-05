@@ -226,7 +226,9 @@ def test_age_label_precomputes_relative_ages():
     assert _age_label("2025-07-04", today) == "il y a 12 mois"
     assert _age_label("2023-03-24", today) == "il y a 3 ans"
     assert _age_label("2026-06-01", today) == "il y a 1 mois"
-    assert _age_label("2026-07-20", today) == "ce mois-ci"
+    assert _age_label("2026-07-20", today) == "dans le futur"
+    assert _age_label("2026-07-01", today) == "ce mois-ci"
+    assert _age_label("pas-une-date", today) == "?"
     assert _age_label(None, today) == "?"
 
 
