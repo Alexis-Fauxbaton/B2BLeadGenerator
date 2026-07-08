@@ -330,6 +330,17 @@ def test_result_enseigne_prefers_enseignes_over_nom():
     assert result_without_enseignes.enseigne == "LE MOURE ROUGE"
 
 
+def test_result_carries_date_creation():
+    # HIT_OCOIN porte date_creation sur l'établissement matché (near_point).
+    cand = _candidates([HIT_OCOIN])[0]
+    r = _result(cand, "moyenne", "adresse")
+    assert r.date_creation == "2025-07-04"
+    # HIT_MAIRIE : le siège (etab) n'a pas de date_creation -> fallback au niveau
+    # res (registre) via `etab.get('date_creation') or res.get('date_creation')`.
+    r2 = _result(_candidates([HIT_MAIRIE])[0], "haute", "nom")
+    assert r2.date_creation == "1901-01-01"
+
+
 def test_pipeline_uses_matcher(monkeypatch):
     """run_instagram doit appeler siret_matcher.match (plus backfill_siren)."""
     import app.ingestion.pipeline as pl

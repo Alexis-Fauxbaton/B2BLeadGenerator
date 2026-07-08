@@ -1,0 +1,119 @@
+# backend/tests/test_profile_guards.py
+"""Tests des garde-fous déterministes du funnel v2 (brique 3)."""
+import json
+from datetime import date
+from pathlib import Path
+
+from app.ingestion.profile_guards import (
+    guard_verdict,
+    _has_hours_in_bio,
+    _has_reservation_link,
+    _count_addresses_in_bio,
+)
+
+SNAP = Path(__file__).resolve().parents[1] / "app" / "ingestion" / "eval" / "snapshots"
+TODAY = date(2026, 7, 6)
+
+
+def test_hours_in_bio_detected():
+    assert _has_hours_in_bio("Ouvert du lundi au samedi de 10h à 19h")
+    assert _has_hours_in_bio("Open everyday")
+    assert _has_hours_in_bio("Tous les jours 10:30-23:00")
+    assert _has_hours_in_bio("Service 7j/7 midi et soir")
+
+
+def test_hours_absent_for_preopening_bios():
+    # Les 4 cas 'opening' de la vérité terrain n'ont NI horaires NI résa.
+    assert not _has_hours_in_bio("Ouverture prochainement Printemps/Été 2026")
+    assert not _has_hours_in_bio("Bientôt chez vous — Juillet 2026")
+    assert not _has_hours_in_bio("Resto italien qui démarre, pas encore d'horaires")
+
+
+def test_reservation_link_detected():
+    assert _has_reservation_link({"externalUrl": "https://bookings.zenchef.com/x"})
+    assert _has_reservation_link({"externalUrls": [{"url": "https://www.thefork.fr/r/x"}]})
+    assert _has_reservation_link({"biography": "Résa: https://lafourchette.com/xyz"})
+    assert _has_reservation_link({"externalUrl": "https://resy.com/cities/paris/x"})
+    assert not _has_reservation_link({"externalUrl": "https://mon-site-perso.fr"})
+
+
+def test_count_addresses_in_bio():
+    # Liste de lieux marquée par un pin et séparée par | -> multi-sites.
+    assert _count_addresses_in_bio("📍Champs Elysées | Opéra | Galeries Lafayette") >= 2
+    # Une seule adresse -> 1.
+    assert _count_addresses_in_bio("📍44 rue de Ponthieu 75008 Paris") == 1
+    # Deux codes postaux distincts -> 2.
+    assert _count_addresses_in_bio("12 rue X 75001 et 8 rue Y 75009") >= 2
+    assert _count_addresses_in_bio("Café de spécialité, ambiance cosy") == 0
+
+
+def test_moka_dies_here_as_chain_multisite():
+    snap = json.loads((SNAP / "cafe_mokaparis.json").read_text(encoding="utf-8"))
+    # 3 adresses en bio + 'open everyday' : doit mourir ICI, sans LLM.
+    assert guard_verdict(snap, TODAY) == "chain_multisite"
+
+
+def test_posts_count_hard_established():
+    assert guard_verdict({"postsCount": 200, "biography": ""}, TODAY) == "established"
+
+
+def test_long_history_established():
+    prof = {"postsCount": 11, "biography": "", "latestPosts": [
+        {"timestamp": "2023-01-05T10:00:00.000Z"},
+        {"timestamp": "2023-06-05T10:00:00.000Z"},
+        {"timestamp": "2024-01-05T10:00:00.000Z"},
+    ]}
+    assert guard_verdict(prof, TODAY) == "established"
+
+
+def test_hours_bio_established():
+    assert guard_verdict({"postsCount": 20, "biography": "Ouvert 7j/7 midi et soir"},
+                         TODAY) == "established"
+
+
+def test_preopening_passes_through_to_llm():
+    # Peu de posts, bio de pré-ouverture, aucun signal établi -> None (va au juge).
+    prof = {"postsCount": 2,
+            "biography": "Ouverture prochainement Printemps/Été 2026",
+            "latestPosts": [{"timestamp": "2026-06-20T10:00:00.000Z"}]}
+    assert guard_verdict(prof, TODAY) is None
+
+
+# --- Régression sur snapshots réels (garde-fou vs vérité terrain) --------------
+# Les 4 comptes 'opening' NE DOIVENT PAS être tranchés par les gardes : ils
+# doivent descendre au juge LLM (verdict déterministe None), sinon le gate dur
+# recall_opening == 1.0 (T5) devient inatteignable. Bug attrapé en revue :
+# chezgratien ('📍 Villeneuve d'Aveyron | Juillet 2026') sortait chain_multisite.
+OPENING_SNAPS = ["loumasrestaurant", "chezgratien_hotelbistrospa",
+                 "tregusto_sartrouville", "brasseriedelafontainelourmarin"]
+
+
+def test_opening_snapshots_pass_through_to_llm():
+    for h in OPENING_SNAPS:
+        snap = json.loads((SNAP / f"{h}.json").read_text(encoding="utf-8"))
+        assert guard_verdict(snap, TODAY) is None, f"{h} tranché à tort par un garde-fou"
+
+
+def test_chezgratien_pin_date_not_counted_as_address():
+    # '📍 Villeneuve d'Aveyron | Juillet 2026' : le 2e segment est une DATE
+    # d'ouverture, pas une adresse -> 1 seule adresse, pas de chain_multisite.
+    snap = json.loads((SNAP / "chezgratien_hotelbistrospa.json").read_text(encoding="utf-8"))
+    assert _count_addresses_in_bio(snap.get("biography") or "") < 2
+    assert guard_verdict(snap, TODAY) != "chain_multisite"
+
+
+def test_hours_guard_ignores_countdown():
+    # Un compte à rebours "48h" n'est PAS un horaire d'ouverture...
+    assert not _has_hours_in_bio("Ouverture dans 48h !")
+    # ...mais une vraie plage horaire-only ("10h-18h") EST détectée.
+    assert _has_hours_in_bio("Service 10h-18h")
+
+
+def test_just_opened_monica_survives_guards():
+    # monica_stgermain (just_opened) : peu de posts, pas d'horaires détectés,
+    # historique court -> descend au juge (None). NB : imagine.trouville, elle,
+    # est captée en 'established' par _long_history (posts de 2024) — perte de
+    # rappel just_opened ASSUMÉE et documentée (cf. « Notes de revue »), non
+    # fatale au gate d'acceptation (qui ne couvre que 'opening').
+    snap = json.loads((SNAP / "monica_stgermain.json").read_text(encoding="utf-8"))
+    assert guard_verdict(snap, TODAY) is None

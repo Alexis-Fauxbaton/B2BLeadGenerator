@@ -297,6 +297,7 @@ class MatchResult:
     enseigne: Optional[str]
     confidence: str  # "haute" | "moyenne"
     method: str      # "nom" | "adresse" | "arbitre"
+    date_creation: Optional[str] = None  # AAAA-MM-JJ du registre (pour le juge v2)
 
 
 # Sentinel : "résous le client OpenAI depuis l'env". Passer None = SANS arbitre
@@ -307,7 +308,8 @@ _USE_ENV = object()
 def _result(cand: Dict[str, Any], confidence: str, method: str) -> MatchResult:
     enseigne = cand["enseignes"] or cand["nom"] or None
     return MatchResult(siren=cand["siren"], siret=cand["siret"], naf=cand["naf"],
-                       enseigne=enseigne, confidence=confidence, method=method)
+                       enseigne=enseigne, confidence=confidence, method=method,
+                       date_creation=cand.get("date_creation"))
 
 
 def match(name: str, city: Optional[str] = None, postal: Optional[str] = None,

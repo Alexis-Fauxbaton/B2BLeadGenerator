@@ -66,7 +66,7 @@ enrichis en contacts, avec canal d'approche recommandé et messages générés.
 
 ## 2. Modèle de données (`backend/app/models.py`)
 
-Quatre tables SQLModel :
+Cinq tables SQLModel :
 
 - **`Opportunity`** — l'entité centrale (un lead = un établissement).
   - *Identité/provenance* : `establishment_name`, `establishment_type`, `city`,
@@ -91,6 +91,11 @@ Quatre tables SQLModel :
   statut, relance, note), ordonné desc.
 - **`Settings`** — ligne unique : identité du fournisseur (nom, offre, ton,
   zone) qui paramètre la génération de messages.
+- **`HandleVerdict`** (`handle_verdicts`, brique 3) — cache de verdicts du
+  funnel Insta v2 : `handle` (unique), `verdict`, `confidence`, `judged_at`,
+  `revisit_after` (fenêtre de revisite, `NULL` = watchlist jamais mise en
+  sommeil), `profile_hash` (sha1 bio+postsCount, invalide le cache si le
+  profil change).
 
 **Migrations légères** (`database.py`) : pas d'Alembic. `init_db()` fait
 `create_all` puis `_run_lightweight_migrations()` : inspection des colonnes de
@@ -168,21 +173,28 @@ date de création.
 
 ### Source Instagram (`instagram.py` + `run_instagram`)
 
-Funnel actuel (sera recâblé en brique 3, cf. §9) :
+Funnel v2 (brique 3, cf. §9) — étiquetage, plus aucun drop sur caption :
 
 1. `scrape_hashtags` — actor Apify hashtag (posts bruts, tous secteurs).
-2. `discover` — heuristique **pure** CHR + Île-de-France sur le texte du post,
-   dédup par handle → `{handle, name, city, type, caption}`.
-3. `judge` — juge LLM batch sur caption : fraîcheur (`opening`/`just_opened`
-   gardés) + `is_venue_owner` (écarte les comptes média qui parlent d'un lieu
-   à la 3e personne — le handle ne serait pas le lieu).
-4. `profile_enrich` — scrape des profils (actor profil Apify) sur les
-   survivants ; garde-fous déterministes (`postsCount > 150` → établi ;
-   `_profile_long_history` → plusieurs posts vieux de +150 j) ; puis juge LLM
-   **unitaire** par profil (établi → drop) qui extrait aussi adresses/emails ;
-   enrichit ville/site/`bio_snippet`.
-5. `run_instagram` — **matching SIREN** via `siret_matcher.match()` (cf. §4),
-   signal déduit de la fraîcheur, puis tronc commun `_process_candidate`.
+2. `discover` — heuristique **pure** CHR + Île-de-France, dédup par handle
+   → `{handle, name, city, type, caption}` (rôle inchangé, recall-only).
+3. **Cache de verdicts** (`verdict_cache.should_rejudge`) — un handle déjà
+   tranché n'est re-scrapé/re-jugé que si sa fenêtre de revisite est expirée
+   (not_venue 12 mois, established/chain 6, noise/unknown 2 ; opening jamais mis
+   en sommeil) OU si son profil a changé (`profile_hash`).
+4. `scrape_profiles` — profils Apify des seuls handles dus.
+5. `profile_guards.guard_verdict` — garde-fous **déterministes** gratuits :
+   ≥2 adresses en bio → `chain_multisite` ; postsCount > 150 / historique long /
+   horaires en bio / lien résa → `established`. (MOKA meurt ici.)
+6. `siret_matcher.match()` (cf. §4) — matching SIRET **avant** le juge (le
+   dossier inclut le registre : `date_creation`).
+7. `judge_dossier` — **un** appel LLM par compte sur le dossier complet (bio,
+   compteurs, 6-12 posts datés avec âges **précalculés en code**, caption,
+   registre) → label de cycle de vie + `reasoning` + extraction adresses/emails.
+8. `verdict_cache.upsert` — écrit le verdict ; `run_instagram` crée un lead
+   UNIQUEMENT pour `opening_soon`/`just_opened`/`unknown` (les autres labels =
+   verdict caché, pas de lead). `main_signal` : opening_soon→« ouverture
+   prochaine », just_opened→« création récente », unknown→« ouverture prochaine ».
 
 ### Les passes récurrentes (pipeline.py, CLI `app.ingestion.run`)
 
@@ -348,15 +360,14 @@ segment de tête, qualité par corroboration registre × Instagram).
 |---|---|---|
 | 1. `siret_matcher` | matching Insta↔SIRET (nom → adresse → arbitre) + éval fixtures | **Fait** (mergé 2026-07-06) |
 | 2. Délta-Sirene | nouveaux SIRET NAF 55/56 par jour = recall ~100 % sur les ouvertures ; corroboration croisée | **Fait** (2026-07-06) |
-| 3. Funnel v2 + cache verdicts | juge unique par compte sur dossier complet, labels de cycle de vie, `handle_verdicts` avec fenêtres de revisite (not_venue 12 mois, established 6, noise 2, opening = watchlist) | À faire |
+| 3. Funnel v2 + cache verdicts | juge unique `judge_dossier` sur dossier complet, garde-fous déterministes (`profile_guards`), labels de cycle de vie, `handle_verdicts` avec fenêtres de revisite | **Fait** (2026-07-06) |
 | 4. Watchlist + réconciliation | re-scrape hebdo des opening-soon, re-matching des leads sans SIREN | À faire |
 
 Dettes/leçons consignées pour les briques suivantes (ledger de la brique 1) :
 persister `siret` + `method`/`confidence` du matching sur l'Opportunity (la
 brique 2 corrobore par SIRET), règle déterministe « succession au même
-numéro → le plus récent », corriger `_judge_profile` (même bug d'ancrage de
-date que l'arbitre), télémétrie des matchs + audit hebdo pour faire grandir la
-vérité terrain sur des échecs réels.
+numéro → le plus récent », télémétrie des matchs + audit hebdo pour faire
+grandir la vérité terrain sur des échecs réels.
 
 **Contrainte API découverte (2026-07-06)** : recherche-entreprises n'a **pas
 de filtre par date de création** (paramètre inconnu ignoré en silence) et

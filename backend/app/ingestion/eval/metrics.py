@@ -53,6 +53,20 @@ def confusion_matrix(pairs: List[Pair]) -> Dict[str, Dict[str, int]]:
     return {label: dict(row) for label, row in matrix.items()}
 
 
+# Ordre d'affichage des labels de cycle de vie (funnel v2).
+LABEL_ORDER = [
+    "opening_soon", "just_opened", "unknown",
+    "established", "chain_multisite", "not_venue", "noise",
+]
+
+
+def label_confusion(pairs: List[Pair]) -> Dict[str, Dict[str, int]]:
+    """Matrice `label_vérité -> {label_prédit -> compte}` (funnel v2). Identique
+    en forme à confusion_matrix, mais les deux axes sont des labels de cycle de
+    vie (pas des buckets binaires)."""
+    return confusion_matrix(pairs)
+
+
 def bucket_precision(
     pairs: List[Pair], bucket: str = A_CONTACTER, target_label: str = OPENING
 ) -> Tuple[Optional[float], int, int]:
