@@ -86,21 +86,20 @@ def load_snapshot(handle: str) -> Optional[dict]:
 
 
 def classify(snapshots: Dict[str, dict]) -> Dict[str, str]:
-    """Projette le verdict du pipeline actuel dans l'espace des buckets.
+    """Projette le label du funnel v2 dans l'espace des buckets binaires.
     `snapshots` = {handle: profil figé}. -> {handle: 'a_contacter'|'ecarte'}.
-
-    On passe tous les comptes par `profile_enrich` (profils injectés) : ceux qui
-    survivent = `a_contacter`, les écartés = `ecarte`."""
-    from ..instagram import profile_enrich
+    (La matrice de confusion par LABEL est ajoutée en T5.)"""
+    from ..instagram import classify_profiles
 
     candidates = [
-        {"handle": h, "name": (snap.get("fullName") or h)}
+        {"handle": h, "name": (snap.get("fullName") or h), "city": "", "type": "restaurant"}
         for h, snap in snapshots.items()
     ]
     injected = {h.lower(): snap for h, snap in snapshots.items()}
-    kept = profile_enrich([dict(c) for c in candidates], profiles=injected)
-    kept_handles = {c["handle"] for c in kept}
-    return {h: (A_CONTACTER if h in kept_handles else ECARTE) for h in snapshots}
+    labeled = classify_profiles([dict(c) for c in candidates], injected, match_fn=None)
+    fresh = {"opening_soon", "just_opened", "unknown"}
+    by_handle = {c["handle"]: c["label"] for c in labeled}
+    return {h: (A_CONTACTER if by_handle.get(h) in fresh else ECARTE) for h in snapshots}
 
 
 def run_eval(strict: bool = False) -> dict:

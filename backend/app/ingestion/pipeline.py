@@ -30,8 +30,9 @@ from .sirene_delta import SireneDeltaConnector
 from .enrichment.contact_enricher import ContactEnricher
 from .enrichment.naf_classifier import classify_naf
 from .enrichment.sirene import SireneEnricher
-from .enrichment.siret_matcher import match as match_siret
-from .instagram import discover, judge, profile_enrich, scrape_hashtags
+from .enrichment.siret_matcher import MatchResult, match as match_siret
+from .instagram import discover, scrape_hashtags, scrape_profiles, classify_profiles
+from . import verdict_cache
 
 # Besoins probables par type d'établissement (alignés sur l'offre LumaPro).
 NEEDS_BY_TYPE = {
@@ -218,21 +219,24 @@ def run_backfill(
     )
 
 
-def _match_lead(lead: dict) -> dict:
-    """Lead Insta -> {siren, naf, enseigne} via le matcher, ou {} (fail-soft).
-    Remplace backfill_siren : mêmes clés consommées par run_instagram.
-    Contexte de l'arbitre : bio_snippet (profile_enrich) + caption de découverte
-    (discover) — la bio seule a fait rater un cas à l'éval Task 6."""
+def _match_result(lead: dict) -> Optional["MatchResult"]:
+    """Lead Insta -> MatchResult brut via le matcher, ou None (fail-soft).
+    Contexte de l'arbitre : bio_snippet (profil) + caption de découverte."""
     parts = [p for p in (lead.get("bio_snippet"), lead.get("caption")) if p]
     context = " | post: ".join(parts)[:600] if parts else None
     m = re.search(r"\b(\d{5})\b", lead.get("address") or "")
-    got = match_siret(
+    return match_siret(
         name=lead.get("name") or "",
         city=lead.get("city"),
         postal=m.group(1) if m else None,
         address=lead.get("address"),
         context=context,
     )
+
+
+def _match_lead(lead: dict) -> dict:
+    """Lead Insta -> {siren, naf, enseigne, siret, method, confidence}, ou {}."""
+    got = _match_result(lead)
     if got is None:
         return {}
     return {
@@ -258,44 +262,55 @@ def run_instagram(
     enricher = SireneEnricher()
 
     try:
-        # Pipeline de découverte, du recall à la précision :
-        #  discover (heuristique CHR+IdF) -> judge (fraîcheur + auto-annonce)
-        #  -> profile_enrich (profil : vire les établis type Le Palais + extrait
-        #     adresse/email/site/vraie ville). `posts` peut être fourni (rejeu cache).
         raw_posts = posts if posts is not None else scrape_hashtags(hashtags, limit)
-        leads = profile_enrich(judge(discover(raw_posts)))
-        stats.fetched = len(leads)
+        candidates = discover(raw_posts)
+        # Filtre cache : ne scrape/juge que les handles dus (recall-safe : un
+        # handle absent du cache ou hors fenêtre passe ; les not_venue/established
+        # récents sont sautés -> économie de scrape).
+        due = [c for c in candidates if verdict_cache.should_rejudge(session, c["handle"])]
+        profiles = scrape_profiles([c["handle"] for c in due]) if due else {}
+        today = date.today()
+        labeled = classify_profiles(due, profiles, match_fn=_match_result, today=today)
+        stats.fetched = len(labeled)
         seen_refs: set = set()
-        for lead in leads:
+        for c in labeled:
             try:
-                # Ville désormais issue du profil quand dispo -> meilleur match SIREN.
-                bf = _match_lead(lead)
-                # Signal déduit du verdict de fraîcheur (tous famille "opening",
-                # +3 au score). Défaut si le juge n'a pas tourné (fail-soft).
+                prof = profiles.get(c["handle"].lower()) or {}
+                # Écrit le verdict au cache pour TOUS les labels (y compris ceux
+                # qui ne deviennent pas des leads -> on ne les re-jugera pas avant
+                # leur fenêtre).
+                verdict_cache.upsert(session, c["handle"], c["label"],
+                                     c.get("confidence"), prof, today=today)
+                # Création de lead UNIQUEMENT pour opening_soon/just_opened/unknown
+                # (unknown = doute -> garde, protège le recall).
+                if c["label"] not in ("opening_soon", "just_opened", "unknown"):
+                    continue
                 main_signal = {
-                    "opening": "ouverture prochaine",
+                    "opening_soon": "ouverture prochaine",
                     "just_opened": "création récente",
-                }.get(lead.get("freshness"), "ouverture prochaine")
+                    "unknown": "ouverture prochaine",
+                }[c["label"]]
+                m = c.get("_match")
                 cand = LeadCandidate(
                     source="instagram",
-                    source_ref=lead["handle"],
-                    establishment_name=bf.get("enseigne") or lead["name"],
-                    city=lead["city"],
-                    address=lead.get("address", ""),
-                    email=lead.get("email"),
-                    website=lead.get("website"),
-                    extra_addresses=lead.get("extra_addresses", []),
-                    extra_emails=lead.get("extra_emails", []),
+                    source_ref=c["handle"],
+                    establishment_name=(m.enseigne if (m and m.enseigne) else c["name"]),
+                    city=c["city"],
+                    address=c.get("address", ""),
+                    email=c.get("email"),
+                    website=c.get("website"),
+                    extra_addresses=c.get("extra_addresses", []),
+                    extra_emails=c.get("extra_emails", []),
                     main_signal=main_signal,
-                    detection_date=date.today(),
-                    classification_text=lead["name"],
-                    establishment_type=lead["type"],  # pré-classé CHR à la découverte
-                    instagram=lead["handle"],
-                    siren=bf.get("siren"),
-                    naf=bf.get("naf"),
-                    siret=bf.get("siret"),
-                    siren_match_method=bf.get("method"),
-                    siren_match_confidence=bf.get("confidence"),
+                    detection_date=today,
+                    classification_text=c["name"],
+                    establishment_type=c["type"],  # pré-classé CHR à la découverte
+                    instagram=c["handle"],
+                    siren=(m.siren if m else None),
+                    naf=(m.naf if m else None),
+                    siret=(m.siret if m else None),
+                    siren_match_method=(m.method if m else None),
+                    siren_match_confidence=(m.confidence if m else None),
                 )
                 _process_candidate(session, cand, stats, seen_refs, enricher)
             except Exception:

@@ -13,21 +13,20 @@ import json
 import os
 import re
 import unicodedata
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 import requests
 
+from . import profile_guards
 from .enrichment.siret_matcher import _age_label
+
+# Sentinel : "résous le client OpenAI depuis l'env". Passer None = SANS juge
+# (déterministe, aucun appel LLM — indispensable pour les tests / fail-soft).
+_USE_ENV = object()
 
 APIFY_ACTOR = "apify~instagram-hashtag-scraper"
 PROFILE_ACTOR = "apify~instagram-profile-scraper"
-# Garde-fou déterministe : au-delà, un compte est clairement établi (Le Palais
-# = 200 posts). Volontairement haut : le LLM (qui lit les derniers posts) est le
-# vrai discriminateur ; ceci n'attrape que l'évident + sert de plancher si le LLM
-# est indisponible. NB : l'ÂGE des posts n'est PAS un critère (une pré-ouverture
-# peut teaser pendant des mois) — seuls le volume énorme et le CONTENU tranchent.
-POSTS_ESTABLISHED_HARD = 150
 # Hashtags CHR-orientés. Mesuré : les tags CHR (restaurantparis 73 %,
 # ouverturerestaurant 33 % de comptes CHR+IdF) sont 3-7x plus propres que les
 # génériques (ouvertureprochaine & co ~10 %) — on gaspille beaucoup moins de
@@ -140,95 +139,6 @@ def discover(posts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     return out
 
 
-# Fraîcheurs qui constituent une opportunité (le reste est rejeté par le juge).
-FRESH_KEEP = ("opening", "just_opened")
-
-
-def judge(candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Juge LLM — deux verdicts par compte, tous deux requis pour garder :
-
-    1) FRAÎCHEUR : l'heuristique dit "CHR + IdF" mais pas si le lieu OUVRE ou est
-       établi depuis 20 ans. Mesuré : ~30 % seulement des candidats sont de
-       vraies ouvertures. Valeurs opening / just_opened / established / unknown.
-    2) IDENTITÉ (`is_venue_owner`) : sous ces hashtags, ~1/3 des posts viennent
-       de comptes MÉDIA/influenceurs qui PARLENT d'un lieu (3e personne : "@x
-       s'installe") — le `ownerUsername` est alors le messager, pas le lieu.
-       Récupérer le vrai handle depuis la légende est non fiable (mesuré : 1 fois
-       sur 2 aucun mention propre, et parfois un faux — bout d'email…). Décision
-       produit : on ne garde QUE les auto-annonces (le posteur EST le lieu), où
-       le handle est fiable par construction. Les posts média sont rejetés.
-
-    Garde uniquement `freshness ∈ {opening, just_opened}` ET `is_venue_owner`.
-    Nettoie le nom et attache `freshness` (le pipeline en déduit le signal).
-
-    Fail-soft : sans OPENAI_API_KEY (ou erreur) -> renvoie l'entrée inchangée
-    (on retombe sur le seul filtre heuristique, sans garantie)."""
-    key = os.getenv("OPENAI_API_KEY")
-    if not key or not candidates:
-        return candidates
-    try:
-        from openai import OpenAI
-    except ImportError:
-        return candidates
-
-    listing = "\n".join(
-        f'{i}. @{c["handle"]} | nom: {c["name"]} | lieu: {c.get("city")} '
-        f'| légende: {c.get("caption", "")}'
-        for i, c in enumerate(candidates)
-    )
-    system = (
-        "Tu évalues des comptes Instagram sous des hashtags d'ouverture CHR (café, "
-        "restaurant, bar, hôtel, brasserie, boulangerie, traiteur, salon de thé) en "
-        "Île-de-France, pour un fournisseur B2B de luminaires/mobilier. Pour CHAQUE "
-        "compte, donne DEUX verdicts :\n"
-        "A) is_venue_owner (bool) : le compte qui poste EST-il l'établissement "
-        "lui-même ? true si auto-annonce à la 1re personne ('on ouvre', 'notre "
-        "nouvelle adresse', 'bientôt chez nous'). false si c'est un tiers "
-        "(média/guide/influenceur/agrégateur/compte perso) qui parle d'un lieu à la "
-        "3e personne ('@x s'installe', 'un nouveau resto ouvre').\n"
-        "B) freshness d'après des indices EXPLICITES dans la légende :\n"
-        "   - 'opening' : ouvre bientôt / pré-ouverture\n"
-        "   - 'just_opened' : a ouvert il y a peu (< ~3 mois)\n"
-        "   - 'established' : établi, AUCUN signal d'ouverture ; OU pas un vrai lieu "
-        "CHR (marque, produit, autre secteur)\n"
-        "   - 'unknown' : impossible à trancher\n"
-        "En cas de doute sur la fraîcheur -> 'unknown'/'established', JAMAIS "
-        "'opening'. En cas de doute sur l'identité -> is_venue_owner=false. "
-        "Donne aussi un nom d'enseigne propre (sans emojis ni slogan). "
-        "Réponds STRICTEMENT en JSON."
-    )
-    user = (
-        f"Voici {len(candidates)} comptes.\n"
-        'Format EXACT : {"results":[{"index":0,"is_venue_owner":true,'
-        '"freshness":"opening|just_opened|established|unknown","name":"Enseigne"}]}\n\n'
-        f"{listing}"
-    )
-    try:
-        client = OpenAI(api_key=key)
-        completion = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
-        data = json.loads(completion.choices[0].message.content)
-        by_index = {int(r["index"]): r for r in data.get("results", []) if "index" in r}
-    except Exception:
-        return candidates
-
-    kept: List[Dict[str, str]] = []
-    for i, c in enumerate(candidates):
-        r = by_index.get(i)
-        # Requiert les DEUX : vraie ouverture ET compte = le lieu (handle fiable).
-        if r and r.get("freshness") in FRESH_KEEP and r.get("is_venue_owner") is True:
-            c2 = dict(c)
-            if r.get("name"):
-                c2["name"] = str(r["name"]).strip()
-            c2["freshness"] = r["freshness"]
-            kept.append(c2)
-    return kept
-
-
 def scrape_profiles(handles: List[str], timeout: int = 180) -> Dict[str, Dict[str, Any]]:
     """Scrape les profils Instagram (actor profil) -> {username: profil}.
     2e passe, sur les seuls survivants (donc peu coûteuse). Fail-soft {} si pas de
@@ -267,25 +177,6 @@ def _struct_address(profile: Dict[str, Any]) -> Optional[str]:
     return ", ".join(parts) or None
 
 
-def _profile_long_history(profile: Dict[str, Any], today: date, threshold_days: int = 150) -> bool:
-    """True si l'exploitation dure depuis des mois => établi. On regarde le VIEUX
-    (historique long), pas le récent (=inactivité, autre signal). Robuste : on
-    exige PLUSIEURS posts anciens (historique soutenu), pas un seul — sinon un
-    throwback / post épinglé flaguerait à tort une vraie nouvelle adresse.
-    Déterministe, complète postsCount pour les comptes peu actifs mais anciens."""
-    dates: List[date] = []
-    for x in profile.get("latestPosts") or []:
-        ts = (x.get("timestamp") or "")[:10]
-        try:
-            dates.append(datetime.strptime(ts, "%Y-%m-%d").date())
-        except ValueError:
-            continue
-    if not dates:
-        return False
-    old = [d for d in dates if (today - d).days > threshold_days]
-    return len(old) >= min(3, len(dates))
-
-
 def _external_url(profile: Dict[str, Any]) -> Optional[str]:
     """URL de site (hors linktr.ee/agrégateurs) si disponible."""
     url = (profile.get("externalUrl") or "").strip()
@@ -298,93 +189,76 @@ def _external_url(profile: Dict[str, Any]) -> Optional[str]:
     return url or None
 
 
-def profile_enrich(
+def classify_profiles(
     candidates: List[Dict[str, Any]],
     profiles: Optional[Dict[str, Dict[str, Any]]] = None,
+    *, match_fn=None, client=_USE_ENV, today: Optional[date] = None,
 ) -> List[Dict[str, Any]]:
-    """3e étage : sur les survivants (auto-annonces fraîches), scrape le profil et
-    écarte les lieux DÉJÀ ÉTABLIS (des mois d'exploitation -> DROP, cas Le Palais),
-    en gardant pré-ouverture ET vient d'ouvrir, et en enrichissant au passage
-    adresse(s)/email(s)/site/ville.
-
-    `profiles` (dict {username: profil}) peut être injecté pour tourner sur des
-    snapshots figés (éval reproductible, sans réseau) ; sinon on scrape.
-
-    - Règle : postsCount > POSTS_ESTABLISHED_HARD -> DROP (garde-fou + plancher).
-    - Juge LLM : lit les ~6 derniers posts (légendes + dates). Discrimine sur le
-      LONG historique d'exploitation, pas l'âge. 'established' -> drop ; 'recent'
-      (ouvre / vient d'ouvrir) -> garde ; doute -> garde.
-      Extrait aussi addresses[] et emails[] (bio + posts).
-
-    Fail-soft : pas de profil (token/erreur) -> candidats inchangés (ni drop ni
-    enrichissement). Pas de clé OpenAI -> seule la règle postsCount s'applique."""
+    """Étiquette CHAQUE candidat (survivant de discover) d'un label de cycle de
+    vie. Chaîne : garde-fous déterministes (profile_guards) -> sinon matcher SIRET
+    (AVANT le juge, pour que le dossier inclue le registre) -> juge unitaire
+    (judge_dossier). Enrichit au passage adresse/email/site/ville des comptes non
+    écartés par les gardes. Fonction sans DB : `match_fn` et `client` injectables
+    (tests/éval sans réseau). Renvoie TOUS les candidats annotés `label`,
+    `confidence`, `_match` (+ enrichissement) — le FILTRAGE (quel label devient un
+    lead) est la responsabilité de run_instagram."""
     if not candidates:
         return candidates
-    if profiles is None:
-        profiles = scrape_profiles([c["handle"] for c in candidates])
-    if not profiles:
-        return candidates  # scrape indispo : on ne casse rien
+    today = today or date.today()
+    profiles = profiles or {}
+    resolved_client = _openai_client() if client is _USE_ENV else client
 
-    # Contexte profil + garde-fous DÉTERMINISTES (fiables, reproductibles) :
-    #  - postsCount énorme -> établi (Le Palais 200) ;
-    #  - plus vieux post récent daté de +5 mois -> exploitation longue (attrape
-    #    les comptes peu actifs mais anciens : 11 posts étalés sur 2 ans).
-    today = date.today()
-    survivors: List[Dict[str, Any]] = []
+    out: List[Dict[str, Any]] = []
     for c in candidates:
         prof = profiles.get(c["handle"].lower()) or {}
-        c["_profile"] = prof
-        posts_count = prof.get("postsCount")
-        if isinstance(posts_count, int) and posts_count > POSTS_ESTABLISHED_HARD:
-            continue
-        if _profile_long_history(prof, today):
-            continue
-        survivors.append(c)
-
-    # Client LLM créé une fois, appelé UNITAIREMENT (1 profil / appel). Le batch
-    # faisait fuiter adresses ET verdicts d'un compte à l'autre — en isolé, plus
-    # de contamination et verdict reproductible.
-    client = _openai_client()
-
-    kept: List[Dict[str, Any]] = []
-    for c in survivors:
-        prof = c.pop("_profile", {}) or {}
-        # Profil vide (scrape raté/privé) -> gardé sans juger (aucune preuve).
         has_data = bool(prof.get("latestPosts") or prof.get("postsCount") is not None)
-        # Brique 3, T3 : profile_enrich reste binaire garder/écarter mais son
-        # jugement passe au juge v2. Le recâblage complet en labels arrive en T4.
-        v = judge_dossier(client, c["handle"], c.get("name"), prof,
-                          caption=c.get("caption"), today=today) if (client and has_data) else {}
-        # Drop uniquement le vraiment ÉTABLI (des mois d'exploitation). On garde
-        # pré-ouverture ET vient d'ouvrir. Sinon (pas de clé/erreur) on garde
-        # (la règle postsCount a déjà filtré l'évident).
-        if v.get("label") in ("established", "chain_multisite", "not_venue", "noise"):
+
+        # 1. Garde-fous déterministes (gratuits, avant tout LLM).
+        guard = profile_guards.guard_verdict(prof, today) if has_data else None
+        if guard:
+            c["label"] = guard
+            c["confidence"] = "haute"
+            c["_match"] = None
+            out.append(c)
             continue
-        # --- enrichissement ---
+
+        # 2. Pré-enrichissement dispo immédiatement (nourrit le matcher).
         struct_addr = _struct_address(prof)
         struct_city = _clean_city((prof.get("businessAddress") or {}).get("city_name"))
-        llm_addrs = [a for a in (v.get("addresses") or []) if a]
-        llm_emails = [e for e in (v.get("emails") or []) if e]
-        biz_email = (prof.get("businessEmail") or prof.get("public_email") or "").strip()
+        if struct_addr:
+            c["address"] = struct_addr
+        c["bio_snippet"] = (prof.get("biography") or "")[:300]
 
+        # 3. Matcher SIRET AVANT le juge (le dossier inclut le registre).
+        match = match_fn(c) if match_fn else None
+        c["_match"] = match
+
+        # 4. Juge unitaire (fail-soft : doute -> unknown = gardé).
+        verdict = (judge_dossier(resolved_client, c["handle"], c.get("name"), prof,
+                                 caption=c.get("caption"), match_result=match, today=today)
+                   if (resolved_client and has_data) else {})
+        c["label"] = verdict.get("label") or "unknown"
+        c["confidence"] = verdict.get("confidence") or ("basse" if not verdict else "moyenne")
+
+        # 5. Post-enrichissement (utile aux leads gardés).
+        llm_addrs = [a for a in (verdict.get("addresses") or []) if a]
+        llm_emails = [e for e in (verdict.get("emails") or []) if e]
+        biz_email = (prof.get("businessEmail") or prof.get("public_email") or "").strip()
         addresses = ([struct_addr] if struct_addr else []) + [a for a in llm_addrs if a != struct_addr]
         emails = ([biz_email] if biz_email else []) + [e for e in llm_emails if e != biz_email]
-
         if addresses:
             c["address"] = addresses[0]
             c["extra_addresses"] = addresses[1:]
         if struct_city:
-            c["city"] = struct_city  # vraie ville -> corrige les 'villes bancales'
+            c["city"] = struct_city
         if emails:
             c["email"] = emails[0]
             c["extra_emails"] = emails[1:]
         website = _external_url(prof)
         if website:
             c["website"] = website
-        # Contexte pour l'arbitre du matching SIREN (pipeline).
-        c["bio_snippet"] = (prof.get("biography") or "")[:300]
-        kept.append(c)
-    return kept
+        out.append(c)
+    return out
 
 
 def _openai_client():
