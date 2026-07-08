@@ -230,6 +230,12 @@ def classify_profiles(
         c["bio_snippet"] = (prof.get("biography") or "")[:300]
 
         # 3. Matcher SIRET AVANT le juge (le dossier inclut le registre).
+        # COÛT ASSUMÉ [revue finale] : le matcher (recherche + geocode Sirene, plus
+        # arbitre LLM si pool ambigu) tourne pour CHAQUE candidate survivant aux
+        # gardes, y compris celles que le juge écartera ensuite (established/
+        # not_venue non pris par les gardes déterministes). Délibéré (le dossier du
+        # juge doit contenir le registre) mais à surveiller côté quotas/rate-limit
+        # Sirene et budget arbitre.
         match = match_fn(c) if match_fn else None
         c["_match"] = match
 

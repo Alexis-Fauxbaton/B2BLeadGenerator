@@ -39,6 +39,13 @@ FRESH_LABELS = {"opening_soon", "just_opened", "unknown"}
 TRUTH_LABEL_MAP = {"opening": "opening_soon"}
 # Gates durs d'acceptation.
 GATE_RECALL_OPENING = 1.0
+# Plancher de précision a_contacter (valeur d'origine, jamais affaiblie).
+# NOTE [revue finale] : la précision mesurée actuelle (~33 % = 4/12) est POSÉE
+# SUR ce plancher, marge quasi nulle — un seul faux positif de plus (4/13 = 31 %)
+# ou une dérive prompt/modèle fait passer la gate sous le seuil. Le classifieur
+# n'est pas « nettement mieux » que le plancher, il EST le plancher. À corriger
+# en réduisant les faux positifs (reprendre de la marge) ; documenté ici pour
+# qu'une régression future soit comprise et non subie.
 GATE_MIN_PRECISION = 0.33
 
 # Bucket cible par label vérité (cf. README). Sert à l'affichage : le statut

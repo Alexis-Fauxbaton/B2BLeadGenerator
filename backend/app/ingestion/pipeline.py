@@ -267,6 +267,11 @@ def run_instagram(
         # Filtre cache : ne scrape/juge que les handles dus (recall-safe : un
         # handle absent du cache ou hors fenêtre passe ; les not_venue/established
         # récents sont sautés -> économie de scrape).
+        # COÛT ASSUMÉ [revue finale] : le pré-filtre caption (ancien juge groupé)
+        # a été retiré ; au cold-start (cache vide) et pour tout nouveau handle on
+        # paie donc un profile scrape Apify (+ un passage matcher, cf.
+        # classify_profiles) PAR candidate CHR+IdF, pas seulement pour les
+        # ouvertures. Le cache n'amortit que les runs répétés, pas le 1er passage.
         due = [c for c in candidates if verdict_cache.should_rejudge(session, c["handle"])]
         profiles = scrape_profiles([c["handle"] for c in due]) if due else {}
         today = date.today()
@@ -274,17 +279,32 @@ def run_instagram(
         stats.fetched = len(labeled)
         seen_refs: set = set()
         for c in labeled:
+            prof = profiles.get(c["handle"].lower()) or {}
+            has_data = bool(prof.get("latestPosts") or prof.get("postsCount") is not None)
+            # CACHE — n'écrire un verdict QUE s'il repose sur une vraie évidence de
+            # profil ET un vrai jugement. Un 'unknown' de confiance 'basse' (scrape
+            # échoué -> prof vide, clé LLM absente, ou juge en erreur) N'EST PAS
+            # caché : le handle reste « dû » et sera re-scrapé/re-jugé au prochain
+            # run plutôt qu'endormi 2 mois. Sinon une seule panne transitoire
+            # suffirait à endormir tout le set découvert et à casser le recall.
+            cacheable = has_data and not (
+                c["label"] == "unknown" and (c.get("confidence") or "basse") == "basse"
+            )
+            if cacheable:
+                # Verdict persisté INDÉPENDAMMENT du sort du lead (commit isolé) :
+                # un échec d'enrichissement plus bas ne doit annuler ni ce verdict
+                # ni les verdicts/leads déjà réussis des candidats précédents du lot.
+                try:
+                    verdict_cache.upsert(session, c["handle"], c["label"],
+                                         c.get("confidence"), prof, today=today)
+                    session.commit()
+                except Exception:
+                    session.rollback()
+            # Création de lead UNIQUEMENT pour opening_soon/just_opened/unknown
+            # (unknown = doute -> garde, protège le recall).
+            if c["label"] not in ("opening_soon", "just_opened", "unknown"):
+                continue
             try:
-                prof = profiles.get(c["handle"].lower()) or {}
-                # Écrit le verdict au cache pour TOUS les labels (y compris ceux
-                # qui ne deviennent pas des leads -> on ne les re-jugera pas avant
-                # leur fenêtre).
-                verdict_cache.upsert(session, c["handle"], c["label"],
-                                     c.get("confidence"), prof, today=today)
-                # Création de lead UNIQUEMENT pour opening_soon/just_opened/unknown
-                # (unknown = doute -> garde, protège le recall).
-                if c["label"] not in ("opening_soon", "just_opened", "unknown"):
-                    continue
                 main_signal = {
                     "opening_soon": "ouverture prochaine",
                     "just_opened": "création récente",
@@ -313,6 +333,9 @@ def run_instagram(
                     siren_match_confidence=(m.confidence if m else None),
                 )
                 _process_candidate(session, cand, stats, seen_refs, enricher)
+                # Commit PAR candidat réussi : un échec ultérieur ne défait pas ce
+                # lead ni les précédents (isolation transactionnelle du lot).
+                session.commit()
             except Exception:
                 stats.errors += 1
                 session.rollback()

@@ -2,9 +2,18 @@
 
 Métier PUR, session SQLModel injectée (aucun engine global) : le cache évite de
 re-scraper/re-juger un handle déjà tranché tant que sa fenêtre de revisite n'est
-pas expirée ET que son profil n'a pas changé. Fenêtres : not_venue +12 mois,
-established/chain_multisite +6 mois, noise/unknown +2 mois, opening_soon/
-just_opened jamais mis en sommeil (watchlist active, brique 4).
+pas expirée. Fenêtres : not_venue +12 mois, established/chain_multisite +6 mois,
+noise/unknown +2 mois, opening_soon/just_opened jamais mis en sommeil (watchlist
+active, brique 4).
+
+INVALIDATION PAR EMPREINTE (profile_hash) — ATTENTION : elle n'est exercée que
+lorsqu'un profil est PASSÉ à should_rejudge. Or le seul appelant en production
+(pipeline.run_instagram) l'appelle AVANT le scrape avec `profile=None` (on ne
+peut pas comparer une empreinte qu'on n'a pas encore scrapée). Donc AUJOURD'HUI
+seule la fenêtre temporelle pilote la revisite ; le contrôle d'empreinte est
+RÉSERVÉ à la revisite périodique légère de la brique 4 (qui, elle, aura le
+profil en main). Le hash est écrit à chaque upsert pour que ce chemin futur
+existe, mais ne déclenche aucune invalidation dans le flux hashtag actuel.
 Cf. docs/inventory-pivot-design.md (« Cache de verdicts »).
 """
 from __future__ import annotations
@@ -65,9 +74,13 @@ def should_rejudge(
     session: Session, handle: str,
     profile: Optional[Dict[str, Any]] = None, today: Optional[date] = None,
 ) -> bool:
-    """True s'il faut (re)scraper/re-juger ce handle. Appelé AVANT le scrape avec
-    `profile=None` (décision sur la seule fenêtre) ; le contrôle d'empreinte
-    `profile_hash` n'a lieu que si un profil est fourni."""
+    """True s'il faut (re)scraper/re-juger ce handle. En production, appelé AVANT
+    le scrape avec `profile=None` -> décision sur la SEULE fenêtre temporelle. Le
+    contrôle d'empreinte `profile_hash` n'a lieu que si un profil est fourni, ce
+    qui n'arrive PAS dans le flux hashtag actuel (réservé à la revisite périodique
+    de la brique 4). NB : tant que ce chemin n'existe pas, un not_venue mal jugé
+    reste verrouillé toute sa fenêtre (12 mois) sans échappatoire par changement
+    de profil — à garder en tête au moment de câbler la brique 4."""
     today = today or date.today()
     v = get(session, handle)
     if v is None:

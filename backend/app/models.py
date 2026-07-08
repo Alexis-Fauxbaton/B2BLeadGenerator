@@ -205,10 +205,13 @@ class Settings(SQLModel, table=True):
 
 
 class HandleVerdict(SQLModel, table=True):
-    """Cache des verdicts du funnel Insta v2 (brique 3). Un handle revu par les
-    hashtags n'est re-scrapé/re-jugé que si `now > revisit_after` OU si le profil
-    a changé (`profile_hash`). Les `opening_soon`/`just_opened` ne sont jamais
-    mis en sommeil (`revisit_after=None`) : ils restent sur la watchlist."""
+    """Cache des verdicts du funnel Insta v2 (brique 3). Dans le flux hashtag
+    actuel, un handle n'est re-scrapé/re-jugé que si `now > revisit_after` (seule
+    la fenêtre temporelle décide : should_rejudge est appelé avant le scrape, sans
+    profil). L'invalidation par `profile_hash` (« si le profil a changé ») est
+    ÉCRITE mais pas encore exercée — réservée à la revisite périodique de la brique
+    4. Les `opening_soon`/`just_opened` ne sont jamais mis en sommeil
+    (`revisit_after=None`) : ils restent sur la watchlist."""
     __tablename__ = "handle_verdicts"
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -218,5 +221,6 @@ class HandleVerdict(SQLModel, table=True):
     judged_at: datetime = Field(default_factory=datetime.utcnow)
     # Date à partir de laquelle re-juger. NULL = jamais mis en sommeil (watchlist).
     revisit_after: Optional[date] = None
-    # sha1(biography + postsCount) : si le profil change, re-juger hors fenêtre.
+    # sha1(biography + postsCount). Destiné à re-juger hors fenêtre si le profil
+    # change — chemin réservé à la brique 4 (non déclenché par le flux actuel).
     profile_hash: str = ""

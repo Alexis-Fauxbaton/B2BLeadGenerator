@@ -6,8 +6,9 @@
   python -m app.ingestion.eval.match_eval --live     # live sans fixtures
 
 HTTP (Sirene/BAN) figé en fixtures ; l'arbitre LLM tourne live si clé présente
-(température 0), comme l'éval de classification. Gates : 0 faux merge, rappel
-des matchs attendus affiché (référence : 9 attendus au 2026-07-04).
+(température 0), comme l'éval de classification. Gates DURS (tenus par le code
+de sortie, cf. main) : 0 faux merge ET rappel >= GATE_MIN_MATCHES des matchs
+attendus (référence : 9 attendus au 2026-07-04, plancher 8/9).
 """
 from __future__ import annotations
 
@@ -23,6 +24,13 @@ from .run import load_groundtruth, load_snapshot
 
 ROOT = Path(__file__).resolve().parent
 FIX_DIR = ROOT / "fixtures" / "match"
+
+# Plancher de rappel du matching, tenu par le CODE DE SORTIE (pas seulement
+# affiché) : la gate est « 0 faux merge ET au moins GATE_MIN_MATCHES matchs
+# attendus retrouvés ». Sans ce plancher, un effondrement du rappel (ex. 3/9,
+# tout le reste basculant en 'missed') laisserait false_merges vide et sortirait
+# 0 — une CI ne détecterait pas la régression. Référence : 9 attendus, 8/9 exigé.
+GATE_MIN_MATCHES = 8
 
 # Ville probable par handle (ce que discover/locationName fournirait en prod).
 CITY_HINTS = {
@@ -170,6 +178,10 @@ def main() -> None:
               f' obtenu={r["got"] or "-":<11} ({r["method"] or ""})')
     if rep["false_merges"]:
         print(f'\n!! FAUX MERGES ({len(rep["false_merges"])}) — GATE ROUGE, à corriger avant de continuer')
+    recall_ok = rep["ok"] >= GATE_MIN_MATCHES
+    if not recall_ok:
+        print(f'\n!! RAPPEL SOUS LE PLANCHER : {rep["ok"]}/{rep["n_expected"]} '
+              f'matchs retrouvés (<{GATE_MIN_MATCHES} exigés) — GATE ROUGE')
     print("=" * 64)
 
     missing = [r for r in rep["results"] if r.get("fixture_misses")]
@@ -177,7 +189,9 @@ def main() -> None:
         detail = " ".join(f'{r["handle"]}={r["fixture_misses"]}' for r in missing)
         print(f'!! FIXTURES MANQUANTES: {detail} -> relancer --record')
 
-    if rep["false_merges"]:
+    # Gate DUR : 0 faux merge ET rappel >= plancher. Le rappel n'est plus
+    # seulement affiché — il fait échouer la CI en cas de chute silencieuse.
+    if rep["false_merges"] or not recall_ok:
         sys.exit(1)
 
 
