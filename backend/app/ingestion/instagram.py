@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from .enrichment.siret_matcher import _age_label
+
 APIFY_ACTOR = "apify~instagram-hashtag-scraper"
 PROFILE_ACTOR = "apify~instagram-profile-scraper"
 # Garde-fou déterministe : au-delà, un compte est clairement établi (Le Palais
@@ -349,11 +351,14 @@ def profile_enrich(
         prof = c.pop("_profile", {}) or {}
         # Profil vide (scrape raté/privé) -> gardé sans juger (aucune preuve).
         has_data = bool(prof.get("latestPosts") or prof.get("postsCount") is not None)
-        v = _judge_profile(client, c["handle"], c.get("name"), prof) if (client and has_data) else {}
+        # Brique 3, T3 : profile_enrich reste binaire garder/écarter mais son
+        # jugement passe au juge v2. Le recâblage complet en labels arrive en T4.
+        v = judge_dossier(client, c["handle"], c.get("name"), prof,
+                          caption=c.get("caption"), today=today) if (client and has_data) else {}
         # Drop uniquement le vraiment ÉTABLI (des mois d'exploitation). On garde
         # pré-ouverture ET vient d'ouvrir. Sinon (pas de clé/erreur) on garde
         # (la règle postsCount a déjà filtré l'évident).
-        if v.get("status") == "established":
+        if v.get("label") in ("established", "chain_multisite", "not_venue", "noise"):
             continue
         # --- enrichissement ---
         struct_addr = _struct_address(prof)
@@ -382,27 +387,6 @@ def profile_enrich(
     return kept
 
 
-_PROFILE_SYSTEM = (
-    "Tu analyses UN profil Instagram d'établissement CHR pour un fournisseur B2B. "
-    "But : écarter les lieux DÉJÀ ÉTABLIS et garder ceux qui OUVRENT ou VIENNENT "
-    "D'OUVRIR (encore en phase d'aménagement = bon prospect). status :\n"
-    "- 'established' : opère depuis PLUSIEURS MOIS — historique de service récurrent "
-    "(programme du mois, réservations, événements réguliers, nombreux posts "
-    "d'exploitation sur une longue période). À ÉCARTER.\n"
-    "- 'recent' : ouvre bientôt (travaux, 'bientôt', compte à rebours) OU vient "
-    "d'ouvrir récemment (lancement, premières semaines, peu d'historique). À GARDER.\n"
-    "Indices d'ÉTABLI dans la BIO ou les posts : 'depuis <année>', 'ouvert depuis', "
-    "'X ans', 'anniversaire' / 'X an(s)' fêté, posts de service de plusieurs mois/"
-    "années. Un COMPTE neuf ne veut pas dire établissement neuf (ex. bio 'nouveau "
-    "compte, ouverts depuis 1995' = établi).\n"
-    "RÈGLE : si une DATE d'ouverture récente/à venir est mentionnée, c'est 'recent'. "
-    "L'ÂGE des posts seul ne compte pas (une pré-ouverture peut teaser des mois). Ce "
-    "qui compte : y a-t-il un LONG historique d'EXPLOITATION ? DOUTE -> 'recent'. "
-    "Extrait aussi, UNIQUEMENT depuis la bio/les posts de CE compte : addresses "
-    "(adresses postales complètes) et emails. Réponds STRICTEMENT en JSON."
-)
-
-
 def _openai_client():
     """Client OpenAI, ou None (fail-soft : pas de clé / SDK absent / erreur)."""
     key = os.getenv("OPENAI_API_KEY")
@@ -415,29 +399,81 @@ def _openai_client():
         return None
 
 
-def _judge_profile(client, handle: str, name: Optional[str], profile: Dict[str, Any]) -> Dict[str, Any]:
-    """Juge UN profil (établi/récent + extraction adresses/emails). Appel isolé :
-    aucune contamination entre comptes. Fail-soft {} en cas d'erreur."""
+_DOSSIER_SYSTEM = (
+    "Tu étiquettes le CYCLE DE VIE d'UN compte Instagram d'établissement CHR "
+    "(café, restaurant, bar, hôtel, brasserie, boulangerie, traiteur, salon de "
+    "thé) en Île-de-France, pour un fournisseur B2B de luminaires/mobilier. On te "
+    "donne un dossier complet : bio, compteurs, catégorie, derniers posts DATÉS "
+    "(âge déjà calculé), légende de découverte, et le résultat du registre Sirene "
+    "(enseigne, NAF, âge de la société). Choisis UN label :\n"
+    "- opening_soon : ouvre bientôt / pré-ouverture (travaux, 'bientôt', compte à "
+    "rebours, aucune exploitation en cours).\n"
+    "- just_opened : a ouvert il y a peu (premières semaines/mois, société créée "
+    "récemment, peu d'historique d'exploitation).\n"
+    "- established : opère depuis des mois/années (historique de service, "
+    "'depuis <année>', anniversaire, société ancienne au registre).\n"
+    "- chain_multisite : marque à plusieurs adresses (décor répliqué, non "
+    "prioritaire).\n"
+    "- not_venue : pas un établissement CHR (marque, produit, agence, média, hors "
+    "France).\n"
+    "- noise : compte quasi mort / sans valeur (aucun contenu exploitable).\n"
+    "- unknown : impossible de trancher.\n"
+    "RÈGLES : l'ÂGE des posts seul ne tranche pas (une pré-ouverture peut teaser "
+    "des mois) — ce qui compte est le LONG historique d'EXPLOITATION et l'âge de "
+    "la société au registre. En cas de doute sur la fraîcheur -> unknown, JAMAIS "
+    "opening_soon par défaut. Raisonne D'ABORD brièvement (2 phrases : signaux "
+    "d'exploitation, cohérence registre) PUIS décide. Extrais aussi, UNIQUEMENT "
+    "depuis la bio/les posts de CE compte, addresses (adresses postales complètes) "
+    "et emails. Réponds STRICTEMENT en JSON."
+)
+
+
+def judge_dossier(client, handle: str, name: Optional[str],
+                  profile: Dict[str, Any], caption: Optional[str] = None,
+                  match_result=None, today: Optional[date] = None) -> Dict[str, Any]:
+    """Juge v2 UNITAIRE : un appel LLM par compte sur le dossier complet. Renvoie
+    {reasoning, label, confidence, addresses, emails, opening_date} ou {} (fail-
+    soft : pas de client / erreur / JSON invalide). Toute arithmétique de dates
+    est PRÉCALCULÉE en code (_age_label) — les petits LLM ratent les
+    soustractions de dates brutes (leçon des rounds matcher)."""
+    if client is None:
+        return {}
+    today = today or date.today()
     latest = profile.get("latestPosts") or []
-    recents = "\n".join(
-        f'  - {(x.get("timestamp") or "?")[:10]} : {(x.get("caption") or "")[:180]}'
-        for x in latest[:6]
+    posts_block = "\n".join(
+        f'  - {_age_label((x.get("timestamp") or "")[:10], today)} : '
+        f'{(x.get("caption") or "")[:180]}'
+        for x in latest[:12]
     )
+    if match_result is not None:
+        registre = (
+            f'enseigne={match_result.enseigne or "?"} | NAF={match_result.naf or "?"} '
+            f'| société créée {_age_label(match_result.date_creation, today)}'
+        )
+    else:
+        registre = "(aucun match au registre)"
     block = (
         f'@{handle} | {name} | posts={profile.get("postsCount")} '
-        f'| abonnés={profile.get("followersCount")} | catégorie={profile.get("businessCategoryName")}\n'
-        f'bio: {(profile.get("biography") or "")[:250]}\n'
-        f'derniers posts:\n{recents or "  (aucun)"}'
+        f'| abonnés={profile.get("followersCount")} '
+        f'| catégorie={profile.get("businessCategoryName")}\n'
+        f'bio : {(profile.get("biography") or "")[:250]}\n'
+        f'légende de découverte : {(caption or "")[:200]}\n'
+        f'registre Sirene : {registre}\n'
+        f'derniers posts (âge daté) :\n{posts_block or "  (aucun)"}'
     )
     user = (
-        "Profil :\n" + block + "\n\n"
-        'Format EXACT : {"status":"established|recent","opening_date":"YYYY-MM-DD|null",'
-        '"addresses":[],"emails":[]}'
+        f"Date du jour : {today.isoformat()}\n"
+        f"Dossier :\n{block}\n\n"
+        'Format EXACT : {"reasoning":"<2 phrases max>","label":"opening_soon|'
+        'just_opened|established|chain_multisite|not_venue|noise|unknown",'
+        '"confidence":"haute|moyenne|basse","addresses":[],"emails":[],'
+        '"opening_date":"YYYY-MM-DD|null"}'
     )
     try:
         completion = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            messages=[{"role": "system", "content": _PROFILE_SYSTEM}, {"role": "user", "content": user}],
+            messages=[{"role": "system", "content": _DOSSIER_SYSTEM},
+                      {"role": "user", "content": user}],
             response_format={"type": "json_object"},
             temperature=0,
         )
