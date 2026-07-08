@@ -33,6 +33,14 @@ RESULT_PATH = ROOT / "eval_result.json"  # cache du dernier résultat détaillé
 
 ECARTE = "ecarte"
 
+# Labels prédits qui tombent dans le bucket "à contacter" (projection binaire).
+FRESH_LABELS = {"opening_soon", "just_opened", "unknown"}
+# Mapping du label VÉRITÉ (CSV) vers l'espace des labels prédits.
+TRUTH_LABEL_MAP = {"opening": "opening_soon"}
+# Gates durs d'acceptation.
+GATE_RECALL_OPENING = 1.0
+GATE_MIN_PRECISION = 0.33
+
 # Bucket cible par label vérité (cf. README). Sert à l'affichage : le statut
 # "véridique" attendu. La prédiction actuelle est binaire (a_contacter/ecarte).
 TRUE_BUCKET = {
@@ -86,9 +94,8 @@ def load_snapshot(handle: str) -> Optional[dict]:
 
 
 def classify(snapshots: Dict[str, dict]) -> Dict[str, str]:
-    """Projette le label du funnel v2 dans l'espace des buckets binaires.
-    `snapshots` = {handle: profil figé}. -> {handle: 'a_contacter'|'ecarte'}.
-    (La matrice de confusion par LABEL est ajoutée en T5.)"""
+    """Label de cycle de vie prédit par le funnel v2 pour chaque handle.
+    `snapshots` = {handle: profil figé}. -> {handle: label}."""
     from ..instagram import classify_profiles
 
     candidates = [
@@ -97,12 +104,12 @@ def classify(snapshots: Dict[str, dict]) -> Dict[str, str]:
     ]
     injected = {h.lower(): snap for h, snap in snapshots.items()}
     labeled = classify_profiles([dict(c) for c in candidates], injected, match_fn=None)
-    fresh = {"opening_soon", "just_opened", "unknown"}
-    by_handle = {c["handle"]: c["label"] for c in labeled}
-    return {h: (A_CONTACTER if by_handle.get(h) in fresh else ECARTE) for h in snapshots}
+    return {c["handle"]: c["label"] for c in labeled}
 
 
 def run_eval(strict: bool = False) -> dict:
+    from .metrics import label_confusion
+
     rows = load_groundtruth()
     snapshots: Dict[str, dict] = {}
     missing: List[str] = []
@@ -118,17 +125,35 @@ def run_eval(strict: bool = False) -> dict:
             continue
         snapshots[handle] = snap
 
-    predictions = classify(snapshots) if snapshots else {}
+    predicted_labels = classify(snapshots) if snapshots else {}
     label_by_handle = {r["handle"].strip(): r["label"].strip() for r in rows}
-    pairs = [(label_by_handle[h], predictions[h]) for h in snapshots]
 
+    # Projection binaire (métrique historique : precision a_contacter / recall opening).
+    buckets = {h: (A_CONTACTER if predicted_labels[h] in FRESH_LABELS else ECARTE)
+               for h in snapshots}
+    pairs = [(label_by_handle[h], buckets[h]) for h in snapshots]
     report = summarize(pairs)
+
+    # Matrice de confusion par LABEL (label vérité mappé × label prédit).
+    label_pairs = [
+        (TRUTH_LABEL_MAP.get(label_by_handle[h], label_by_handle[h]), predicted_labels[h])
+        for h in snapshots
+    ]
+    labels_matrix = label_confusion(label_pairs)
+
+    gate_recall = report.recall_opening is not None and report.recall_opening >= GATE_RECALL_OPENING
+    gate_precision = report.precision_a_contacter is not None and report.precision_a_contacter >= GATE_MIN_PRECISION
     return {
         "report": report,
         "missing_snapshots": missing,
         "excluded_low_confidence": excluded_low,
-        "predictions": predictions,
+        "predictions": buckets,
+        "predicted_labels": predicted_labels,
         "label_by_handle": label_by_handle,
+        "labels_matrix": labels_matrix,
+        "gate_recall_opening": gate_recall,
+        "gate_precision": gate_precision,
+        "gates_pass": gate_recall and gate_precision,
     }
 
 
@@ -151,6 +176,7 @@ def detailed_result(strict: bool = False) -> dict:
             "true_label": label,
             "true_bucket": TRUE_BUCKET.get(label, "?"),
             "predicted_bucket": pred,
+            "predicted_label": res["predicted_labels"].get(h),
             "confidence": row.get("confidence", "").strip(),
             "provenance": row.get("provenance", "").strip(),
             "rationale": row.get("rationale", "").strip(),
@@ -225,6 +251,20 @@ def print_report(result: dict) -> None:
         ]
         for h in fp_handles:
             print(f"  - {h}  (vérité: {result['label_by_handle'].get(h)})")
+    print()
+    print("Matrice de confusion par LABEL (vérité mappée -> label prédit) :")
+    from .metrics import LABEL_ORDER
+    matrix = result["labels_matrix"]
+    cols = LABEL_ORDER
+    print(f"  {'vérité':<16} " + " ".join(f"{c[:8]:>9}" for c in cols))
+    for label in LABEL_ORDER:
+        if label in matrix:
+            row = matrix[label]
+            print(f"  {label:<16} " + " ".join(f"{row.get(c, 0):>9}" for c in cols))
+    print()
+    ok = "OK" if result["gates_pass"] else "ÉCHEC"
+    print(f"GATES : rappel opening>=100% = {result['gate_recall_opening']} | "
+          f"précision a_contacter>=33% = {result['gate_precision']}  -> {ok}")
     print("=" * 60)
 
 
@@ -264,11 +304,15 @@ def main() -> None:
     if args.json:
         payload = {
             **result["report"].as_dict(),
+            "labels_matrix": result["labels_matrix"],
+            "gates_pass": result["gates_pass"],
             "missing_snapshots": result["missing_snapshots"],
             "excluded_low_confidence": result["excluded_low_confidence"],
         }
         Path(args.json).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"Rapport JSON écrit : {args.json}")
+    import sys
+    sys.exit(0 if result["gates_pass"] else 1)
 
 
 if __name__ == "__main__":

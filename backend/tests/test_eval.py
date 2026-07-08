@@ -81,3 +81,18 @@ def test_report_as_dict_serialisable():
     report = summarize([("opening", A_CONTACTER), ("noise", ECARTE)])
     # doit être sérialisable en JSON sans erreur
     json.dumps(report.as_dict())
+
+
+def test_label_confusion_matrix():
+    from app.ingestion.eval.metrics import label_confusion
+    pairs = [
+        ("opening_soon", "opening_soon"),
+        ("opening_soon", "unknown"),
+        ("chain_multisite", "chain_multisite"),
+        ("not_venue", "established"),
+    ]
+    m = label_confusion(pairs)
+    assert m["opening_soon"]["opening_soon"] == 1
+    assert m["opening_soon"]["unknown"] == 1
+    assert m["chain_multisite"]["chain_multisite"] == 1
+    assert m["not_venue"]["established"] == 1
