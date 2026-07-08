@@ -202,3 +202,21 @@ class Settings(SQLModel, table=True):
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime, server_default=func.now(), onupdate=func.now()),
     )
+
+
+class HandleVerdict(SQLModel, table=True):
+    """Cache des verdicts du funnel Insta v2 (brique 3). Un handle revu par les
+    hashtags n'est re-scrapé/re-jugé que si `now > revisit_after` OU si le profil
+    a changé (`profile_hash`). Les `opening_soon`/`just_opened` ne sont jamais
+    mis en sommeil (`revisit_after=None`) : ils restent sur la watchlist."""
+    __tablename__ = "handle_verdicts"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    handle: str = Field(index=True, unique=True)
+    verdict: str
+    confidence: Optional[str] = None
+    judged_at: datetime = Field(default_factory=datetime.utcnow)
+    # Date à partir de laquelle re-juger. NULL = jamais mis en sommeil (watchlist).
+    revisit_after: Optional[date] = None
+    # sha1(biography + postsCount) : si le profil change, re-juger hors fenêtre.
+    profile_hash: str = ""
