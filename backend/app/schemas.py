@@ -75,6 +75,7 @@ class OpportunityList(OpportunityBase):
     id: int
     source: str = "demo"
     source_ref: Optional[str] = None
+    lifecycle_label: Optional[str] = None
     siren: Optional[str] = None
     naf: Optional[str] = None
     phone: Optional[str] = None

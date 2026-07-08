@@ -40,6 +40,9 @@ class LeadCandidate:
     extra_addresses: List[str] = field(default_factory=list)  # lieux multiples (groupe)
     extra_emails: List[str] = field(default_factory=list)
     secondary_signals: List[str] = field(default_factory=list)
+    # Label de cycle de vie du funnel Insta (persisté sur la fiche). None pour les
+    # sources registre (BODACC/Sirene).
+    lifecycle_label: Optional[str] = None
     decision_maker: Optional[str] = None
     dirigeants: List[str] = field(default_factory=list)
     establishment_type: Optional[str] = None

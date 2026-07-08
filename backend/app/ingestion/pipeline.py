@@ -384,6 +384,7 @@ def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate
     opp.website = opp.website or cand.website
     opp.instagram = opp.instagram or cand.instagram
     opp.naf = opp.naf or cand.naf
+    opp.lifecycle_label = opp.lifecycle_label or cand.lifecycle_label
     opp.activity_start_date = opp.activity_start_date or cand.activity_start_date
     # BODACC/Sirene apportent chacun une valeur propre (dirigeants, preuve) :
     # on la garde même quand la fusion n'est pas de nature "corroboré instagram".
@@ -607,6 +608,9 @@ def _process_candidate(
             existing.extra_emails = cand.extra_emails
         if cand.source == "instagram" and (cand.email or cand.website or cand.address):
             existing.contact_confidence = "haute"
+        # Rafraîchir le label de cycle de vie (un opening peut devenir established
+        # à un run ultérieur, ou l'inverse) — ne pas écraser par None (BODACC).
+        existing.lifecycle_label = cand.lifecycle_label or existing.lifecycle_label
         existing.activity_start_date = cand.activity_start_date
         existing.venue_origin_date = cand.venue_origin_date
         existing.estimated_timing = timing
@@ -654,6 +658,7 @@ def _process_candidate(
         siren_match_method=cand.siren_match_method,
         siren_match_confidence=cand.siren_match_confidence,
         instagram=cand.instagram,
+        lifecycle_label=cand.lifecycle_label,
         email=cand.email,
         website=cand.website,
         extra_addresses=cand.extra_addresses,
