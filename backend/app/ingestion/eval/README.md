@@ -50,8 +50,10 @@ y arriverait est un **faux positif**.
 
 ## Comment s'en servir
 
-1. Faire tourner le pipeline (`discover` -> `judge` -> `profile_enrich`) sur ces
-   memes `handle`, recuperer le verdict machine.
+1. Faire tourner le pipeline (`discover` -> garde-fous deterministes (`profile_guards`)
+   -> `judge_dossier` (juge unitaire)) sur ces memes `handle`, recuperer le
+   verdict machine ; l'eval produit un LABEL par compte + une matrice de
+   confusion label x label, en plus de la projection binaire a_contacter/ecarte.
 2. Comparer verdict machine vs `label`. Metriques cles :
    - **precision du bucket a_contacter** = vrais `opening` / total classes a_contacter
      (c'est LE chiffre qui dit si "opening soon = opening soon").
