@@ -1,7 +1,7 @@
 """Garde-fous déterministes du profil Insta (brique 3, avant tout LLM).
 
 Fonctions PURES : à partir d'un profil brut (sortie du profile scraper Apify),
-renvoient un verdict déterministe (`established`/`chain_multisite`) ou None si
+renvoient un verdict déterministe (`established`/`chain_multisite`/`noise`) ou None si
 aucun signal certain — le compte descend alors au juge LLM (`judge_dossier`).
 Gratuit et reproductible : attrape l'évident (chaînes multi-adresses, gros
 volume de posts, historique long, horaires/résa affichés) sans dépenser de
@@ -111,6 +111,27 @@ def _has_opening_cue(profile: Dict[str, Any]) -> bool:
     return any(cue in joined for cue in _OPENING_CUES)
 
 
+def _is_dead_account(profile: Dict[str, Any]) -> bool:
+    """Compte quasi mort = BRUIT certain : très peu de posts (<=3) ET quasi aucun
+    abonné (<=10) ET bio vide/quasi-vide, ET AUCUN indice de (pré-)ouverture.
+    Cas ancré : chickntikka94 (2 posts / 1 abonné / pas de bio).
+
+    Le veto `_has_opening_cue` est IMPÉRATIF (ne PAS le retirer) : une pré-ouverture
+    naissante a souvent peu de posts et peu d'abonnés MAIS annonce son ouverture —
+    loumasrestaurant (2 posts, bio « ouverture prochainement ») et tregusto
+    (captions d'ouverture) ne doivent JAMAIS être écrasés en noise, sinon perte
+    d'un vrai lead `opening` (garde-fou absolu « recall opening »)."""
+    posts = profile.get("postsCount")
+    followers = profile.get("followersCount")
+    if not isinstance(posts, int) or not isinstance(followers, int):
+        return False
+    if posts > 3 or followers > 10:
+        return False
+    if len(_norm(profile.get("biography") or "").strip()) > 5:
+        return False
+    return not _has_opening_cue(profile)
+
+
 def _has_reservation_in_posts(profile: Dict[str, Any]) -> bool:
     """Un post récent appelle à RÉSERVER via un site (réserv… + URL) ET le profil
     ne porte AUCUN indice de pré-ouverture (bio/légendes, cf. `_has_opening_cue`)
@@ -203,10 +224,16 @@ def _long_history(profile: Dict[str, Any], today: date, threshold_days: int = 15
 
 def guard_verdict(profile: Dict[str, Any], today: Optional[date] = None) -> Optional[str]:
     """Verdict déterministe du profil, ou None (à confier au juge LLM).
-    Ordre : multi-adresses / multi-villes -> chain_multisite ; sinon volume /
-    historique / horaires / résa (lien, bio, posts) -> established ; sinon None."""
+    Ordre : compte-mort -> noise ; multi-adresses / multi-villes -> chain_multisite ;
+    sinon volume / historique / horaires / résa (lien, bio, posts) -> established ;
+    sinon None."""
     today = today or date.today()
     bio = profile.get("biography") or ""
+    # Garde compte-mort AVANT tout : bruit certain (peu de posts + quasi zéro
+    # abonné + pas de bio + aucun indice d'ouverture). Route « noise » (pas de
+    # lead, cache 2 mois) sans dépenser le juge.
+    if _is_dead_account(profile):
+        return "noise"
     if _count_addresses_in_bio(bio) >= 2 or _multi_city_in_bio(bio):
         return "chain_multisite"
     posts_count = profile.get("postsCount")
