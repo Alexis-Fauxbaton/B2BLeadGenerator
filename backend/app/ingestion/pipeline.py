@@ -266,6 +266,31 @@ def _match_lead(lead: dict) -> dict:
     }
 
 
+def _instagram_proof(c: dict, prof: dict) -> tuple[Optional[str], str]:
+    """Construit (proof_text, proof_url) du lead Instagram v2 : la preuve
+    concrète du verdict (bio + caption de découverte + label/confiance du
+    juge), affichée telle quelle par la carte « Signal & preuve » de l'UI.
+    `prof` fait autorité pour la bio (couvre aussi les verdicts tranchés par
+    un garde déterministe, où classify_profiles ne pose pas `bio_snippet`).
+    Ne renvoie jamais une chaîne vide : None si vraiment aucune évidence."""
+    handle = c["handle"]
+    proof_url = f"https://instagram.com/{handle}"
+    bio = (prof.get("biography") or c.get("bio_snippet") or "").strip()[:150]
+    caption = (c.get("caption") or "").strip()[:150]
+    parts = []
+    if bio:
+        parts.append(f"Bio : «{bio}»")
+    if caption:
+        parts.append(f"Post : «{caption}»")
+    proof_text = " — ".join(parts)
+    label = c.get("label")
+    if label:
+        confidence = c.get("confidence") or "inconnue"
+        suffix = f"(label {label}, confiance {confidence})"
+        proof_text = f"{proof_text} {suffix}".strip() if proof_text else suffix
+    return (proof_text or None), proof_url
+
+
 def run_instagram(
     hashtags: Optional[List[str]] = None,
     limit: int = 40,
@@ -331,6 +356,7 @@ def run_instagram(
                 if routing is not None:
                     main_signal, secondary_signals, lifecycle_label = routing
                     m = c.get("_match")
+                    proof_text, proof_url = _instagram_proof(c, prof)
                     cand = LeadCandidate(
                         source="instagram",
                         source_ref=c["handle"],
@@ -353,6 +379,8 @@ def run_instagram(
                         siret=(m.siret if m else None),
                         siren_match_method=(m.method if m else None),
                         siren_match_confidence=(m.confidence if m else None),
+                        proof_text=proof_text or "",
+                        proof_url=proof_url,
                     )
                     _process_candidate(session, cand, stats, seen_refs, enricher)
                 # Commit unique (verdict + lead) PAR candidat : un échec ultérieur

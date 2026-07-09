@@ -135,6 +135,11 @@ def test_opening_still_hot(tmp_path, monkeypatch):
     opp = opps["loumas"]
     assert opp.lifecycle_label == "opening_soon"
     assert opp.main_signal == "ouverture prochaine"
+    # La preuve du verdict est persistée (bug régression : leads Insta v2 sans
+    # proof_text/proof_url -> carte "Signal & preuve" vide dans l'UI).
+    assert opp.proof_text
+    assert "opening_soon" in opp.proof_text
+    assert opp.proof_url == "https://instagram.com/loumas"
 
 
 def test_established_lead_stage_is_coherent(tmp_path, monkeypatch):

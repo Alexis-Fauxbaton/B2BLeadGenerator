@@ -114,6 +114,11 @@ def test_run_instagram_labels_leads_and_cache(tmp_path, monkeypatch):
         verdicts = {v.handle: v.verdict for v in s.exec(select(HandleVerdict)).all()}
         assert verdicts["cafe_mokaparis"] == "chain_multisite"
         assert "newresto" not in verdicts  # unknown 'basse' non caché
+        # Preuve persistée (carte "Signal & preuve" de l'UI) : jamais vide, et
+        # l'URL du profil est toujours dérivable du handle même sans juge LLM.
+        for ref in ("cafe_mokaparis", "newresto"):
+            assert opps[ref].proof_text  # non vide
+            assert opps[ref].proof_url == f"https://instagram.com/{ref}"
     assert stats.errors == 0
 
 
