@@ -39,25 +39,52 @@ FRESH_LABELS = {"opening_soon", "just_opened", "unknown"}
 TRUTH_LABEL_MAP = {"opening": "opening_soon"}
 # Gates durs d'acceptation.
 GATE_RECALL_OPENING = 1.0
-# Plancher de précision a_contacter (valeur d'origine, jamais affaiblie).
-# NOTE [revue finale] : la précision mesurée actuelle (~33 % = 4/12) est POSÉE
-# SUR ce plancher, marge quasi nulle — un seul faux positif de plus (4/13 = 31 %)
-# ou une dérive prompt/modèle fait passer la gate sous le seuil. Le classifieur
-# n'est pas « nettement mieux » que le plancher, il EST le plancher. À corriger
-# en réduisant les faux positifs (reprendre de la marge) ; documenté ici pour
-# qu'une régression future soit comprise et non subie.
+# Plancher de précision a_contacter (métrique de continuité, publiée mais NON
+# bloquante depuis la brique 3bis : le gate honnête est la précision du segment
+# chaud, cf. GATE_HOT_PRECISION).
 GATE_MIN_PRECISION = 0.33
+# Gate honnête d'acceptation (brique 3bis) : précision du segment chaud
+# (opening_soon/just_opened prédits) >= 60 %.
+GATE_HOT_PRECISION = 0.60
 
-# Bucket cible par label vérité (cf. README). Sert à l'affichage : le statut
-# "véridique" attendu. La prédiction actuelle est binaire (a_contacter/ecarte).
+# Bucket cible par label vérité (brique 3bis) : establi/chaîne = « en_base »
+# (lead créé, segment froid) ; not_venue/noise = « ecarte » (pas de lead) ;
+# opening = « a_contacter » ; just_opened = « a_surveiller ».
 TRUE_BUCKET = {
     "opening": "a_contacter",
     "just_opened": "a_surveiller",
-    "established": "ecarte",
-    "chain_multisite": "ecarte",
+    "established": "en_base",
+    "chain_multisite": "en_base",
     "not_venue": "ecarte",
-    "noise": "a_reverifier",
+    "noise": "ecarte",
 }
+
+# Bucket cible par label PRÉDIT (miroir de TRUE_BUCKET, même espace de buckets
+# v2bis). Sert à comparer vérité vs prédiction dans le « jeu de preuve ».
+# unknown -> en_base (lead neutre « en base », cf. routage brique 3bis).
+PRED_BUCKET = {
+    "opening_soon": "a_contacter",
+    "just_opened": "a_surveiller",
+    "established": "en_base",
+    "chain_multisite": "en_base",
+    "unknown": "en_base",
+    "not_venue": "ecarte",
+    "noise": "ecarte",
+}
+
+
+def is_disagreement(true_label: str, predicted_label: Optional[str]) -> bool:
+    """Désaccord = la prédiction tombe dans un bucket v2bis INCOMPATIBLE avec le
+    bucket cible du label vérité (TRUE_BUCKET vs PRED_BUCKET, même espace).
+    None (pas de prédiction cachée) ou label inconnu -> False (on n'affiche pas de
+    désaccord contre une prédiction absente)."""
+    if not predicted_label:
+        return False
+    tb = TRUE_BUCKET.get(true_label)
+    pb = PRED_BUCKET.get(predicted_label)
+    if tb is None or pb is None:
+        return False
+    return tb != pb
 
 
 def load_groundtruth() -> List[dict]:
@@ -115,7 +142,7 @@ def classify(snapshots: Dict[str, dict]) -> Dict[str, str]:
 
 
 def run_eval(strict: bool = False) -> dict:
-    from .metrics import label_confusion
+    from .metrics import label_confusion, hot_precision
 
     rows = load_groundtruth()
     snapshots: Dict[str, dict] = {}
@@ -147,9 +174,11 @@ def run_eval(strict: bool = False) -> dict:
         for h in snapshots
     ]
     labels_matrix = label_confusion(label_pairs)
+    hot_prec, hot_tp, hot_n = hot_precision(label_pairs)
 
     gate_recall = report.recall_opening is not None and report.recall_opening >= GATE_RECALL_OPENING
     gate_precision = report.precision_a_contacter is not None and report.precision_a_contacter >= GATE_MIN_PRECISION
+    gate_hot = hot_prec is not None and hot_prec >= GATE_HOT_PRECISION
     return {
         "report": report,
         "missing_snapshots": missing,
@@ -158,9 +187,14 @@ def run_eval(strict: bool = False) -> dict:
         "predicted_labels": predicted_labels,
         "label_by_handle": label_by_handle,
         "labels_matrix": labels_matrix,
+        "hot_precision": hot_prec,
+        "hot_tp": hot_tp,
+        "hot_n": hot_n,
         "gate_recall_opening": gate_recall,
         "gate_precision": gate_precision,
-        "gates_pass": gate_recall and gate_precision,
+        "gate_hot_precision": gate_hot,
+        # ACCEPTATION brique 3bis : rappel opening 4/4 ET précision segment chaud >= 60 %.
+        "gates_pass": gate_recall and gate_hot,
     }
 
 
@@ -221,6 +255,53 @@ def cached_result(refresh: bool = False) -> dict:
     return result
 
 
+def _cached_predictions() -> Dict[str, Optional[str]]:
+    """Prédictions (label prédit) du DERNIER résultat d'éval CACHÉ, par handle.
+    Lecture SEULE du cache fichier écrit par cached_result() : n'exécute JAMAIS le
+    LLM. Cache absent/illisible -> {} (fail-soft : predicted=None partout)."""
+    if not RESULT_PATH.exists():
+        return {}
+    try:
+        cached = json.loads(RESULT_PATH.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+    return {r["handle"]: r.get("predicted_label") for r in cached.get("rows", [])}
+
+
+def groundtruth_asof(as_of: Optional[str] = None) -> dict:
+    """Jeu de preuve DATÉ : lignes du CSV annotées à `as_of` inclus (défaut :
+    toutes). Journal append-only -> filtre lexicographique `annotated_at <= as_of`
+    (les dates ISO YYYY-MM-DD se comparent comme des chaînes). Enrichit chaque
+    ligne de la prédiction du dernier résultat d'éval CACHÉ (jamais de LLM) et d'un
+    drapeau de désaccord (mapping v2bis). -> {as_of effectif, total, rows}."""
+    preds = _cached_predictions()
+    gt = load_groundtruth()
+    dates = sorted({r.get("annotated_at", "").strip()
+                    for r in gt if r.get("annotated_at", "").strip()})
+    effective = as_of or (dates[-1] if dates else None)
+    rows: List[dict] = []
+    for row in gt:
+        annotated_at = row.get("annotated_at", "").strip()
+        if as_of and annotated_at and annotated_at > as_of:
+            continue
+        h = row["handle"].strip()
+        true_label = row["label"].strip()
+        predicted = preds.get(h)
+        rows.append({
+            "handle": h,
+            "name": row.get("name", "").strip(),
+            "label": true_label,
+            "confidence": row.get("confidence", "").strip(),
+            "rationale": row.get("rationale", "").strip(),
+            "annotated_at": annotated_at,
+            "ig_url": f"https://instagram.com/{h}",
+            "has_snapshot": snapshot_path(h).exists(),
+            "predicted": predicted,
+            "disagreement": is_disagreement(true_label, predicted),
+        })
+    return {"as_of": effective, "total": len(rows), "rows": rows}
+
+
 def _fmt_pct(x: Optional[float]) -> str:
     return "n/a" if x is None else f"{x * 100:.0f}%"
 
@@ -269,9 +350,13 @@ def print_report(result: dict) -> None:
             row = matrix[label]
             print(f"  {label:<16} " + " ".join(f"{row.get(c, 0):>9}" for c in cols))
     print()
+    hp = result.get("hot_precision")
+    print(f"** PRÉCISION segment chaud : {_fmt_pct(hp)} **"
+          f"   ({result.get('hot_tp', 0)} vrais / {result.get('hot_n', 0)} prédits opening_soon|just_opened)")
     ok = "OK" if result["gates_pass"] else "ÉCHEC"
     print(f"GATES : rappel opening>=100% = {result['gate_recall_opening']} | "
-          f"précision a_contacter>=33% = {result['gate_precision']}  -> {ok}")
+          f"précision chaud>=60% = {result['gate_hot_precision']}  -> {ok}")
+    print(f"  (info) précision a_contacter>=33% = {result['gate_precision']}")
     print("=" * 60)
 
 
@@ -312,6 +397,7 @@ def main() -> None:
         payload = {
             **result["report"].as_dict(),
             "labels_matrix": result["labels_matrix"],
+            "hot_precision": result["hot_precision"],
             "gates_pass": result["gates_pass"],
             "missing_snapshots": result["missing_snapshots"],
             "excluded_low_confidence": result["excluded_low_confidence"],

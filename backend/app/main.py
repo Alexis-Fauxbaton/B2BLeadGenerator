@@ -187,4 +187,17 @@ def eval_instagram(refresh: bool = False):
         raise HTTPException(status_code=502, detail=f"Éval échouée : {exc}")
 
 
+@eval_router.get("/groundtruth")
+def eval_groundtruth(as_of: Optional[str] = None):
+    """Jeu de preuve daté : lignes annotées <= as_of (défaut : toutes), avec la
+    prédiction du dernier résultat d'éval CACHÉ (sans recalcul LLM) et le drapeau
+    de désaccord (mapping v2bis). `as_of` au format YYYY-MM-DD."""
+    from .ingestion.eval.run import groundtruth_asof
+
+    try:
+        return groundtruth_asof(as_of=as_of)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Jeu de preuve indisponible : {exc}")
+
+
 app.include_router(eval_router)

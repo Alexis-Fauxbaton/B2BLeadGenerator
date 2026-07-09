@@ -75,6 +75,12 @@ cd backend && python -m pytest tests/ -q
 
 ## État & roadmap
 Fait : UI complète, ingestion BODACC+Sirene avec stratégie de mise à jour.
+Brique 3bis (inventaire complet) : l'app est un **inventaire complet** — tout
+compte CHR issu du funnel Insta devient un lead (sauf `not_venue`/`noise`), avec
+`lifecycle_label` persisté et filtrable via l'API ; les établis/chaînes/unknown
+portent un signal neutre `établissement en activité` (hors familles de scoring →
+score bas, « en base ») au lieu d'un faux « ouverture prochaine ». Éval v2bis :
+gate = rappel opening 4/4 **et** précision du segment chaud ≥ 60 %.
 Roadmap MVP (par priorité) : **1. contact actionnable (EN COURS)** → 2. France
 Travail (signal recrutement) + fusion par SIREN → 3. scheduling + Postgres +
 hébergement → 4. auth + flag de confiance. Détail : `docs/ingestion-design.md`.

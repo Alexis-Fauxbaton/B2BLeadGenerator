@@ -658,6 +658,22 @@ def test_lifecycle_stage():
     # Repris d'un local JEUNE (origine récente) -> pas établi.
     assert lifecycle_stage("reprise", None, _date(2026, 6, 20), today,
                            venue_origin_date=_date(2026, 1, 1)) == "ouvert récemment"
+    # Label de cycle de vie persisté established/chain_multisite (fiche Insta « en
+    # base » : signal NEUTRE, ni avis, ni origine, ni date d'activité) -> établi.
+    # Sans le label, ce cas retomberait à tort sur "ouvert récemment" (repli final).
+    assert lifecycle_stage("établissement en activité", None, _date(2026, 6, 20),
+                           today, lifecycle_label="established") == "établi"
+    assert lifecycle_stage("établissement en activité", None, _date(2026, 6, 20),
+                           today, lifecycle_label="chain_multisite") == "établi"
+    # Cohérence même quand la détection est récente (pas de bascule pré-ouverture).
+    assert lifecycle_stage("établissement en activité", None, today, today,
+                           lifecycle_label="established") == "établi"
+    # Un label 'unknown' NE force PAS établi (repli heuristique inchangé).
+    assert lifecycle_stage("établissement en activité", None, _date(2026, 6, 20),
+                           today, lifecycle_label="unknown") == "ouvert récemment"
+    # Le label ne masque pas une fermeture (fermé prime tout).
+    assert lifecycle_stage("établissement en activité", None, _date(2026, 6, 20),
+                           today, closed=True, lifecycle_label="established") == "fermé"
 
 
 def test_lifecycle_heat():

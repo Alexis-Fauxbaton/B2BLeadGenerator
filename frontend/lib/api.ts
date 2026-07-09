@@ -1,6 +1,7 @@
 import type {
   DashboardStats,
   GeneratedMessages,
+  GroundtruthResult,
   IngestStats,
   Meta,
   OpportunityList,
@@ -91,4 +92,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
+
+  getGroundtruth: (asOf?: string) => {
+    const qs = asOf ? `?as_of=${encodeURIComponent(asOf)}` : "";
+    return request<GroundtruthResult>(`/api/eval/groundtruth${qs}`);
+  },
 };

@@ -75,6 +75,7 @@ class OpportunityList(OpportunityBase):
     id: int
     source: str = "demo"
     source_ref: Optional[str] = None
+    lifecycle_label: Optional[str] = None
     siren: Optional[str] = None
     naf: Optional[str] = None
     phone: Optional[str] = None
@@ -119,6 +120,7 @@ class OpportunityList(OpportunityBase):
             closed=self.closed_at is not None,
             activity_start_date=self.activity_start_date,
             venue_origin_date=self.venue_origin_date,
+            lifecycle_label=self.lifecycle_label,
         )
 
     @computed_field

@@ -67,3 +67,26 @@ def test_prompt_has_date_anchor_and_reasoning_and_precomputed_ages():
 def test_judge_dossier_fail_soft():
     assert judge_dossier(None, "x", "X", PROFILE, today=TODAY) == {}
     assert judge_dossier(_FakeClient("pas du json"), "x", "X", PROFILE, today=TODAY) == {}
+
+
+def test_judge_prompt_mentions_second_address_chain():
+    from app.ingestion.instagram import _DOSSIER_SYSTEM
+    t = _DOSSIER_SYSTEM.lower()
+    # La règle chaîne cible explicitement la 2e adresse d'une marque existante.
+    assert "adresse" in t and ("2e adresse" in t or "nouvelle adresse" in t or "2e établissement" in t)
+
+
+def test_judge_prompt_has_three_hardening_rules():
+    """Remédiation 3bis : le juge sur-prédisait opening_soon. Trois règles ajoutées
+    au system prompt doivent être présentes (garde le juge honnête)."""
+    from app.ingestion.instagram import _DOSSIER_SYSTEM
+    t = _DOSSIER_SYSTEM.lower()
+    # 1. RÈGLE DE DOUTE : opening_soon exige des indices EXPLICITES.
+    assert "explicite" in t
+    assert "jamais" in t and "opening_soon" in t
+    # 2. NOT_VENUE PRIORITAIRE : trancher d'abord si CHR physique en France.
+    assert "not_venue prioritaire" in t or ("d'abord" in t and "not_venue" in t)
+    assert "hors france" in t
+    # 3. CHAÎNE : nouvelle adresse d'une enseigne existante = chain_multisite,
+    #    même si création récente.
+    assert "chain_multisite" in t and "récente" in t

@@ -96,3 +96,76 @@ def test_label_confusion_matrix():
     assert m["opening_soon"]["unknown"] == 1
     assert m["chain_multisite"]["chain_multisite"] == 1
     assert m["not_venue"]["established"] == 1
+
+
+def test_hot_precision():
+    from app.ingestion.eval.metrics import hot_precision
+    pairs = [
+        ("opening_soon", "opening_soon"),      # TP (vérité chaude, prédit chaud)
+        ("just_opened", "just_opened"),        # TP (just_opened prédit sur vrai just_opened)
+        ("established", "opening_soon"),       # FP (établi prédit chaud)
+        ("not_venue", "noise"),                # hors segment chaud
+        ("chain_multisite", "chain_multisite"),  # hors segment chaud
+        ("opening_soon", "unknown"),           # hors segment chaud (unknown pas chaud)
+    ]
+    prec, tp, n = hot_precision(pairs)
+    assert (tp, n) == (2, 3)
+    assert abs(prec - 2 / 3) < 1e-9
+    # Aucun prédit chaud -> None.
+    assert hot_precision([("established", "established")]) == (None, 0, 0)
+
+
+def test_is_disagreement_v2bis_mapping():
+    from app.ingestion.eval.run import is_disagreement
+    # Vérité 'opening' (bucket a_contacter) vs prédiction 'established' (en_base) -> désaccord.
+    assert is_disagreement("opening", "established") is True
+    # Vérité 'opening' vs prédiction 'opening_soon' (a_contacter) -> accord.
+    assert is_disagreement("opening", "opening_soon") is False
+    # Vérité 'established' (en_base) vs prédiction 'unknown' (en_base) -> accord.
+    assert is_disagreement("established", "unknown") is False
+    # Vérité 'noise' (ecarte) vs prédiction 'unknown' (en_base) -> désaccord.
+    assert is_disagreement("noise", "unknown") is True
+    # Pas de prédiction cachée (None) ou label inconnu -> jamais de désaccord affiché.
+    assert is_disagreement("opening", None) is False
+    assert is_disagreement("opening", "???") is False
+
+
+def test_groundtruth_asof_filters_by_date(monkeypatch):
+    import app.ingestion.eval.run as run
+    fake = [
+        {"handle": "a", "name": "A", "label": "opening", "confidence": "high",
+         "rationale": "r-a", "annotated_at": "2026-07-04"},
+        {"handle": "b", "name": "B", "label": "established", "confidence": "low",
+         "rationale": "r-b", "annotated_at": "2026-07-08"},
+    ]
+    monkeypatch.setattr(run, "load_groundtruth", lambda: [dict(r) for r in fake])
+    monkeypatch.setattr(run, "_cached_predictions", lambda: {})
+    # as_of à la 1re annotation -> seule 'a' visible, as_of effectif = celui demandé.
+    res = run.groundtruth_asof(as_of="2026-07-04")
+    assert [r["handle"] for r in res["rows"]] == ["a"]
+    assert res["total"] == 1 and res["as_of"] == "2026-07-04"
+    # Défaut (toutes) -> as_of effectif = date d'annotation la plus récente.
+    res_all = run.groundtruth_asof()
+    assert res_all["total"] == 2 and res_all["as_of"] == "2026-07-08"
+    assert {r["handle"] for r in res_all["rows"]} == {"a", "b"}
+
+
+def test_groundtruth_asof_fail_soft_without_cache(monkeypatch, tmp_path):
+    import app.ingestion.eval.run as run
+    fake = [{"handle": "a", "name": "A", "label": "opening", "confidence": "high",
+             "rationale": "r", "annotated_at": "2026-07-04"}]
+    monkeypatch.setattr(run, "load_groundtruth", lambda: [dict(r) for r in fake])
+    # Cache d'éval ABSENT -> predicted None, disagreement False, aucun crash, aucun LLM.
+    monkeypatch.setattr(run, "RESULT_PATH", tmp_path / "absent.json")
+    res = run.groundtruth_asof(as_of="2026-07-04")
+    assert res["rows"][0]["predicted"] is None
+    assert res["rows"][0]["disagreement"] is False
+
+
+def test_groundtruth_csv_backfilled_readable():
+    # Le CSV réel porte la colonne annotated_at, remplie sur TOUTES les lignes,
+    # et le backfill d'origine vaut 2026-07-04 (session d'annotation initiale).
+    from app.ingestion.eval.run import load_groundtruth
+    rows = load_groundtruth()
+    assert rows and all(r.get("annotated_at", "").strip() for r in rows)
+    assert any(r["annotated_at"].strip() == "2026-07-04" for r in rows)

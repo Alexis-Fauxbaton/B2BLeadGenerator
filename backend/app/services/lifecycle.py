@@ -38,6 +38,9 @@ FRESH_MAX_DAYS = 30         # dernier événement <= 30 j => fraîche
 REFRESH_MAX_DAYS = 90       # <= 90 j => à rafraîchir ; au-delà => périmée
 
 
+ESTABLISHED_LABELS = ("established", "chain_multisite")
+
+
 def lifecycle_stage(
     main_signal: str,
     review_count: Optional[int],
@@ -46,13 +49,21 @@ def lifecycle_stage(
     closed: bool = False,
     activity_start_date: Optional[date] = None,
     venue_origin_date: Optional[date] = None,
+    lifecycle_label: Optional[str] = None,
 ) -> str:
     """pré-ouverture | ouvert récemment | établi | fermé.
 
     `venue_origin_date` = date d'origine du LOCAL (via le précédent exploitant
     d'une reprise) : un vieux local repris est un lieu ÉTABLI (le stage décrit le
     lieu ; la chaleur, elle, reste chaude via le signal reprise récent -> cas
-    "établi mais chaud")."""
+    "établi mais chaud").
+
+    `lifecycle_label` = verdict de cycle de vie PERSISTÉ (funnel Insta brique 3bis).
+    Un label established/chain_multisite est un jugement de classification qui fait
+    foi : il force le stage "établi" AVANT le repli heuristique, pour que l'axe
+    persisté (lifecycle_label) et l'axe dérivé (lifecycle_stage) ne se contredisent
+    pas (une fiche Insta « en base » n'a ni avis, ni origine, ni date d'activité :
+    sans cela elle retomberait à tort sur "ouvert récemment")."""
     today = today or date.today()
     if closed:
         return "fermé"
@@ -68,6 +79,10 @@ def lifecycle_stage(
     # nouvel exploitant). Future => pas encore ouvert ; passée => déjà ouvert.
     if activity_start_date is not None:
         return "pré-ouverture" if activity_start_date > today else "ouvert récemment"
+    # Label de cycle de vie persisté : un établi/chaîne fait foi avant tout repli
+    # heuristique (cohérence lifecycle_label <-> lifecycle_stage).
+    if lifecycle_label in ESTABLISHED_LABELS:
+        return "établi"
     # Repli heuristique (pas de date) : signal d'ouverture récent => pré-ouverture.
     age = (today - detection_date).days
     if main_signal in OPENING_SIGNALS and age <= PREOPENING_MAX_AGE_DAYS:

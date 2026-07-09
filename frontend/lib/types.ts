@@ -123,3 +123,22 @@ export interface Meta {
 }
 
 export type Pipeline = Record<string, OpportunityList[]>;
+
+export interface GroundtruthRow {
+  handle: string;
+  name: string;
+  label: string;
+  confidence: string;
+  rationale: string;
+  annotated_at: string;
+  ig_url: string;
+  has_snapshot: boolean;
+  predicted: string | null;
+  disagreement: boolean;
+}
+
+export interface GroundtruthResult {
+  as_of: string | null;
+  total: number;
+  rows: GroundtruthRow[];
+}

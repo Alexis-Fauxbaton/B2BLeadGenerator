@@ -30,6 +30,9 @@ SIGNAL_TYPES = [
     "annonce presse locale",
     "création récente",
     "expansion",
+    # Signal NEUTRE des leads « en base » (établis/chaînes/indéterminés du funnel
+    # Insta) : membre d'AUCUNE famille de scoring -> aucun bonus de nature.
+    "établissement en activité",
 ]
 
 CHANNELS = ["instagram", "telephone", "email", "linkedin"]
@@ -95,6 +98,11 @@ class Opportunity(SQLModel, table=True):
     siret: Optional[str] = None
     siren_match_method: Optional[str] = None      # nom | adresse | arbitre | source
     siren_match_confidence: Optional[str] = None  # haute | moyenne
+
+    # Étiquette de cycle de vie du funnel Insta (juge/gardes) PERSISTÉE sur la
+    # fiche : opening_soon | just_opened | established | chain_multisite | unknown.
+    # NULL pour les sources registre (BODACC/Sirene) qui n'étiquettent pas encore.
+    lifecycle_label: Optional[str] = Field(default=None, index=True)
 
     # Contact (enrichissement gratuit : OSM + scrape de site).
     phone: Optional[str] = None

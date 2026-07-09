@@ -35,6 +35,7 @@ def list_opportunities(
     min_score: Optional[int] = None,
     recommended_channel: Optional[str] = None,
     source: Optional[str] = None,
+    lifecycle_label: Optional[str] = None,
     sort_by: str = "score",
     order: str = "desc",
 ):
@@ -56,6 +57,8 @@ def list_opportunities(
         query = query.where(Opportunity.recommended_channel == recommended_channel)
     if source:
         query = query.where(Opportunity.source == source)
+    if lifecycle_label:
+        query = query.where(Opportunity.lifecycle_label == lifecycle_label)
 
     sort_col = SORT_FIELDS.get(sort_by, Opportunity.opportunity_score)
     query = query.order_by(sort_col.desc() if order == "desc" else sort_col.asc())

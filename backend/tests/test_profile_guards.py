@@ -9,6 +9,11 @@ from app.ingestion.profile_guards import (
     _has_hours_in_bio,
     _has_reservation_link,
     _count_addresses_in_bio,
+    _has_reservation_in_bio,
+    _has_reservation_in_posts,
+    _has_opening_cue,
+    _multi_city_in_bio,
+    _is_dead_account,
 )
 
 SNAP = Path(__file__).resolve().parents[1] / "app" / "ingestion" / "eval" / "snapshots"
@@ -107,6 +112,115 @@ def test_hours_guard_ignores_countdown():
     assert not _has_hours_in_bio("Ouverture dans 48h !")
     # ...mais une vraie plage horaire-only ("10h-18h") EST détectée.
     assert _has_hours_in_bio("Service 10h-18h")
+
+
+def test_reservation_in_bio_helper():
+    assert _has_reservation_in_bio("Réservation : 01 43 25 87 99")
+    assert not _has_reservation_in_bio("Réservez votre table très bientôt")   # pas de tel
+    assert not _has_reservation_in_bio("Café de spécialité, 5 rue du Marché")  # pas de résa
+
+
+def test_multi_city_in_bio_helper():
+    assert _multi_city_in_bio("Lyon 6, Paris 11")
+    assert _multi_city_in_bio("Bordeaux | Toulouse")
+    assert not _multi_city_in_bio("Bagels à Paris 11")                       # 1 ville
+    assert not _multi_city_in_bio("Villeneuve d'Aveyron | Juillet 2026")     # 1 ville + date
+
+
+def test_reservation_in_posts_helper():
+    # En service : résa + URL et AUCUN indice d'ouverture -> True.
+    assert _has_reservation_in_posts(
+        {"latestPosts": [{"caption": "réservations sur notre site internet www.x.fr"}]})
+    assert not _has_reservation_in_posts(
+        {"latestPosts": [{"caption": "on ouvre bientôt, restez connectés !"}]})
+    assert not _has_reservation_in_posts({"latestPosts": []})
+
+
+def test_reservation_in_posts_ignores_preopening():
+    # RÉGRESSION (garde-fou rappel opening) : une pré-ouverture qui tease DÉJÀ la
+    # réservation en ligne ne doit JAMAIS être captée comme established -> None ->
+    # elle reste au juge. Reproduit le vrai profil villa.henriette_cabourg.
+    preopening = {
+        "biography": "📅 Ouverture 10 Juillet 2026 ! #openingsoon",
+        "latestPosts": [
+            {"caption": "Rendez-vous pour les réservations sur www.villa-henriette.fr"},
+            {"caption": "OPENING SOON !!! L'ouverture approche"},
+        ],
+    }
+    assert _has_opening_cue(preopening)
+    assert not _has_reservation_in_posts(preopening)
+
+
+def test_osabaita_established_by_guard():
+    snap = json.loads((SNAP / "osabaita.json").read_text(encoding="utf-8"))
+    # Résa téléphone en bio + fr.newtable.com en externalUrls -> established, sans LLM.
+    assert guard_verdict(snap, TODAY) == "established"
+
+
+def test_villa_henriette_passes_to_judge():
+    snap = json.loads((SNAP / "villa.henriette_cabourg.json").read_text(encoding="utf-8"))
+    # villa.henriette est une PRÉ-OUVERTURE (bio « Ouverture 10 Juillet 2026 »,
+    # « OPENING SOON », ouvre 2 jours après TODAY=2026-07-08) qui tease déjà la
+    # résa en ligne. Le garde résa-posts est vetoé par `_has_opening_cue` -> None
+    # -> villa retombe au juge (assertion de NON-RÉGRESSION : jamais captée au
+    # garde, sinon perte d'un vrai opening_soon). Reste verte de bout en bout.
+    assert guard_verdict(snap, TODAY) is None
+
+
+def test_cherescousines_chain_by_guard():
+    snap = json.loads((SNAP / "cherescousinesbagels.json").read_text(encoding="utf-8"))
+    # Bio « Lyon 6, Paris 11 » = deux villes = marque multi-sites, sans LLM.
+    assert guard_verdict(snap, TODAY) == "chain_multisite"
+
+
+# --- Garde compte-mort (remédiation 3bis : le juge sur-prédisait opening_soon) --
+def test_chickntikka_snapshot_has_opening_cue_so_spared():
+    # NB remédiation 2026-07-09 : le snapshot réel de chickntikka94 (2 posts / 1
+    # abonné / pas de bio) porte des indices d'ouverture EXPLICITES dans ses
+    # légendes (« Il ne manque plus que l'ouverture », « Très bientôt »,
+    # #OuvertureProchaine #ComingSoon #NouvelleAdresse). Par le MÊME veto
+    # `_has_opening_cue` qui protège loumas/tregusto, il est donc ÉPARGNÉ par la
+    # garde compte-mort et retombe au juge — on ne tue jamais un signal
+    # d'ouverture, quelle que soit la maigreur du compte (garde-fou absolu).
+    snap = json.loads((SNAP / "chickntikka94.json").read_text(encoding="utf-8"))
+    assert _has_opening_cue(snap) is True
+    assert _is_dead_account(snap) is False
+    assert guard_verdict(snap, TODAY) is None
+
+
+def test_dead_account_noise_on_synthetic_dead_profile():
+    # Compte-mort SANS aucun indice d'ouverture -> 'noise' déterministe, sans juge.
+    dead = {"postsCount": 2, "followersCount": 1, "biography": "",
+            "latestPosts": [{"caption": "🔥🔥🔥"}, {"caption": "😈"}]}
+    assert _is_dead_account(dead) is True
+    assert guard_verdict(dead, TODAY) == "noise"
+
+
+def test_dead_account_guard_spares_preopenings():
+    # GARDE-FOU rappel opening : les pré-ouvertures naissantes (peu de posts/peu
+    # d'abonnés MAIS indice d'ouverture) ne doivent JAMAIS être écrasées en noise.
+    # loumasrestaurant (2 posts, bio 'ouverture prochainement') et tregusto
+    # (4 posts, captions d'ouverture) + les 4 openings -> None (restent au juge).
+    for h in OPENING_SNAPS:
+        snap = json.loads((SNAP / f"{h}.json").read_text(encoding="utf-8"))
+        assert _is_dead_account(snap) is False, f"{h} écrasé à tort en noise"
+        assert guard_verdict(snap, TODAY) is None, f"{h} tranché à tort par un garde-fou"
+
+
+def test_dead_account_needs_all_conditions():
+    # Peu de posts + peu d'abonnés MAIS bio non vide -> PAS un compte-mort.
+    assert _is_dead_account(
+        {"postsCount": 2, "followersCount": 3, "biography": "Café de spécialité à Paris"}) is False
+    # Peu de posts + peu d'abonnés + bio vide MAIS indice d'ouverture -> PAS mort.
+    assert _is_dead_account(
+        {"postsCount": 1, "followersCount": 2, "biography": "",
+         "latestPosts": [{"caption": "On ouvre bientôt !"}]}) is False
+    # Trop d'abonnés -> PAS mort.
+    assert _is_dead_account({"postsCount": 2, "followersCount": 500, "biography": ""}) is False
+    # Compteurs manquants -> PAS mort (fail-soft, on ne devine pas).
+    assert _is_dead_account({"biography": ""}) is False
+    # Toutes conditions réunies -> mort.
+    assert _is_dead_account({"postsCount": 2, "followersCount": 1, "biography": ""}) is True
 
 
 def test_just_opened_monica_survives_guards():

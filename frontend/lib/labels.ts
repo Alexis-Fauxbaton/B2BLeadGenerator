@@ -90,3 +90,27 @@ export const SOURCE_LABELS: Record<string, string> = {
   bodacc: "BODACC",
   instagram: "Instagram",
 };
+
+// Libellés FR des labels d'éval (jeu de vérité + prédictions du pipeline).
+export const EVAL_LABEL_LABELS: Record<string, string> = {
+  opening: "Ouverture",
+  opening_soon: "Ouverture prochaine",
+  just_opened: "Ouvert récemment",
+  established: "Établi",
+  chain_multisite: "Chaîne multi-sites",
+  not_venue: "Hors CHR",
+  noise: "Bruit",
+  unknown: "Indéterminé",
+};
+
+// Classes Tailwind par label d'éval (badge).
+export const EVAL_LABEL_STYLES: Record<string, string> = {
+  opening: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  opening_soon: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  just_opened: "bg-cyan-50 text-cyan-700 ring-cyan-200",
+  established: "bg-slate-100 text-slate-600 ring-slate-200",
+  chain_multisite: "bg-violet-50 text-violet-700 ring-violet-200",
+  not_venue: "bg-rose-50 text-rose-700 ring-rose-200",
+  noise: "bg-amber-50 text-amber-700 ring-amber-200",
+  unknown: "bg-slate-100 text-slate-500 ring-slate-200",
+};

@@ -51,6 +51,27 @@ TIMING_BY_SIGNAL = {
     "changement propriétaire": "J-60",
 }
 
+# Signal NEUTRE des leads « en base » (établis, chaînes, indéterminés du funnel
+# Insta) : présent dans SIGNAL_TYPES, membre d'AUCUNE famille de scoring
+# (services/scoring.py) -> aucun bonus de nature, score naturellement bas (les
+# ouvertures restent en tête du tri). On n'invente AUCUN signal d'achat pour un
+# établissement qui n'en émet pas.
+NEUTRAL_SIGNAL = "établissement en activité"
+# Libellé harmonisé avec le delta-Sirene (sirene_delta.py) : une marque qui ouvre
+# un nouveau lieu = extension multi-sites (signal secondaire, non chaud).
+MULTISITE_SIGNAL = "extension multi-sites"
+
+# Routage label de cycle de vie -> (main_signal, secondary_signals, lifecycle_label).
+# not_venue/noise ABSENTS -> aucun lead (verdict caché uniquement). unknown =
+# lead « en base » NEUTRE (plus jamais déguisé en « ouverture prochaine »).
+LABEL_ROUTING = {
+    "opening_soon":    ("ouverture prochaine", [],                 "opening_soon"),
+    "just_opened":     ("création récente",    [],                 "just_opened"),
+    "established":     (NEUTRAL_SIGNAL,         [],                 "established"),
+    "chain_multisite": (NEUTRAL_SIGNAL,         [MULTISITE_SIGNAL], "chain_multisite"),
+    "unknown":         (NEUTRAL_SIGNAL,         [],                 "unknown"),
+}
+
 CONNECTORS = {
     "bodacc": BodaccConnector,
     "sirene": SireneDeltaConnector,
@@ -290,51 +311,52 @@ def run_instagram(
             cacheable = has_data and not (
                 c["label"] == "unknown" and (c.get("confidence") or "basse") == "basse"
             )
-            if cacheable:
-                # Verdict persisté INDÉPENDAMMENT du sort du lead (commit isolé) :
-                # un échec d'enrichissement plus bas ne doit annuler ni ce verdict
-                # ni les verdicts/leads déjà réussis des candidats précédents du lot.
-                try:
+            # ROUTAGE brique 3bis : TOUT label devient un lead SAUF not_venue/noise
+            # (absents de LABEL_ROUTING -> cache seul). Les ouvertures gardent leur
+            # signal d'achat ; établis/chaînes/unknown reçoivent un signal NEUTRE
+            # (score naturellement bas) + le label de cycle de vie persisté.
+            routing = LABEL_ROUTING.get(c["label"])
+            try:
+                # Verdict de cache ET lead COMMITTÉS ENSEMBLE par candidat (même
+                # unité transactionnelle) : si la création du lead échoue plus bas
+                # (enrich réseau, classify, scoring), le rollback annule AUSSI le
+                # verdict -> should_rejudge reste vrai et le handle est re-jugé au
+                # prochain run (sa fiche « en base » n'est pas condamnée à ne
+                # jamais exister pendant la fenêtre de revisite). L'isolation
+                # inter-candidats est préservée : le commit par candidat protège
+                # les verdicts/leads déjà réussis du lot.
+                if cacheable:
                     verdict_cache.upsert(session, c["handle"], c["label"],
                                          c.get("confidence"), prof, today=today)
-                    session.commit()
-                except Exception:
-                    session.rollback()
-            # Création de lead UNIQUEMENT pour opening_soon/just_opened/unknown
-            # (unknown = doute -> garde, protège le recall).
-            if c["label"] not in ("opening_soon", "just_opened", "unknown"):
-                continue
-            try:
-                main_signal = {
-                    "opening_soon": "ouverture prochaine",
-                    "just_opened": "création récente",
-                    "unknown": "ouverture prochaine",
-                }[c["label"]]
-                m = c.get("_match")
-                cand = LeadCandidate(
-                    source="instagram",
-                    source_ref=c["handle"],
-                    establishment_name=(m.enseigne if (m and m.enseigne) else c["name"]),
-                    city=c["city"],
-                    address=c.get("address", ""),
-                    email=c.get("email"),
-                    website=c.get("website"),
-                    extra_addresses=c.get("extra_addresses", []),
-                    extra_emails=c.get("extra_emails", []),
-                    main_signal=main_signal,
-                    detection_date=today,
-                    classification_text=c["name"],
-                    establishment_type=c["type"],  # pré-classé CHR à la découverte
-                    instagram=c["handle"],
-                    siren=(m.siren if m else None),
-                    naf=(m.naf if m else None),
-                    siret=(m.siret if m else None),
-                    siren_match_method=(m.method if m else None),
-                    siren_match_confidence=(m.confidence if m else None),
-                )
-                _process_candidate(session, cand, stats, seen_refs, enricher)
-                # Commit PAR candidat réussi : un échec ultérieur ne défait pas ce
-                # lead ni les précédents (isolation transactionnelle du lot).
+                if routing is not None:
+                    main_signal, secondary_signals, lifecycle_label = routing
+                    m = c.get("_match")
+                    cand = LeadCandidate(
+                        source="instagram",
+                        source_ref=c["handle"],
+                        establishment_name=(m.enseigne if (m and m.enseigne) else c["name"]),
+                        city=c["city"],
+                        address=c.get("address", ""),
+                        email=c.get("email"),
+                        website=c.get("website"),
+                        extra_addresses=c.get("extra_addresses", []),
+                        extra_emails=c.get("extra_emails", []),
+                        main_signal=main_signal,
+                        secondary_signals=list(secondary_signals),
+                        lifecycle_label=lifecycle_label,
+                        detection_date=today,
+                        classification_text=c["name"],
+                        establishment_type=c["type"],  # pré-classé CHR à la découverte
+                        instagram=c["handle"],
+                        siren=(m.siren if m else None),
+                        naf=(m.naf if m else None),
+                        siret=(m.siret if m else None),
+                        siren_match_method=(m.method if m else None),
+                        siren_match_confidence=(m.confidence if m else None),
+                    )
+                    _process_candidate(session, cand, stats, seen_refs, enricher)
+                # Commit unique (verdict + lead) PAR candidat : un échec ultérieur
+                # ne défait ni ce couple ni les précédents (isolation du lot).
                 session.commit()
             except Exception:
                 stats.errors += 1
@@ -384,6 +406,7 @@ def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate
     opp.website = opp.website or cand.website
     opp.instagram = opp.instagram or cand.instagram
     opp.naf = opp.naf or cand.naf
+    opp.lifecycle_label = opp.lifecycle_label or cand.lifecycle_label
     opp.activity_start_date = opp.activity_start_date or cand.activity_start_date
     # BODACC/Sirene apportent chacun une valeur propre (dirigeants, preuve) :
     # on la garde même quand la fusion n'est pas de nature "corroboré instagram".
@@ -607,6 +630,9 @@ def _process_candidate(
             existing.extra_emails = cand.extra_emails
         if cand.source == "instagram" and (cand.email or cand.website or cand.address):
             existing.contact_confidence = "haute"
+        # Rafraîchir le label de cycle de vie (un opening peut devenir established
+        # à un run ultérieur, ou l'inverse) — ne pas écraser par None (BODACC).
+        existing.lifecycle_label = cand.lifecycle_label or existing.lifecycle_label
         existing.activity_start_date = cand.activity_start_date
         existing.venue_origin_date = cand.venue_origin_date
         existing.estimated_timing = timing
@@ -654,6 +680,7 @@ def _process_candidate(
         siren_match_method=cand.siren_match_method,
         siren_match_confidence=cand.siren_match_confidence,
         instagram=cand.instagram,
+        lifecycle_label=cand.lifecycle_label,
         email=cand.email,
         website=cand.website,
         extra_addresses=cand.extra_addresses,
