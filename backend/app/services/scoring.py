@@ -12,6 +12,13 @@ OPENING_SIGNALS = {"ouverture prochaine", "création récente", "nouveau point d
 TAKEOVER_SIGNALS = {"reprise", "changement propriétaire"}
 RENOVATION_SIGNALS = {"rénovation", "travaux visibles"}
 RECRUITMENT_SIGNALS = {"recrutement"}
+# Signaux NEUTRES d'inventaire (leads « en base » du funnel Insta : établis,
+# chaînes multi-sites). Ils ne dénotent AUCUN moment d'achat -> aucun bonus de
+# nature. Réunis dans une SEULE famille pour que le couple d'un lead
+# chain_multisite (« établissement en activité » + « extension multi-sites »)
+# ne déclenche PAS le bonus « signaux croisés » (2 familles) — un même état
+# (l'établissement existe et a plusieurs sites) décrit par deux libellés.
+INVENTORY_SIGNALS = {"établissement en activité", "extension multi-sites"}
 
 # Famille de chaque libellé de signal. Le bonus "signaux croisés" compte les
 # FAMILLES distinctes, pas les libellés : "reprise" + "changement propriétaire"
@@ -21,6 +28,7 @@ SIGNAL_FAMILY = {
     **{s: "takeover" for s in TAKEOVER_SIGNALS},
     **{s: "renovation" for s in RENOVATION_SIGNALS},
     **{s: "recruitment" for s in RECRUITMENT_SIGNALS},
+    **{s: "inventaire" for s in INVENTORY_SIGNALS},
 }
 
 

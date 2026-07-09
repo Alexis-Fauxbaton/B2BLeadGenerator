@@ -54,6 +54,58 @@ _HOURS_KW = (
 _POSTAL_RE = re.compile(r"\b\d{5}\b")
 _PIN = "\U0001F4CD"  # 📍
 
+# --- Apparence de lieu CHR (garde-fou des verdicts established/chain_multisite) --
+# Motif d'erreur mesuré (passe d'annotation #1) : de longs historiques / des
+# horaires promouvaient en « established » des NON-LIEUX (photographes, médias,
+# agences, marques hors-secteur). Les gardes established/chain_multisite ne se
+# déclenchent donc plus que si le compte a l'APPARENCE d'un lieu CHR. Sinon le
+# compte descend au juge LLM (qui sait dire not_venue ; verdict caché 12 mois,
+# coût LLM unique).
+
+# Catégorie business Instagram qui dénote un NON-LIEU (prestataire, média,
+# marque produit) : DISQUALIFIE d'emblée, même si la bio parle de restos
+# (un photographe qui shoote des cafés n'est pas un café). Normalisée, sans accent.
+_NON_VENUE_CATEGORIES = (
+    "photographer", "photography", "reference website", "product/service",
+    "blogger", "personal blog", "content creator", "magazine", "media",
+    "journalist", "graphic designer",
+)
+
+# Indices de NON-LIEU en bio / nom (quand la catégorie business est vide) :
+# prestataire de contenu / média / photographe. Un compte qui parle de
+# restaurants comme SUJET (« création de contenu pour restaurants ») n'est pas
+# lui-même un restaurant. Normalisés, sans accent.
+_NON_VENUE_BIO_CUES = (
+    "creation de contenu", "createur de contenu", "creatrice de contenu",
+    "content creator", "community manager", "photographe", "webmagazine",
+)
+
+# Mots de voie = adresse postale déclarée -> lieu physique (avec le n° de rue).
+_STREET_KW = (
+    "rue ", "avenue ", "boulevard ", " bd ", "place ", "quai ", "chemin ",
+    "impasse ", "cours ", "route ", "allee ", "passage ", "promenade ",
+)
+
+# Catégorie business Instagram qui dénote un LIEU CHR (accueille du public).
+# Volontairement SPÉCIFIQUE (pas le générique « food & beverage », qui couvre
+# aussi les boucheries/épiceries hors-CHR) : chaque terme est un type de salle.
+_VENUE_CATEGORIES = (
+    "restaurant", "cafe", "coffee", "brasserie", "bistro", "pub", "pizzeria",
+    "creperie", "tea room", "salon de the", "bakery", "boulangerie", "hotel",
+    "wine bar", "cocktail", "diner", "bar a vin", "glacier", "gelateria",
+)
+
+# Mots-clés CHR reconnus DANS la bio / le fullName. Sous-ensemble VOLONTAIREMENT
+# plus étroit que instagram.CHR_KEYWORDS : on écarte les termes d'artisanat /
+# vente à emporter / trop génériques (« traiteur », « food », « boulangerie »,
+# « patisserie », « snack ») qui sur-captent des non-lieux (ex. la boucherie-
+# traiteur maisonsaintaubain). On ne garde que des types de salle sans ambiguïté.
+_VENUE_KEYWORDS = (
+    "restaurant", "resto", "brasserie", "bistrot", "bistro", "pizzeria",
+    "trattoria", "creperie", "cafe de specialite", "coffee shop", "coffeeshop",
+    "salon de the", "cave a vin", "bar a vin", "gastronomie", "gastronomique",
+)
+
 # Mois / saisons / année : un segment de ligne pin qui est une DATE d'ouverture
 # ("Juillet 2026", "Printemps/Été 2026") n'est PAS une 2e adresse.
 _MONTHS = ("janvier", "fevrier", "mars", "avril", "mai", "juin", "juillet",
@@ -222,11 +274,52 @@ def _long_history(profile: Dict[str, Any], today: date, threshold_days: int = 15
     return len(old) >= min(3, len(dates))
 
 
+def _looks_like_venue(profile: Dict[str, Any]) -> bool:
+    """True si le compte a l'APPARENCE d'un lieu CHR (café, restaurant, bar,
+    hôtel, brasserie…). Garde-fou PUR : conditionne les verdicts déterministes
+    established/chain_multisite pour ne PLUS promouvoir des non-lieux (prestataires,
+    médias, agences, marques hors-secteur) qui affichent un long historique ou des
+    horaires. Un compte sans apparence de lieu -> le juge LLM tranche (il sait dire
+    not_venue). Signaux, dans l'ordre :
+      1. catégorie / bio de NON-LIEU (photographe, média, prestataire) -> False, quoi qu'il arrive ;
+      2. catégorie business CHR explicite (type de salle) -> True ;
+      3. mot-clé CHR (type de salle) en bio ou fullName -> True ;
+      4. adresse postale déclarée en bio (code postal ou n° + voie) -> True.
+    """
+    cat = _norm(profile.get("businessCategoryName"))
+    hay = _norm(profile.get("biography")) + " \n " + _norm(profile.get("fullName"))
+    # 1. Non-lieu certain (catégorie ou bio) : ni la bio « restos », ni un long
+    # historique ne doivent le promouvoir en lieu.
+    if any(c in cat for c in _NON_VENUE_CATEGORIES):
+        return False
+    if any(c in hay for c in _NON_VENUE_BIO_CUES):
+        return False
+    # 2. Catégorie business = type de salle CHR.
+    if any(c in cat for c in _VENUE_CATEGORIES):
+        return True
+    # 3. Mot-clé « type de salle » en bio / nom.
+    if any(k in hay for k in _VENUE_KEYWORDS):
+        return True
+    # 4. Adresse postale déclarée (code postal, ou n° de rue + voie).
+    bio_norm = _norm(profile.get("biography"))
+    if _POSTAL_RE.search(profile.get("biography") or ""):
+        return True
+    if any(kw in bio_norm for kw in _STREET_KW) and re.search(r"\d", bio_norm):
+        return True
+    return False
+
+
 def guard_verdict(profile: Dict[str, Any], today: Optional[date] = None) -> Optional[str]:
     """Verdict déterministe du profil, ou None (à confier au juge LLM).
-    Ordre : compte-mort -> noise ; multi-adresses / multi-villes -> chain_multisite ;
-    sinon volume / historique / horaires / résa (lien, bio, posts) -> established ;
-    sinon None."""
+    Ordre : compte-mort -> noise ; puis — UNIQUEMENT si le compte a l'apparence
+    d'un lieu CHR (_looks_like_venue) — multi-adresses / multi-villes ->
+    chain_multisite, sinon volume / historique / horaires / résa -> established ;
+    sinon None.
+
+    Le garde `_looks_like_venue` corrige le motif d'erreur #1 (passe d'annotation) :
+    des non-lieux (photographes, médias, agences) au long historique étaient
+    promus « established » et n'atteignaient jamais le juge. Désormais ils
+    descendent au juge (not_venue), à coût LLM unique (verdict caché 12 mois)."""
     today = today or date.today()
     bio = profile.get("biography") or ""
     # Garde compte-mort AVANT tout : bruit certain (peu de posts + quasi zéro
@@ -234,6 +327,10 @@ def guard_verdict(profile: Dict[str, Any], today: Optional[date] = None) -> Opti
     # lead, cache 2 mois) sans dépenser le juge.
     if _is_dead_account(profile):
         return "noise"
+    # Gardes established/chain_multisite : conditionnés à l'apparence de lieu CHR.
+    # Sinon -> None (le juge tranche : not_venue pour un prestataire/média).
+    if not _looks_like_venue(profile):
+        return None
     if _count_addresses_in_bio(bio) >= 2 or _multi_city_in_bio(bio):
         return "chain_multisite"
     posts_count = profile.get("postsCount")

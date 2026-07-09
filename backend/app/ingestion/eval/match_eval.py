@@ -174,8 +174,11 @@ def main() -> None:
     print(f"EVAL MATCHING ({mode}) — {rep['ok']}/{rep['n_expected']} matchs attendus retrouvés")
     print("=" * 64)
     for r in rep["results"]:
-        print(f'  {r["status"]:<12} {r["handle"]:<32} attendu={r["expected"] or "-":<11}'
-              f' obtenu={r["got"] or "-":<11} ({r["method"] or ""})')
+        # `.get` défensif : les lignes no_snapshot / no_fixture n'ont ni 'method'
+        # ni 'got' complet (handles annotés sans fixture de match figée) — le
+        # rapport doit tout de même s'afficher jusqu'au verdict de gate.
+        print(f'  {r["status"]:<12} {r["handle"]:<32} attendu={r.get("expected") or "-":<11}'
+              f' obtenu={r.get("got") or "-":<11} ({r.get("method") or ""})')
     if rep["false_merges"]:
         print(f'\n!! FAUX MERGES ({len(rep["false_merges"])}) — GATE ROUGE, à corriger avant de continuer')
     recall_ok = rep["ok"] >= GATE_MIN_MATCHES
