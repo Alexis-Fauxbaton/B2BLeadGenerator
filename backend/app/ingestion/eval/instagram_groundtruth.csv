@@ -1,21 +1,21 @@
-handle,name,label,confidence,provenance,rationale,expected_siren
-loumasrestaurant,Lou Mas,opening,high,opened_this_session,"2 posts, bio 'ouverture prochainement Printemps/Ete 2026', decor pas encore pose",992408872
-chezgratien_hotelbistrospa,Chez Gratien,opening,high,opened_this_session,"Bio 'Juillet 2026', highlights Travaux + Recrutement, pre-ouverture confirmee",
-tregusto_sartrouville,Tres Gusto,opening,med,opened_this_session,"4 posts / 58 abonnes, resto italien qui demarre, pas d'horaires ni resa",989119201
-brasseriedelafontainelourmarin,Brasserie de la Fontaine,opening,med,prior_run,"13 posts, highlights SOON = pre-ouverture (non rouvert perso cette session)",
-imagine.trouville,Imagine,just_opened,med,opened_this_session,"Horaires affiches (mer-dim) = tout juste ouvert/imminent, petit format artisanal",105127385
-monica_stgermain,Monica,just_opened,low,prior_run,"4 posts mais horaires deja affiches = statut ouverture incertain",
-giorgina_restaurant,Giorgina,established,low,opened_this_session,"15 posts / 662 abonnes, aucun signal d'ouverture explicite, ambigu",
-lartemise_colmar,l'Artemise,established,high,opened_this_session,"682 posts, horaires affiches, salon de the etabli, decor fige",841751183
-osabaita,Osabaita,established,high,opened_this_session,"101 posts, reservation active (tel), deja ouvert et decore",
-lemourerouge_cannes,Le Moure Rouge,established,high,opened_this_session,"193 posts, ouvert 7j/7, reouverture saisonniere, decor en place",899355770
-calaroya_plage,Cala Roya,established,high,opened_this_session,"46 posts, 'open everyday', menu actif = deja ouvert ; SIREN 940096415 verifie le 2026-07-05 (enseigne CALA ROYA, route de la Roya, Saint-Florent, 56.10A - nom legal SASU BJ)",940096415
-lamerpaulettetrouville,La Mer Paulette,established,high,opened_this_session,"172 posts, site + menu + brunch, restaurant etabli rue des Bains",909471096
-villa.henriette_cabourg,Villa Henriette,opening,high,opened_this_session,"48 posts, site de resa actif MAIS posts 'Ouverture 10 Juillet 2026'/'OPENING SOON' = pre-ouverture hoteliere ; label corrige le 2026-07-09 (annotation initiale erronee)",
-cafe_mokaparis,MOKA,chain_multisite,high,opened_this_session,"3 adresses en bio (Champs/Opera/Galeries Lafayette), 'open everyday', chaine etablie",
-cherescousinesbagels,Cheres Cousines,chain_multisite,med,prior_run,"Marque etablie multi-sites (Lyon 6 + Paris 11), nouvelle adresse = decor replique",994929917
-lemarcchiato,Le Marcchiato,chain_multisite,med,prior_run,"139 posts, 5k abonnes, 2e adresse d'une marque etablie, decor centralise probable",979892619
-un_lieu_une_ame_,Un Lieu Une Ame,not_venue,high,opened_this_session,"Agence de design/storytelling (2 creatrices), pas un etablissement CHR",
-maisonaurea,Aurea,not_venue,high,opened_this_session,"Marque de bijoux au Portugal, hors secteur et hors France - piege OCR",
-maisonsaintaubain,Maison Saint-Aubain,not_venue,high,opened_this_session,"Boucherie-fromagerie belge (.be), hors secteur CHR et hors France",
-chickntikka94,Chick'n Tikka,noise,high,opened_this_session,"Fast-food, 2 posts / 1 abonne, pas de bio, quasi mort ; SIREN 100445048 (Paris 12) NON corrobore geo (compte a Ivry, handle 94) - verifie le 2026-07-05, no-match attendu",
+handle,name,label,confidence,provenance,rationale,expected_siren,annotated_at
+loumasrestaurant,Lou Mas,opening,high,opened_this_session,"2 posts, bio 'ouverture prochainement Printemps/Ete 2026', decor pas encore pose",992408872,2026-07-04
+chezgratien_hotelbistrospa,Chez Gratien,opening,high,opened_this_session,"Bio 'Juillet 2026', highlights Travaux + Recrutement, pre-ouverture confirmee",,2026-07-04
+tregusto_sartrouville,Tres Gusto,opening,med,opened_this_session,"4 posts / 58 abonnes, resto italien qui demarre, pas d'horaires ni resa",989119201,2026-07-04
+brasseriedelafontainelourmarin,Brasserie de la Fontaine,opening,med,prior_run,"13 posts, highlights SOON = pre-ouverture (non rouvert perso cette session)",,2026-07-04
+imagine.trouville,Imagine,just_opened,med,opened_this_session,"Horaires affiches (mer-dim) = tout juste ouvert/imminent, petit format artisanal",105127385,2026-07-04
+monica_stgermain,Monica,just_opened,low,prior_run,"4 posts mais horaires deja affiches = statut ouverture incertain",,2026-07-04
+giorgina_restaurant,Giorgina,established,low,opened_this_session,"15 posts / 662 abonnes, aucun signal d'ouverture explicite, ambigu",,2026-07-04
+lartemise_colmar,l'Artemise,established,high,opened_this_session,"682 posts, horaires affiches, salon de the etabli, decor fige",841751183,2026-07-04
+osabaita,Osabaita,established,high,opened_this_session,"101 posts, reservation active (tel), deja ouvert et decore",,2026-07-04
+lemourerouge_cannes,Le Moure Rouge,established,high,opened_this_session,"193 posts, ouvert 7j/7, reouverture saisonniere, decor en place",899355770,2026-07-04
+calaroya_plage,Cala Roya,established,high,opened_this_session,"46 posts, 'open everyday', menu actif = deja ouvert ; SIREN 940096415 verifie le 2026-07-05 (enseigne CALA ROYA, route de la Roya, Saint-Florent, 56.10A - nom legal SASU BJ)",940096415,2026-07-04
+lamerpaulettetrouville,La Mer Paulette,established,high,opened_this_session,"172 posts, site + menu + brunch, restaurant etabli rue des Bains",909471096,2026-07-04
+villa.henriette_cabourg,Villa Henriette,opening,high,opened_this_session,"48 posts, site de resa actif MAIS posts 'Ouverture 10 Juillet 2026'/'OPENING SOON' = pre-ouverture hoteliere ; label corrige le 2026-07-09 (annotation initiale erronee)",,2026-07-04
+cafe_mokaparis,MOKA,chain_multisite,high,opened_this_session,"3 adresses en bio (Champs/Opera/Galeries Lafayette), 'open everyday', chaine etablie",,2026-07-04
+cherescousinesbagels,Cheres Cousines,chain_multisite,med,prior_run,"Marque etablie multi-sites (Lyon 6 + Paris 11), nouvelle adresse = decor replique",994929917,2026-07-04
+lemarcchiato,Le Marcchiato,chain_multisite,med,prior_run,"139 posts, 5k abonnes, 2e adresse d'une marque etablie, decor centralise probable",979892619,2026-07-04
+un_lieu_une_ame_,Un Lieu Une Ame,not_venue,high,opened_this_session,"Agence de design/storytelling (2 creatrices), pas un etablissement CHR",,2026-07-04
+maisonaurea,Aurea,not_venue,high,opened_this_session,"Marque de bijoux au Portugal, hors secteur et hors France - piege OCR",,2026-07-04
+maisonsaintaubain,Maison Saint-Aubain,not_venue,high,opened_this_session,"Boucherie-fromagerie belge (.be), hors secteur CHR et hors France",,2026-07-04
+chickntikka94,Chick'n Tikka,noise,high,opened_this_session,"Fast-food, 2 posts / 1 abonne, pas de bio, quasi mort ; SIREN 100445048 (Paris 12) NON corrobore geo (compte a Ivry, handle 94) - verifie le 2026-07-05, no-match attendu",,2026-07-04

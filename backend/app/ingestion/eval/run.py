@@ -59,6 +59,33 @@ TRUE_BUCKET = {
     "noise": "ecarte",
 }
 
+# Bucket cible par label PRÉDIT (miroir de TRUE_BUCKET, même espace de buckets
+# v2bis). Sert à comparer vérité vs prédiction dans le « jeu de preuve ».
+# unknown -> en_base (lead neutre « en base », cf. routage brique 3bis).
+PRED_BUCKET = {
+    "opening_soon": "a_contacter",
+    "just_opened": "a_surveiller",
+    "established": "en_base",
+    "chain_multisite": "en_base",
+    "unknown": "en_base",
+    "not_venue": "ecarte",
+    "noise": "ecarte",
+}
+
+
+def is_disagreement(true_label: str, predicted_label: Optional[str]) -> bool:
+    """Désaccord = la prédiction tombe dans un bucket v2bis INCOMPATIBLE avec le
+    bucket cible du label vérité (TRUE_BUCKET vs PRED_BUCKET, même espace).
+    None (pas de prédiction cachée) ou label inconnu -> False (on n'affiche pas de
+    désaccord contre une prédiction absente)."""
+    if not predicted_label:
+        return False
+    tb = TRUE_BUCKET.get(true_label)
+    pb = PRED_BUCKET.get(predicted_label)
+    if tb is None or pb is None:
+        return False
+    return tb != pb
+
 
 def load_groundtruth() -> List[dict]:
     with CSV_PATH.open(encoding="utf-8") as f:
@@ -226,6 +253,53 @@ def cached_result(refresh: bool = False) -> dict:
     except OSError:
         pass
     return result
+
+
+def _cached_predictions() -> Dict[str, Optional[str]]:
+    """Prédictions (label prédit) du DERNIER résultat d'éval CACHÉ, par handle.
+    Lecture SEULE du cache fichier écrit par cached_result() : n'exécute JAMAIS le
+    LLM. Cache absent/illisible -> {} (fail-soft : predicted=None partout)."""
+    if not RESULT_PATH.exists():
+        return {}
+    try:
+        cached = json.loads(RESULT_PATH.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+    return {r["handle"]: r.get("predicted_label") for r in cached.get("rows", [])}
+
+
+def groundtruth_asof(as_of: Optional[str] = None) -> dict:
+    """Jeu de preuve DATÉ : lignes du CSV annotées à `as_of` inclus (défaut :
+    toutes). Journal append-only -> filtre lexicographique `annotated_at <= as_of`
+    (les dates ISO YYYY-MM-DD se comparent comme des chaînes). Enrichit chaque
+    ligne de la prédiction du dernier résultat d'éval CACHÉ (jamais de LLM) et d'un
+    drapeau de désaccord (mapping v2bis). -> {as_of effectif, total, rows}."""
+    preds = _cached_predictions()
+    gt = load_groundtruth()
+    dates = sorted({r.get("annotated_at", "").strip()
+                    for r in gt if r.get("annotated_at", "").strip()})
+    effective = as_of or (dates[-1] if dates else None)
+    rows: List[dict] = []
+    for row in gt:
+        annotated_at = row.get("annotated_at", "").strip()
+        if as_of and annotated_at and annotated_at > as_of:
+            continue
+        h = row["handle"].strip()
+        true_label = row["label"].strip()
+        predicted = preds.get(h)
+        rows.append({
+            "handle": h,
+            "name": row.get("name", "").strip(),
+            "label": true_label,
+            "confidence": row.get("confidence", "").strip(),
+            "rationale": row.get("rationale", "").strip(),
+            "annotated_at": annotated_at,
+            "ig_url": f"https://instagram.com/{h}",
+            "has_snapshot": snapshot_path(h).exists(),
+            "predicted": predicted,
+            "disagreement": is_disagreement(true_label, predicted),
+        })
+    return {"as_of": effective, "total": len(rows), "rows": rows}
 
 
 def _fmt_pct(x: Optional[float]) -> str:
