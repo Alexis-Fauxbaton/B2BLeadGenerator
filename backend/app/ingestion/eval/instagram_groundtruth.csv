@@ -1,7 +1,7 @@
 handle,name,label,confidence,provenance,rationale,expected_siren,annotated_at
 loumasrestaurant,Lou Mas,opening,high,opened_this_session,"2 posts, bio 'ouverture prochainement Printemps/Ete 2026', decor pas encore pose",992408872,2026-07-04
 chezgratien_hotelbistrospa,Chez Gratien,opening,high,opened_this_session,"Bio 'Juillet 2026', highlights Travaux + Recrutement, pre-ouverture confirmee",,2026-07-04
-tregusto_sartrouville,Tres Gusto,opening,med,opened_this_session,"4 posts / 58 abonnes, resto italien qui demarre, pas d'horaires ni resa",989119201,2026-07-04
+tregusto_sartrouville,Tres Gusto,just_opened,high,opened_this_session,"4 posts, resto italien ; ouvert depuis ~5 jours au 2026-07-09 (confirme par Alexis) — revise, ex-opening",989119201,2026-07-04
 brasseriedelafontainelourmarin,Brasserie de la Fontaine,just_opened,med,prior_run,"révisé le 2026-07-09 : le feed montre désormais des posts service/assiettes hebdo du 15 avr au 30 juin 2026 et la bio 'Brasserie vivante de @hoteldelafontaine.lourmarin' = table ouverte récemment ; highlights SOON subsistent mais l'exploitation a démarré -> passe de opening à just_opened. Aucun SIRET dédié au registre (seul L'INSOLITE, sans lien, Place de la Fontaine 84160).",,2026-07-04
 imagine.trouville,Imagine,just_opened,med,opened_this_session,"Horaires affiches (mer-dim) = tout juste ouvert/imminent, petit format artisanal",105127385,2026-07-04
 monica_stgermain,Monica,established,med,prior_run,"révisé le 2026-07-09 : 384 abonnés, horaires stables affichés (Lun-ven 5PM-late, Sam-dim 11AM-late), site monica-saint-germain.com actif, reels récents ; 'Closed Monica' est un nom de marque (pizza/vin, 1 rue Gozlin 75006), établissement en exploitation et non fermé -> passe de just_opened à established.",,2026-07-04
