@@ -67,3 +67,10 @@ def test_prompt_has_date_anchor_and_reasoning_and_precomputed_ages():
 def test_judge_dossier_fail_soft():
     assert judge_dossier(None, "x", "X", PROFILE, today=TODAY) == {}
     assert judge_dossier(_FakeClient("pas du json"), "x", "X", PROFILE, today=TODAY) == {}
+
+
+def test_judge_prompt_mentions_second_address_chain():
+    from app.ingestion.instagram import _DOSSIER_SYSTEM
+    t = _DOSSIER_SYSTEM.lower()
+    # La règle chaîne cible explicitement la 2e adresse d'une marque existante.
+    assert "adresse" in t and ("2e adresse" in t or "nouvelle adresse" in t or "2e établissement" in t)

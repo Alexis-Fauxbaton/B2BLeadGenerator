@@ -9,6 +9,10 @@ from app.ingestion.profile_guards import (
     _has_hours_in_bio,
     _has_reservation_link,
     _count_addresses_in_bio,
+    _has_reservation_in_bio,
+    _has_reservation_in_posts,
+    _has_opening_cue,
+    _multi_city_in_bio,
 )
 
 SNAP = Path(__file__).resolve().parents[1] / "app" / "ingestion" / "eval" / "snapshots"
@@ -107,6 +111,65 @@ def test_hours_guard_ignores_countdown():
     assert not _has_hours_in_bio("Ouverture dans 48h !")
     # ...mais une vraie plage horaire-only ("10h-18h") EST détectée.
     assert _has_hours_in_bio("Service 10h-18h")
+
+
+def test_reservation_in_bio_helper():
+    assert _has_reservation_in_bio("Réservation : 01 43 25 87 99")
+    assert not _has_reservation_in_bio("Réservez votre table très bientôt")   # pas de tel
+    assert not _has_reservation_in_bio("Café de spécialité, 5 rue du Marché")  # pas de résa
+
+
+def test_multi_city_in_bio_helper():
+    assert _multi_city_in_bio("Lyon 6, Paris 11")
+    assert _multi_city_in_bio("Bordeaux | Toulouse")
+    assert not _multi_city_in_bio("Bagels à Paris 11")                       # 1 ville
+    assert not _multi_city_in_bio("Villeneuve d'Aveyron | Juillet 2026")     # 1 ville + date
+
+
+def test_reservation_in_posts_helper():
+    # En service : résa + URL et AUCUN indice d'ouverture -> True.
+    assert _has_reservation_in_posts(
+        {"latestPosts": [{"caption": "réservations sur notre site internet www.x.fr"}]})
+    assert not _has_reservation_in_posts(
+        {"latestPosts": [{"caption": "on ouvre bientôt, restez connectés !"}]})
+    assert not _has_reservation_in_posts({"latestPosts": []})
+
+
+def test_reservation_in_posts_ignores_preopening():
+    # RÉGRESSION (garde-fou rappel opening) : une pré-ouverture qui tease DÉJÀ la
+    # réservation en ligne ne doit JAMAIS être captée comme established -> None ->
+    # elle reste au juge. Reproduit le vrai profil villa.henriette_cabourg.
+    preopening = {
+        "biography": "📅 Ouverture 10 Juillet 2026 ! #openingsoon",
+        "latestPosts": [
+            {"caption": "Rendez-vous pour les réservations sur www.villa-henriette.fr"},
+            {"caption": "OPENING SOON !!! L'ouverture approche"},
+        ],
+    }
+    assert _has_opening_cue(preopening)
+    assert not _has_reservation_in_posts(preopening)
+
+
+def test_osabaita_established_by_guard():
+    snap = json.loads((SNAP / "osabaita.json").read_text(encoding="utf-8"))
+    # Résa téléphone en bio + fr.newtable.com en externalUrls -> established, sans LLM.
+    assert guard_verdict(snap, TODAY) == "established"
+
+
+def test_villa_henriette_passes_to_judge():
+    snap = json.loads((SNAP / "villa.henriette_cabourg.json").read_text(encoding="utf-8"))
+    # villa.henriette est une PRÉ-OUVERTURE (bio « Ouverture 10 Juillet 2026 »,
+    # « OPENING SOON », ouvre 2 jours après TODAY=2026-07-08) qui tease déjà la
+    # résa en ligne. Le garde résa-posts est vetoé par `_has_opening_cue` -> None
+    # -> villa retombe au juge (assertion de NON-RÉGRESSION : jamais captée au
+    # garde, sinon perte d'un vrai opening_soon). Reste verte de bout en bout.
+    assert guard_verdict(snap, TODAY) is None
+
+
+def test_cherescousines_chain_by_guard():
+    snap = json.loads((SNAP / "cherescousinesbagels.json").read_text(encoding="utf-8"))
+    # Bio « Lyon 6, Paris 11 » = deux villes = marque multi-sites, sans LLM.
+    assert guard_verdict(snap, TODAY) == "chain_multisite"
 
 
 def test_just_opened_monica_survives_guards():
