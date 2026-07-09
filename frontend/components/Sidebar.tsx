@@ -59,8 +59,8 @@ export default function Sidebar() {
 
       <div className="p-4 border-t border-slate-200">
         <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
-          <p className="font-medium text-slate-700">Mode démo</p>
-          <p className="mt-1">Données seedées · aucune source réelle connectée.</p>
+          <p className="font-medium text-slate-700">Sources</p>
+          <p className="mt-1">BODACC · Sirene · Instagram</p>
         </div>
       </div>
     </aside>
