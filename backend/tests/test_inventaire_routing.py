@@ -137,6 +137,46 @@ def test_opening_still_hot(tmp_path, monkeypatch):
     assert opp.main_signal == "ouverture prochaine"
 
 
+def test_established_lead_stage_is_coherent(tmp_path, monkeypatch):
+    # Cohérence bout-en-bout : une fiche « en base » established (signal NEUTRE, ni
+    # avis, ni origine, ni date d'activité) doit exposer lifecycle_stage='établi',
+    # jamais 'ouvert récemment' (sinon contradiction avec lifecycle_label).
+    from app.schemas import OpportunityList
+    prof = {"postsCount": 200, "biography": "Bistrot de quartier",
+            "latestPosts": [{"timestamp": "2026-07-01T10:00:00.000Z"}]}
+    _prep(monkeypatch, {"vieuxbistrot": prof})
+    _, opps, _ = _run(_engine(tmp_path), [_post("vieuxbistrot", "resto à Paris", ())])
+    opp = opps["vieuxbistrot"]
+    assert opp.lifecycle_label == "established"
+    serialized = OpportunityList.model_validate(opp)
+    assert serialized.lifecycle_stage == "établi"
+
+
+def test_verdict_not_cached_when_lead_creation_fails(tmp_path, monkeypatch):
+    # Fix revue finale : le verdict est committé AVEC le lead (même transaction).
+    # Si _process_candidate échoue, le rollback annule AUSSI le verdict -> le handle
+    # reste « dû » (should_rejudge True) et sera re-jugé, au lieu d'être endormi 6
+    # mois sans jamais avoir créé sa fiche « en base ».
+    from app.ingestion import verdict_cache
+    prof = {"postsCount": 200, "biography": "Bistrot de quartier",
+            "latestPosts": [{"timestamp": "2026-07-01T10:00:00.000Z"}]}
+    _prep(monkeypatch, {"vieuxbistrot": prof})
+
+    def _boom(*a, **k):
+        raise RuntimeError("échec enrichissement simulé")
+    monkeypatch.setattr(pl, "_process_candidate", _boom)
+
+    engine = _engine(tmp_path)
+    with Session(engine) as s:
+        stats = pl.run_instagram(posts=[_post("vieuxbistrot", "resto à Paris", ())], session=s)
+        s.commit()
+        assert stats.errors == 1
+        # Ni lead, ni verdict caché : le handle doit rester re-jugé.
+        assert s.exec(select(Opportunity)).all() == []
+        assert s.exec(select(HandleVerdict)).all() == []
+        assert verdict_cache.should_rejudge(s, "vieuxbistrot") is True
+
+
 def test_opening_outranks_established(tmp_path, monkeypatch):
     profs = {
         "vieux": {"postsCount": 200, "biography": "Bistrot",

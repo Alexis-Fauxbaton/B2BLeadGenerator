@@ -120,6 +120,7 @@ class OpportunityList(OpportunityBase):
             closed=self.closed_at is not None,
             activity_start_date=self.activity_start_date,
             venue_origin_date=self.venue_origin_date,
+            lifecycle_label=self.lifecycle_label,
         )
 
     @computed_field

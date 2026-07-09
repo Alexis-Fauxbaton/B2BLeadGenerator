@@ -311,52 +311,52 @@ def run_instagram(
             cacheable = has_data and not (
                 c["label"] == "unknown" and (c.get("confidence") or "basse") == "basse"
             )
-            if cacheable:
-                # Verdict persisté INDÉPENDAMMENT du sort du lead (commit isolé) :
-                # un échec d'enrichissement plus bas ne doit annuler ni ce verdict
-                # ni les verdicts/leads déjà réussis des candidats précédents du lot.
-                try:
-                    verdict_cache.upsert(session, c["handle"], c["label"],
-                                         c.get("confidence"), prof, today=today)
-                    session.commit()
-                except Exception:
-                    session.rollback()
             # ROUTAGE brique 3bis : TOUT label devient un lead SAUF not_venue/noise
             # (absents de LABEL_ROUTING -> cache seul). Les ouvertures gardent leur
             # signal d'achat ; établis/chaînes/unknown reçoivent un signal NEUTRE
             # (score naturellement bas) + le label de cycle de vie persisté.
             routing = LABEL_ROUTING.get(c["label"])
-            if routing is None:
-                continue
-            main_signal, secondary_signals, lifecycle_label = routing
             try:
-                m = c.get("_match")
-                cand = LeadCandidate(
-                    source="instagram",
-                    source_ref=c["handle"],
-                    establishment_name=(m.enseigne if (m and m.enseigne) else c["name"]),
-                    city=c["city"],
-                    address=c.get("address", ""),
-                    email=c.get("email"),
-                    website=c.get("website"),
-                    extra_addresses=c.get("extra_addresses", []),
-                    extra_emails=c.get("extra_emails", []),
-                    main_signal=main_signal,
-                    secondary_signals=list(secondary_signals),
-                    lifecycle_label=lifecycle_label,
-                    detection_date=today,
-                    classification_text=c["name"],
-                    establishment_type=c["type"],  # pré-classé CHR à la découverte
-                    instagram=c["handle"],
-                    siren=(m.siren if m else None),
-                    naf=(m.naf if m else None),
-                    siret=(m.siret if m else None),
-                    siren_match_method=(m.method if m else None),
-                    siren_match_confidence=(m.confidence if m else None),
-                )
-                _process_candidate(session, cand, stats, seen_refs, enricher)
-                # Commit PAR candidat réussi : un échec ultérieur ne défait pas ce
-                # lead ni les précédents (isolation transactionnelle du lot).
+                # Verdict de cache ET lead COMMITTÉS ENSEMBLE par candidat (même
+                # unité transactionnelle) : si la création du lead échoue plus bas
+                # (enrich réseau, classify, scoring), le rollback annule AUSSI le
+                # verdict -> should_rejudge reste vrai et le handle est re-jugé au
+                # prochain run (sa fiche « en base » n'est pas condamnée à ne
+                # jamais exister pendant la fenêtre de revisite). L'isolation
+                # inter-candidats est préservée : le commit par candidat protège
+                # les verdicts/leads déjà réussis du lot.
+                if cacheable:
+                    verdict_cache.upsert(session, c["handle"], c["label"],
+                                         c.get("confidence"), prof, today=today)
+                if routing is not None:
+                    main_signal, secondary_signals, lifecycle_label = routing
+                    m = c.get("_match")
+                    cand = LeadCandidate(
+                        source="instagram",
+                        source_ref=c["handle"],
+                        establishment_name=(m.enseigne if (m and m.enseigne) else c["name"]),
+                        city=c["city"],
+                        address=c.get("address", ""),
+                        email=c.get("email"),
+                        website=c.get("website"),
+                        extra_addresses=c.get("extra_addresses", []),
+                        extra_emails=c.get("extra_emails", []),
+                        main_signal=main_signal,
+                        secondary_signals=list(secondary_signals),
+                        lifecycle_label=lifecycle_label,
+                        detection_date=today,
+                        classification_text=c["name"],
+                        establishment_type=c["type"],  # pré-classé CHR à la découverte
+                        instagram=c["handle"],
+                        siren=(m.siren if m else None),
+                        naf=(m.naf if m else None),
+                        siret=(m.siret if m else None),
+                        siren_match_method=(m.method if m else None),
+                        siren_match_confidence=(m.confidence if m else None),
+                    )
+                    _process_candidate(session, cand, stats, seen_refs, enricher)
+                # Commit unique (verdict + lead) PAR candidat : un échec ultérieur
+                # ne défait ni ce couple ni les précédents (isolation du lot).
                 session.commit()
             except Exception:
                 stats.errors += 1
