@@ -39,24 +39,24 @@ FRESH_LABELS = {"opening_soon", "just_opened", "unknown"}
 TRUTH_LABEL_MAP = {"opening": "opening_soon"}
 # Gates durs d'acceptation.
 GATE_RECALL_OPENING = 1.0
-# Plancher de précision a_contacter (valeur d'origine, jamais affaiblie).
-# NOTE [revue finale] : la précision mesurée actuelle (~33 % = 4/12) est POSÉE
-# SUR ce plancher, marge quasi nulle — un seul faux positif de plus (4/13 = 31 %)
-# ou une dérive prompt/modèle fait passer la gate sous le seuil. Le classifieur
-# n'est pas « nettement mieux » que le plancher, il EST le plancher. À corriger
-# en réduisant les faux positifs (reprendre de la marge) ; documenté ici pour
-# qu'une régression future soit comprise et non subie.
+# Plancher de précision a_contacter (métrique de continuité, publiée mais NON
+# bloquante depuis la brique 3bis : le gate honnête est la précision du segment
+# chaud, cf. GATE_HOT_PRECISION).
 GATE_MIN_PRECISION = 0.33
+# Gate honnête d'acceptation (brique 3bis) : précision du segment chaud
+# (opening_soon/just_opened prédits) >= 60 %.
+GATE_HOT_PRECISION = 0.60
 
-# Bucket cible par label vérité (cf. README). Sert à l'affichage : le statut
-# "véridique" attendu. La prédiction actuelle est binaire (a_contacter/ecarte).
+# Bucket cible par label vérité (brique 3bis) : establi/chaîne = « en_base »
+# (lead créé, segment froid) ; not_venue/noise = « ecarte » (pas de lead) ;
+# opening = « a_contacter » ; just_opened = « a_surveiller ».
 TRUE_BUCKET = {
     "opening": "a_contacter",
     "just_opened": "a_surveiller",
-    "established": "ecarte",
-    "chain_multisite": "ecarte",
+    "established": "en_base",
+    "chain_multisite": "en_base",
     "not_venue": "ecarte",
-    "noise": "a_reverifier",
+    "noise": "ecarte",
 }
 
 
@@ -115,7 +115,7 @@ def classify(snapshots: Dict[str, dict]) -> Dict[str, str]:
 
 
 def run_eval(strict: bool = False) -> dict:
-    from .metrics import label_confusion
+    from .metrics import label_confusion, hot_precision
 
     rows = load_groundtruth()
     snapshots: Dict[str, dict] = {}
@@ -147,9 +147,11 @@ def run_eval(strict: bool = False) -> dict:
         for h in snapshots
     ]
     labels_matrix = label_confusion(label_pairs)
+    hot_prec, hot_tp, hot_n = hot_precision(label_pairs)
 
     gate_recall = report.recall_opening is not None and report.recall_opening >= GATE_RECALL_OPENING
     gate_precision = report.precision_a_contacter is not None and report.precision_a_contacter >= GATE_MIN_PRECISION
+    gate_hot = hot_prec is not None and hot_prec >= GATE_HOT_PRECISION
     return {
         "report": report,
         "missing_snapshots": missing,
@@ -158,9 +160,14 @@ def run_eval(strict: bool = False) -> dict:
         "predicted_labels": predicted_labels,
         "label_by_handle": label_by_handle,
         "labels_matrix": labels_matrix,
+        "hot_precision": hot_prec,
+        "hot_tp": hot_tp,
+        "hot_n": hot_n,
         "gate_recall_opening": gate_recall,
         "gate_precision": gate_precision,
-        "gates_pass": gate_recall and gate_precision,
+        "gate_hot_precision": gate_hot,
+        # ACCEPTATION brique 3bis : rappel opening 4/4 ET précision segment chaud >= 60 %.
+        "gates_pass": gate_recall and gate_hot,
     }
 
 
@@ -269,9 +276,13 @@ def print_report(result: dict) -> None:
             row = matrix[label]
             print(f"  {label:<16} " + " ".join(f"{row.get(c, 0):>9}" for c in cols))
     print()
+    hp = result.get("hot_precision")
+    print(f"** PRÉCISION segment chaud : {_fmt_pct(hp)} **"
+          f"   ({result.get('hot_tp', 0)} vrais / {result.get('hot_n', 0)} prédits opening_soon|just_opened)")
     ok = "OK" if result["gates_pass"] else "ÉCHEC"
     print(f"GATES : rappel opening>=100% = {result['gate_recall_opening']} | "
-          f"précision a_contacter>=33% = {result['gate_precision']}  -> {ok}")
+          f"précision chaud>=60% = {result['gate_hot_precision']}  -> {ok}")
+    print(f"  (info) précision a_contacter>=33% = {result['gate_precision']}")
     print("=" * 60)
 
 
@@ -312,6 +323,7 @@ def main() -> None:
         payload = {
             **result["report"].as_dict(),
             "labels_matrix": result["labels_matrix"],
+            "hot_precision": result["hot_precision"],
             "gates_pass": result["gates_pass"],
             "missing_snapshots": result["missing_snapshots"],
             "excluded_low_confidence": result["excluded_low_confidence"],

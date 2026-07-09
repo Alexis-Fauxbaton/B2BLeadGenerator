@@ -77,7 +77,10 @@ Cinq tables SQLModel :
     *local* via l'exploitant précédent — distingue vraie ouverture et reprise
     d'un vieux fonds), `estimated_timing`, `probable_needs` (JSON),
     `decision_maker`, `dirigeants` (JSON), `opportunity_score`, `score_reason`,
-    `recommended_channel`, `channel_reason`, `proof_text`, `proof_url`.
+    `recommended_channel`, `channel_reason`, `proof_text`, `proof_url`,
+    `lifecycle_label` (label de cycle de vie du funnel Insta persisté —
+    opening_soon / just_opened / established / chain_multisite / unknown ;
+    filtrable via l'API ; NULL pour BODACC/Sirene).
   - *Contact* : `phone`, `email`, `website`, `instagram`, `facebook`,
     `extra_addresses`/`extra_emails` (JSON), `latitude`/`longitude`,
     `review_count` (proxy de fraîcheur Places), `contact_confidence`,
@@ -191,10 +194,18 @@ Funnel v2 (brique 3, cf. §9) — étiquetage, plus aucun drop sur caption :
 7. `judge_dossier` — **un** appel LLM par compte sur le dossier complet (bio,
    compteurs, 6-12 posts datés avec âges **précalculés en code**, caption,
    registre) → label de cycle de vie + `reasoning` + extraction adresses/emails.
-8. `verdict_cache.upsert` — écrit le verdict ; `run_instagram` crée un lead
-   UNIQUEMENT pour `opening_soon`/`just_opened`/`unknown` (les autres labels =
-   verdict caché, pas de lead). `main_signal` : opening_soon→« ouverture
-   prochaine », just_opened→« création récente », unknown→« ouverture prochaine ».
+8. `verdict_cache.upsert` — écrit le verdict ; `run_instagram` crée le lead selon
+   le **routage brique 3bis** (ci-dessous). Cache HandleVerdict et fenêtres de
+   revisite **inchangés**.
+
+Routage label -> lead (brique 3bis) — inventaire complet : TOUT label devient un
+lead SAUF not_venue/noise (verdict caché seul). opening_soon -> « ouverture
+prochaine » (chaud) ; just_opened -> « création récente » (chaud) ; established
+& chain_multisite & unknown -> signal NEUTRE « établissement en activité » (aucun
+bonus de nature -> score bas, « en base »), + secondary « extension multi-sites »
+pour les chaînes. Le label est PERSISTÉ (Opportunity.lifecycle_label, filtrable
+via GET /api/opportunities?lifecycle_label=…). unknown n'est plus déguisé en
+ouverture. Cache HandleVerdict et fenêtres INCHANGÉS.
 
 ### Les passes récurrentes (pipeline.py, CLI `app.ingestion.run`)
 
@@ -361,6 +372,7 @@ segment de tête, qualité par corroboration registre × Instagram).
 | 1. `siret_matcher` | matching Insta↔SIRET (nom → adresse → arbitre) + éval fixtures | **Fait** (mergé 2026-07-06) |
 | 2. Délta-Sirene | nouveaux SIRET NAF 55/56 par jour = recall ~100 % sur les ouvertures ; corroboration croisée | **Fait** (2026-07-06) |
 | 3. Funnel v2 + cache verdicts | juge unique `judge_dossier` sur dossier complet, garde-fous déterministes (`profile_guards`), labels de cycle de vie, `handle_verdicts` avec fenêtres de revisite | **Fait** (2026-07-06) |
+| 3bis. Inventaire complet + précision | lifecycle_label persisté + filtre API ; routage de TOUS les labels en leads (établis/chaînes/unknown « en base », signal neutre) ; gardes/juge affinés (résa bio+posts, multi-villes, prompt chaîne) ; éval v2bis (buckets en_base, précision segment chaud >= 60 %) | **Fait** (2026-07-06) |
 | 4. Watchlist + réconciliation | re-scrape hebdo des opening-soon, re-matching des leads sans SIREN | À faire |
 
 Dettes/leçons consignées pour les briques suivantes (ledger de la brique 1) :

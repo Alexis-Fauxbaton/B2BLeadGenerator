@@ -67,6 +67,26 @@ def label_confusion(pairs: List[Pair]) -> Dict[str, Dict[str, int]]:
     return confusion_matrix(pairs)
 
 
+# Segment « chaud » : prédictions à traiter en priorité (funnel v2bis).
+HOT_PRED = {"opening_soon", "just_opened"}
+# Vérités (déjà MAPPÉES : opening -> opening_soon) qui légitiment une prédiction
+# chaude. unknown n'y est pas (une prédiction chaude sur un unknown vrai = FP).
+HOT_TRUTH = {"opening_soon", "just_opened"}
+
+
+def hot_precision(label_pairs: List[Pair]) -> Tuple[Optional[float], int, int]:
+    """Précision du segment chaud = (vérité chaude parmi les prédits chauds) /
+    prédits chauds. `label_pairs` = (vérité_mappée, label_prédit).
+    -> (précision|None, vrais_positifs, total_prédits_chauds). None si aucun
+    prédit chaud. Métrique HONNÊTE : un `just_opened` prédit sur un vrai
+    `just_opened` compte comme vrai positif (plus un faux positif du recall opening)."""
+    hot = [(truth, pred) for truth, pred in label_pairs if pred in HOT_PRED]
+    if not hot:
+        return None, 0, 0
+    tp = sum(1 for truth, _ in hot if truth in HOT_TRUTH)
+    return tp / len(hot), tp, len(hot)
+
+
 def bucket_precision(
     pairs: List[Pair], bucket: str = A_CONTACTER, target_label: str = OPENING
 ) -> Tuple[Optional[float], int, int]:

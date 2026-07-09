@@ -36,17 +36,37 @@ vrai quels que soient les features mesures.
 
 ### Labels (verite terrain)
 
-| label | sens | bucket cible |
+| label | sens | bucket cible (brique 3bis) |
 |---|---|---|
 | `opening` | ouvre bientot, decor pas encore pose | a_contacter |
 | `just_opened` | vient d'ouvrir, decor possiblement deja pose | a_surveiller |
-| `established` | opere depuis des mois, decor fige | ecarte |
-| `chain_multisite` | marque multi-sites, decor centralise | ecarte |
-| `not_venue` | pas un etablissement CHR (agence, marque, hors secteur/pays) | ecarte |
-| `noise` | fast-food / compte mort / sans valeur | a_reverifier |
+| `established` | opere depuis des mois, decor fige | **en_base** (lead cree, segment froid) |
+| `chain_multisite` | marque multi-sites, decor centralise | **en_base** (lead cree, segment froid) |
+| `not_venue` | pas un etablissement CHR (agence, marque, hors secteur/pays) | **ecarte** (pas de lead) |
+| `noise` | fast-food / compte mort / sans valeur | **ecarte** (pas de lead) |
 
-Cible produit = seul `opening` doit finir en **a_contacter**. Tout le reste qui
-y arriverait est un **faux positif**.
+Pivot inventaire (brique 3bis) : TOUT label devient un lead SAUF `not_venue`/
+`noise`. `established`/`chain_multisite` (et `unknown`) tombent en **en_base**
+(lead cree avec le signal neutre « etablissement en activite », score bas) — ce
+ne sont plus des faux positifs a ecarter, juste le segment froid de l'inventaire.
+Seuls `not_venue`/`noise` restent **ecarte** (aucun lead, cache seul).
+
+### Metriques
+
+- **Precision du segment chaud** (metrique HONNETE d'acceptation, brique 3bis) =
+  vrais `opening`|`just_opened` parmi les predits `opening_soon`|`just_opened`.
+  Un `just_opened` predit sur un vrai `just_opened` n'est **plus** un faux
+  positif (l'ancienne « precision a_contacter » le comptait a tort). **Gate >=
+  60 %.** On reporte systematiquement le denominateur (`hot_n`, nb de predits
+  chauds) a cote du ratio : un segment chaud fin (~4-5 comptes) rend le chiffre
+  volatil.
+- **Rappel des opening** = `opening` retrouves en `a_contacter` / `opening`
+  totaux. Espace de rappel inchange (`a_contacter`, projection binaire incluant
+  `unknown`) -> **gate == 100 % (4/4), non negociable**.
+- **Precision a_contacter** (metrique de continuite, briques 1-2) : toujours
+  calculee et publiee, mais **NON bloquante** depuis la brique 3bis (le gate
+  honnete est la precision du segment chaud).
+- Matrice de confusion par label (verite mappee x label predit).
 
 ## Comment s'en servir
 
@@ -54,11 +74,11 @@ y arriverait est un **faux positif**.
    -> `judge_dossier` (juge unitaire)) sur ces memes `handle`, recuperer le
    verdict machine ; l'eval produit un LABEL par compte + une matrice de
    confusion label x label, en plus de la projection binaire a_contacter/ecarte.
-2. Comparer verdict machine vs `label`. Metriques cles :
-   - **precision du bucket a_contacter** = vrais `opening` / total classes a_contacter
-     (c'est LE chiffre qui dit si "opening soon = opening soon").
-   - rappel = `opening` retrouves / `opening` totaux.
-   - matrice de confusion par label.
+2. Comparer verdict machine vs `label`. Metriques cles (cf. section Metriques) :
+   - **precision du segment chaud** = vrais `opening`|`just_opened` / predits
+     `opening_soon`|`just_opened` (LE chiffre honnete « opening = opening ? ») ;
+   - rappel = `opening` retrouves / `opening` totaux (gate 4/4) ;
+   - precision a_contacter (continuite, non bloquante) + matrice par label.
 3. Regler les seuils (posts, followers, avis) et les regles deterministes en
    **train/test split**, jamais sur l'echantillon entier.
 

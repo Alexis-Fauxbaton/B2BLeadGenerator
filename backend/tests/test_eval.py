@@ -96,3 +96,20 @@ def test_label_confusion_matrix():
     assert m["opening_soon"]["unknown"] == 1
     assert m["chain_multisite"]["chain_multisite"] == 1
     assert m["not_venue"]["established"] == 1
+
+
+def test_hot_precision():
+    from app.ingestion.eval.metrics import hot_precision
+    pairs = [
+        ("opening_soon", "opening_soon"),      # TP (vérité chaude, prédit chaud)
+        ("just_opened", "just_opened"),        # TP (just_opened prédit sur vrai just_opened)
+        ("established", "opening_soon"),       # FP (établi prédit chaud)
+        ("not_venue", "noise"),                # hors segment chaud
+        ("chain_multisite", "chain_multisite"),  # hors segment chaud
+        ("opening_soon", "unknown"),           # hors segment chaud (unknown pas chaud)
+    ]
+    prec, tp, n = hot_precision(pairs)
+    assert (tp, n) == (2, 3)
+    assert abs(prec - 2 / 3) < 1e-9
+    # Aucun prédit chaud -> None.
+    assert hot_precision([("established", "established")]) == (None, 0, 0)
