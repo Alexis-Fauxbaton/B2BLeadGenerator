@@ -27,6 +27,9 @@ interface EvalResult {
   generated_at: string;
   precision_a_contacter: number | null;
   recall_opening: number | null;
+  hot_precision?: number | null;
+  hot_tp?: number | null;
+  hot_n?: number | null;
   n: number;
   n_a_contacter: number;
   tp_opening: number;
@@ -137,12 +140,21 @@ export default function EvalPage() {
       {data && (
         <>
           {/* Métriques clés */}
-          <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-5">
+            <Metric
+              label="Précision segment chaud"
+              value={pct(data.hot_precision ?? null)}
+              sub={
+                data.hot_n != null
+                  ? `${data.hot_tp ?? 0} vrais / ${data.hot_n} prédits chauds (gate ≥ 60 %)`
+                  : "recalculer pour mesurer"
+              }
+              accent="text-brand-700"
+            />
             <Metric
               label="Précision a_contacter"
               value={pct(data.precision_a_contacter)}
               sub={`${data.tp_opening} opening / ${data.n_a_contacter} classés`}
-              accent="text-brand-700"
             />
             <Metric
               label="Rappel opening"

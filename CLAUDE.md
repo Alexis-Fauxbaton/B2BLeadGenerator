@@ -72,6 +72,17 @@ cd backend && python -m pytest tests/ -q
   pas pris en compte (bug vécu sur l'ajout du filtre `source`).
 - **Console Windows = cp1252** : les `print` avec emoji/accents plantent ou
   s'affichent mal ; la base et l'API restent en UTF-8 correct.
+- **Serveurs zombies sous Windows (vécu, coûteux)** : tuer le shell ne tue NI
+  `uvicorn --reload` NI `next dev` — le couple reloader/enfant survit en
+  orphelin, garde le port (même avec un parent mort) et sert l'ANCIEN code
+  pendant que le nouveau serveur croit tourner. Deux `next dev` sur le même
+  dossier corrompent aussi `.next` (CSS/chunks en 404). Avant de (re)lancer :
+  vérifier le port (`Get-NetTCPConnection -LocalPort 8000,3000`) et tuer les
+  ARBRES (`taskkill /PID <pid> /T /F`), y compris les enfants python3.9
+  orphelins listés par `Get-CimInstance Win32_Process`.
+- **L'app FastAPI charge `backend/.env` au démarrage** (`main.py`) : sans ça,
+  les juges/enrichisseurs tournent en fail-soft silencieux via l'API (vécu :
+  refresh d'éval sans LLM → hot_precision=None). Ne pas retirer ce chargement.
 
 ## État & roadmap
 Fait : UI complète, ingestion BODACC+Sirene avec stratégie de mise à jour.

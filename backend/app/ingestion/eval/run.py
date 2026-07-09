@@ -230,6 +230,12 @@ def detailed_result(strict: bool = False) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "precision_a_contacter": r.precision_a_contacter,
         "recall_opening": r.recall_opening,
+        # Métrique v2bis (segment chaud) + gates — même source que le CLI,
+        # sinon l'UI sert un cache amputé (vécu : hot_precision=None à l'API).
+        "hot_precision": res["hot_precision"],
+        "hot_tp": res["hot_tp"],
+        "hot_n": res["hot_n"],
+        "gates_pass": res["gates_pass"],
         "n": r.n,
         "n_a_contacter": r.n_a_contacter,
         "tp_opening": r.tp_opening,

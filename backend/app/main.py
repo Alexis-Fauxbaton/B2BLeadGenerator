@@ -1,4 +1,15 @@
 """Point d'entrée FastAPI — CHR Signal Radar (PoC)."""
+# Charge backend/.env AVANT tout : sans ça, les clés (OPENAI_API_KEY...) sont
+# absentes du process uvicorn et les juges/enrichisseurs tournent en fail-soft
+# silencieux (vécu : refresh d'éval via l'UI sans LLM -> hot_precision=None).
+try:
+    from pathlib import Path as _Path
+
+    from dotenv import load_dotenv
+    load_dotenv(_Path(__file__).resolve().parents[1] / ".env")
+except Exception:
+    pass
+
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
