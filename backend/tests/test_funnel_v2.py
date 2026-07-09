@@ -79,9 +79,9 @@ def _no_enricher():
 
 
 def test_run_instagram_labels_leads_and_cache(tmp_path, monkeypatch):
-    """MOKA -> chain_multisite (verdict caché, pas de lead) ; newresto ->
-    unknown fail-soft (lead créé MAIS PAS caché : sans juge, confiance 'basse'
-    -> on ne l'endort pas 2 mois, il reste dû au prochain run)."""
+    """MOKA -> chain_multisite : DÉSORMAIS un lead « en base » (extension
+    multi-sites) ET un verdict caché. newresto -> unknown fail-soft (lead créé,
+    signal neutre, NON caché : sans juge, confiance 'basse' -> reste dû)."""
     engine = create_engine(f"sqlite:///{tmp_path/'t.db'}")
     SQLModel.metadata.create_all(engine)
     moka = json.loads((SNAP / "cafe_mokaparis.json").read_text(encoding="utf-8"))
@@ -91,9 +91,9 @@ def test_run_instagram_labels_leads_and_cache(tmp_path, monkeypatch):
                      "latestPosts": [{"timestamp": "2026-06-20T10:00:00.000Z"}]},
     }
     monkeypatch.setattr(pl, "scrape_profiles", lambda handles, **k: profiles)
-    monkeypatch.setattr(pl, "match_siret", lambda **kw: None)  # pas de réseau matcher
+    monkeypatch.setattr(pl, "match_siret", lambda **kw: None)
     monkeypatch.setattr(pl, "SireneEnricher", lambda: _no_enricher())
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)  # pas de juge -> unknown
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     posts = [
         {"ownerUsername": "newresto", "ownerFullName": "Le Nouveau Resto",
@@ -105,14 +105,15 @@ def test_run_instagram_labels_leads_and_cache(tmp_path, monkeypatch):
     with Session(engine) as s:
         stats = pl.run_instagram(posts=posts, session=s)
         s.commit()
-        handles = {o.source_ref for o in s.exec(select(Opportunity)).all()}
-        assert "newresto" in handles           # unknown -> lead
-        assert "cafe_mokaparis" not in handles  # chain_multisite -> pas de lead
+        opps = {o.source_ref: o for o in s.exec(select(Opportunity)).all()}
+        assert "newresto" in opps               # unknown -> lead
+        assert "cafe_mokaparis" in opps          # chain_multisite -> lead (en base)
+        assert opps["cafe_mokaparis"].lifecycle_label == "chain_multisite"
+        assert "extension multi-sites" in (opps["cafe_mokaparis"].secondary_signals or [])
+        assert opps["newresto"].main_signal == "établissement en activité"  # plus déguisé
         verdicts = {v.handle: v.verdict for v in s.exec(select(HandleVerdict)).all()}
         assert verdicts["cafe_mokaparis"] == "chain_multisite"
-        # newresto : unknown de confiance 'basse' (juge absent) -> NON caché, pour
-        # ne pas figer 2 mois un verdict sans évidence (protège le recall).
-        assert "newresto" not in verdicts
+        assert "newresto" not in verdicts  # unknown 'basse' non caché
     assert stats.errors == 0
 
 
@@ -171,7 +172,7 @@ def test_run_instagram_verdict_survives_lead_failure(tmp_path, monkeypatch):
     SQLModel.metadata.create_all(engine)
     moka = json.loads((SNAP / "cafe_mokaparis.json").read_text(encoding="utf-8"))
     profiles = {
-        "cafe_mokaparis": moka,  # chain_multisite (guard) -> verdict caché, pas de lead
+        "cafe_mokaparis": moka,  # chain_multisite (garde) -> verdict caché ET lead en base
         "boomresto": {"postsCount": 2, "biography": "Ouverture prochaine",
                       "latestPosts": [{"timestamp": "2026-06-20T10:00:00.000Z"}]},
     }

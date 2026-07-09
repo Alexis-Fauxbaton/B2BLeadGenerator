@@ -51,6 +51,27 @@ TIMING_BY_SIGNAL = {
     "changement propriétaire": "J-60",
 }
 
+# Signal NEUTRE des leads « en base » (établis, chaînes, indéterminés du funnel
+# Insta) : présent dans SIGNAL_TYPES, membre d'AUCUNE famille de scoring
+# (services/scoring.py) -> aucun bonus de nature, score naturellement bas (les
+# ouvertures restent en tête du tri). On n'invente AUCUN signal d'achat pour un
+# établissement qui n'en émet pas.
+NEUTRAL_SIGNAL = "établissement en activité"
+# Libellé harmonisé avec le delta-Sirene (sirene_delta.py) : une marque qui ouvre
+# un nouveau lieu = extension multi-sites (signal secondaire, non chaud).
+MULTISITE_SIGNAL = "extension multi-sites"
+
+# Routage label de cycle de vie -> (main_signal, secondary_signals, lifecycle_label).
+# not_venue/noise ABSENTS -> aucun lead (verdict caché uniquement). unknown =
+# lead « en base » NEUTRE (plus jamais déguisé en « ouverture prochaine »).
+LABEL_ROUTING = {
+    "opening_soon":    ("ouverture prochaine", [],                 "opening_soon"),
+    "just_opened":     ("création récente",    [],                 "just_opened"),
+    "established":     (NEUTRAL_SIGNAL,         [],                 "established"),
+    "chain_multisite": (NEUTRAL_SIGNAL,         [MULTISITE_SIGNAL], "chain_multisite"),
+    "unknown":         (NEUTRAL_SIGNAL,         [],                 "unknown"),
+}
+
 CONNECTORS = {
     "bodacc": BodaccConnector,
     "sirene": SireneDeltaConnector,
@@ -300,16 +321,15 @@ def run_instagram(
                     session.commit()
                 except Exception:
                     session.rollback()
-            # Création de lead UNIQUEMENT pour opening_soon/just_opened/unknown
-            # (unknown = doute -> garde, protège le recall).
-            if c["label"] not in ("opening_soon", "just_opened", "unknown"):
+            # ROUTAGE brique 3bis : TOUT label devient un lead SAUF not_venue/noise
+            # (absents de LABEL_ROUTING -> cache seul). Les ouvertures gardent leur
+            # signal d'achat ; établis/chaînes/unknown reçoivent un signal NEUTRE
+            # (score naturellement bas) + le label de cycle de vie persisté.
+            routing = LABEL_ROUTING.get(c["label"])
+            if routing is None:
                 continue
+            main_signal, secondary_signals, lifecycle_label = routing
             try:
-                main_signal = {
-                    "opening_soon": "ouverture prochaine",
-                    "just_opened": "création récente",
-                    "unknown": "ouverture prochaine",
-                }[c["label"]]
                 m = c.get("_match")
                 cand = LeadCandidate(
                     source="instagram",
@@ -322,6 +342,8 @@ def run_instagram(
                     extra_addresses=c.get("extra_addresses", []),
                     extra_emails=c.get("extra_emails", []),
                     main_signal=main_signal,
+                    secondary_signals=list(secondary_signals),
+                    lifecycle_label=lifecycle_label,
                     detection_date=today,
                     classification_text=c["name"],
                     establishment_type=c["type"],  # pré-classé CHR à la découverte
