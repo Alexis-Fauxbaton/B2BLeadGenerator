@@ -34,6 +34,7 @@ export interface OpportunityFilters {
   min_score?: number;
   recommended_channel?: string;
   source?: string;
+  lifecycle_label?: string;
   sort_by?: string;
   order?: string;
 }
