@@ -14,6 +14,7 @@ from app.ingestion.profile_guards import (
     _has_opening_cue,
     _multi_city_in_bio,
     _is_dead_account,
+    _looks_like_venue,
 )
 
 SNAP = Path(__file__).resolve().parents[1] / "app" / "ingestion" / "eval" / "snapshots"
@@ -59,20 +60,24 @@ def test_moka_dies_here_as_chain_multisite():
 
 
 def test_posts_count_hard_established():
-    assert guard_verdict({"postsCount": 200, "biography": ""}, TODAY) == "established"
+    # Gros volume de posts SUR UN COMPTE QUI RESSEMBLE À UN LIEU (bio « restaurant »)
+    # -> established. Depuis le motif #1, la garde exige l'apparence de lieu CHR.
+    assert guard_verdict({"postsCount": 200, "biography": "Restaurant"}, TODAY) == "established"
 
 
 def test_long_history_established():
-    prof = {"postsCount": 11, "biography": "", "latestPosts": [
-        {"timestamp": "2023-01-05T10:00:00.000Z"},
-        {"timestamp": "2023-06-05T10:00:00.000Z"},
-        {"timestamp": "2024-01-05T10:00:00.000Z"},
-    ]}
+    # Historique long + catégorie business CHR -> established.
+    prof = {"postsCount": 11, "biography": "", "businessCategoryName": "Restaurant",
+            "latestPosts": [
+                {"timestamp": "2023-01-05T10:00:00.000Z"},
+                {"timestamp": "2023-06-05T10:00:00.000Z"},
+                {"timestamp": "2024-01-05T10:00:00.000Z"},
+            ]}
     assert guard_verdict(prof, TODAY) == "established"
 
 
 def test_hours_bio_established():
-    assert guard_verdict({"postsCount": 20, "biography": "Ouvert 7j/7 midi et soir"},
+    assert guard_verdict({"postsCount": 20, "biography": "Restaurant ouvert 7j/7 midi et soir"},
                          TODAY) == "established"
 
 
@@ -221,6 +226,70 @@ def test_dead_account_needs_all_conditions():
     assert _is_dead_account({"biography": ""}) is False
     # Toutes conditions réunies -> mort.
     assert _is_dead_account({"postsCount": 2, "followersCount": 1, "biography": ""}) is True
+
+
+# --- Motif d'erreur #1 : garde conditionnée à l'apparence de lieu CHR ----------
+# 6 non-lieux (photographes, média, fournisseur, agence, boucherie belge) étaient
+# promus « established » par un long historique / des horaires et n'atteignaient
+# JAMAIS le juge. La garde ne se déclenche désormais que si `_looks_like_venue`.
+MOTIF1_NON_VENUES = [
+    "photos_sur_cour", "sandrinephotography__", "parisgourmand75",
+    "zhongjiu361", "un_lieu_une_ame_", "maisonsaintaubain",
+]
+# Autres non-lieux du jeu de preuve (déjà jugés not_venue) : jamais « lieu » non plus.
+OTHER_NON_VENUES = ["ruelatte", "najlaa.shl", "maisonaurea"]
+# Vrais lieux établis : DOIVENT rester capturés par la garde (jamais confiés au juge).
+MOTIF1_REAL_VENUES = ["cafe_mokaparis", "osabaita", "la.galetterie", "lesecondempireparis"]
+
+
+def test_looks_like_venue_false_for_non_venues():
+    for h in MOTIF1_NON_VENUES + OTHER_NON_VENUES:
+        snap = json.loads((SNAP / f"{h}.json").read_text(encoding="utf-8"))
+        assert _looks_like_venue(snap) is False, f"{h} pris à tort pour un lieu CHR"
+
+
+def test_looks_like_venue_true_for_real_venues():
+    for h in MOTIF1_REAL_VENUES:
+        snap = json.loads((SNAP / f"{h}.json").read_text(encoding="utf-8"))
+        assert _looks_like_venue(snap) is True, f"{h} (vrai lieu) non reconnu comme lieu"
+
+
+def test_guards_no_longer_promote_non_venues_to_established():
+    # Cœur du motif #1 : ces 6 non-lieux ne doivent PLUS sortir established/
+    # chain_multisite par une garde déterministe -> ils descendent au juge (None).
+    for h in MOTIF1_NON_VENUES:
+        snap = json.loads((SNAP / f"{h}.json").read_text(encoding="utf-8"))
+        assert guard_verdict(snap, TODAY) not in ("established", "chain_multisite"), \
+            f"{h} encore promu en base par une garde"
+
+
+def test_guards_still_capture_real_established_and_chains():
+    # Non-régression : MOKA (chain), osabaita/la.galetterie/lesecondempire
+    # (established) restent tranchés par la garde, sans juge.
+    expected = {
+        "cafe_mokaparis": "chain_multisite",
+        "osabaita": "established",
+        "la.galetterie": "established",
+        "lesecondempireparis": "established",
+    }
+    for h, want in expected.items():
+        snap = json.loads((SNAP / f"{h}.json").read_text(encoding="utf-8"))
+        assert guard_verdict(snap, TODAY) == want, f"{h} n'est plus capturé par la garde"
+
+
+def test_looks_like_venue_category_beats_food_keyword_in_bio():
+    # Un photographe dont la bio parle de « cafés, restos » reste un NON-lieu
+    # (la catégorie business prime). Cas ancré : photos_sur_cour.
+    assert _looks_like_venue(
+        {"businessCategoryName": "Photographer",
+         "biography": "CM & photo pro pour cafés, restos, artisans"}) is False
+    # Une catégorie CHR explicite suffit.
+    assert _looks_like_venue({"businessCategoryName": "None,Restaurant"}) is True
+    # Un mot-clé « type de salle » en bio suffit (catégorie absente).
+    assert _looks_like_venue({"biography": "BRASSERIE / PIZZERIA / BAR"}) is True
+    # « Création de contenu pour restaurants » = prestataire, pas un lieu.
+    assert _looks_like_venue(
+        {"biography": "Création de contenu pour restaurants et pâtisseries"}) is False
 
 
 def test_just_opened_monica_survives_guards():

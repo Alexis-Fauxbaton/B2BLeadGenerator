@@ -114,3 +114,33 @@ export const EVAL_LABEL_STYLES: Record<string, string> = {
   noise: "bg-amber-50 text-amber-700 ring-amber-200",
   unknown: "bg-slate-100 text-slate-500 ring-slate-200",
 };
+
+// Libellés FR du label de cycle de vie PERSISTÉ (funnel Insta, brique 3bis) —
+// badge + filtre sur les fiches opportunités. NULL pour les sources registre
+// (BODACC/Sirene) qui n'étiquettent pas encore.
+export const LIFECYCLE_LABEL_LABELS: Record<string, string> = {
+  opening_soon: "Ouverture prochaine",
+  just_opened: "Vient d'ouvrir",
+  established: "Établi",
+  chain_multisite: "Chaîne / multi-sites",
+  unknown: "À qualifier",
+};
+
+// Ordre d'affichage (filtre + légendes) — même ordre que LABEL_ORDER côté éval.
+export const LIFECYCLE_LABEL_ORDER = [
+  "opening_soon",
+  "just_opened",
+  "established",
+  "chain_multisite",
+  "unknown",
+];
+
+// Classes Tailwind par label de cycle de vie (badge) — mêmes teintes que
+// EVAL_LABEL_STYLES pour rester cohérent avec les badges d'éval.
+export const LIFECYCLE_LABEL_STYLES: Record<string, string> = {
+  opening_soon: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  just_opened: "bg-cyan-50 text-cyan-700 ring-cyan-200",
+  established: "bg-slate-100 text-slate-600 ring-slate-200",
+  chain_multisite: "bg-violet-50 text-violet-700 ring-violet-200",
+  unknown: "bg-slate-100 text-slate-500 ring-slate-200",
+};

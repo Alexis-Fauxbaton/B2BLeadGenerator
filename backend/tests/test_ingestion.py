@@ -493,6 +493,30 @@ def test_scoring_cross_signal_counts_families_not_labels():
     assert "signaux croisés" not in same_family.reason
 
 
+def test_scoring_inventory_signals_no_cross_bonus():
+    """Motif #2 (bonus) : un lead chain_multisite du funnel Insta porte
+    « établissement en activité » + « extension multi-sites ». Ces deux libellés
+    NEUTRES appartiennent à la MÊME famille (inventaire) -> AUCUN bonus « signaux
+    croisés » accidentel (ils décrivaient auparavant 2 familles inconnues)."""
+    from datetime import date as _date
+    from app.services.scoring import compute_score, _signal_families
+
+    assert _signal_families(
+        {"établissement en activité", "extension multi-sites"}
+    ) == {"inventaire"}
+
+    base = dict(
+        detection_date=_date(2026, 6, 20), probable_needs=["luminaires"],
+        decision_maker=None, recommended_channel="telephone", today=_date(2026, 6, 28),
+    )
+    chain = compute_score(main_signal="établissement en activité",
+                          secondary_signals=["extension multi-sites"], **base)
+    neutral_alone = compute_score(main_signal="établissement en activité",
+                                  secondary_signals=[], **base)
+    assert chain.score == neutral_alone.score
+    assert "signaux croisés" not in chain.reason
+
+
 def test_scoring_freshness_from_review_count():
     from datetime import date as _date
     from app.services.scoring import compute_score

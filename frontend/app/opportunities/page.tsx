@@ -16,7 +16,13 @@ import {
 } from "lucide-react";
 import { api, type OpportunityFilters } from "@/lib/api";
 import type { IngestStats, Meta, OpportunityList } from "@/lib/types";
-import { CHANNEL_LABELS, STATUS_LABELS, formatDate } from "@/lib/labels";
+import {
+  CHANNEL_LABELS,
+  LIFECYCLE_LABEL_LABELS,
+  LIFECYCLE_LABEL_ORDER,
+  STATUS_LABELS,
+  formatDate,
+} from "@/lib/labels";
 import PageHeader from "@/components/PageHeader";
 import {
   ScoreBadge,
@@ -25,6 +31,7 @@ import {
   StatusBadge,
   StageBadge,
   HeatBadge,
+  LifecycleBadge,
 } from "@/components/Badges";
 import { Loading, ErrorState, EmptyState } from "@/components/States";
 
@@ -217,6 +224,13 @@ export default function OpportunitiesPage() {
               <option value="instagram">Instagram</option>
             </select>
 
+            <select className={SELECT_CLS} value={filters.lifecycle_label ?? ""} onChange={(e) => set({ lifecycle_label: e.target.value })}>
+              <option value="">Tous les cycles de vie</option>
+              {LIFECYCLE_LABEL_ORDER.map((l) => (
+                <option key={l} value={l}>{LIFECYCLE_LABEL_LABELS[l]}</option>
+              ))}
+            </select>
+
             <select className={SELECT_CLS} value={filters.min_score ?? ""} onChange={(e) => set({ min_score: e.target.value ? Number(e.target.value) : undefined })}>
               <option value="">Score minimum</option>
               {[8, 6, 5, 3].map((v) => <option key={v} value={v}>≥ {v}/10</option>)}
@@ -280,6 +294,7 @@ export default function OpportunitiesPage() {
                       <td className="px-4 py-3"><SignalBadge label={o.main_signal} /></td>
                       <td className="px-4 py-3">
                         <div className="flex flex-col items-start gap-1">
+                          <LifecycleBadge label={o.lifecycle_label} />
                           <StageBadge stage={o.lifecycle_stage} />
                           <HeatBadge heat={o.heat} />
                         </div>

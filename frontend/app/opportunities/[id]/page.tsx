@@ -39,6 +39,7 @@ import {
   StageBadge,
   HeatBadge,
   FreshnessBadge,
+  LifecycleBadge,
 } from "@/components/Badges";
 import { Loading, ErrorState } from "@/components/States";
 import CopyButton from "@/components/CopyButton";
@@ -129,6 +130,7 @@ export default function OpportunityDetailPage() {
               <h1 className="text-2xl font-semibold text-slate-900">{opp.establishment_name}</h1>
               <StatusBadge status={opp.status} />
               <SourceBadge source={opp.source} />
+              <LifecycleBadge label={opp.lifecycle_label} />
             </div>
             <p className="mt-1 flex items-center gap-2 text-sm text-slate-500">
               <span className="capitalize">{opp.establishment_type}</span> ·

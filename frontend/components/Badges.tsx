@@ -1,4 +1,12 @@
-import { CHANNEL_LABELS, SOURCE_LABELS, STATUS_LABELS, STATUS_STYLES, scoreTier } from "@/lib/labels";
+import {
+  CHANNEL_LABELS,
+  LIFECYCLE_LABEL_LABELS,
+  LIFECYCLE_LABEL_STYLES,
+  SOURCE_LABELS,
+  STATUS_LABELS,
+  STATUS_STYLES,
+  scoreTier,
+} from "@/lib/labels";
 
 export function SourceBadge({ source }: { source: string }) {
   const isReal = source !== "demo";
@@ -99,6 +107,19 @@ export function FreshnessBadge({ freshness }: { freshness: string }) {
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${cls}`}>
       {freshness}
+    </span>
+  );
+}
+
+// Label de cycle de vie PERSISTÉ (funnel Insta, brique 3bis) — distinct du
+// StageBadge (dérivé). NULL pour les sources registre (BODACC/Sirene) : rien
+// n'est affiché dans ce cas.
+export function LifecycleBadge({ label }: { label: string | null | undefined }) {
+  if (!label) return null;
+  const cls = LIFECYCLE_LABEL_STYLES[label] ?? "bg-slate-100 text-slate-500 ring-slate-200";
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${cls}`}>
+      {LIFECYCLE_LABEL_LABELS[label] ?? label}
     </span>
   );
 }
