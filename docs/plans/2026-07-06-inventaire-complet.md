@@ -1068,7 +1068,7 @@ Attendu — `GATES : ... -> OK`, exit 0 :
 Attendu qualitatif (matrice label×label ; noter la provenance — **garde** vs **juge** — car un compte tranché au garde ne voit jamais le juge) :
 - **par garde-fou (T3)** : `cafe_mokaparis`/`cherescousinesbagels` → `chain_multisite` ; `osabaita`/`lemourerouge_cannes`/`lamerpaulettetrouville`/`lartemise_colmar` → `established` ; `maisonsaintaubain`/`un_lieu_une_ame_` → `established` (garde, PAS `not_venue` — le juge ne les voit pas ; restent `en_base`, sans impact gate) ; `imagine.trouville` → `established` (garde `_long_history`, perte de rappel `just_opened` **assumée**, cf. brique 3).
 - **par juge** : `giorgina_restaurant` → `established` ; `maisonaurea` → `not_venue` ; `chickntikka94` → `noise` ; `lemarcchiato` → `chain_multisite` (règle « 2e adresse » du prompt, T3) ; `monica_stgermain` → `just_opened`/`unknown`.
-- **par juge — cas à re-valider `villa.henriette_cabourg`** : n'est plus captée au garde (veto pré-ouverture, cf. T3) → tranchée par le juge. C'est une **pré-ouverture** (ouvre 2 jours après `TODAY`), donc le juge peut légitimement la classer **`opening_soon`**. ⚠️ **Tension à lever** : son label vérité était `established` — incohérent pour un compte qui ouvre dans 2 jours. Si le juge sort `opening_soon`, cela crée un **faux positif du segment chaud** vs un label vérité douteux : **corriger le label vérité de villa en `opening_soon`** (le comportement du juge est alors correct et compté comme vrai positif), ne PAS resserrer le garde pour re-capturer une pré-ouverture. Consigner la décision au gate.
+- **par juge — `villa.henriette_cabourg`** : n'est plus captée au garde (veto pré-ouverture, cf. T3) → tranchée par le juge. C'est une **pré-ouverture** (ouvre 2 jours après `TODAY`), donc le juge la classe légitimement **`opening_soon`**. Correction de vérité terrain (villa → `opening`) **faite en amont (remédiation du 2026-07-09)** : le comportement du juge est alors correct et compté comme vrai positif. Ne PAS resserrer le garde pour re-capturer une pré-ouverture.
 
 Publier **avant/après** (baseline briques 1-2 : précision a_contacter ≈ 33 %, rappel 100 %). **Attendu live (non garanti — sortie de juge non déterministe, dénominateur ~4-5 prédits chauds)** : rappel 100 %, précision segment chaud **≈ 100 %** grâce à la sortie des 2 anciens faux positifs (`maisonaurea`, `chickntikka94`), **sous réserve** de la re-validation de villa ci-dessus. Le chiffre live est **indicatif** ; le gate déterministe reste le test unitaire `test_hot_precision`. Reporter systématiquement `hot_n` (dénominateur) à côté du ratio pour rendre visible un segment chaud fin ou vide. Pour le message de commit / la PR.
 Si un `opening` sort `ecarte`/`en_base` : **STOP**, diagnostiquer (garde trop agressif — rejouer `test_opening_snapshots_pass_through_to_llm` — ou juge qui sur-étiquette). Ne relâcher aucun seuil.
@@ -1120,6 +1120,483 @@ Attendu : pytest **vert** ; match_eval **inchangée (8/9, 0 faux merge)** ; eval
 git add backend/app/ingestion/eval/metrics.py backend/app/ingestion/eval/run.py backend/tests/test_eval.py backend/app/ingestion/eval/README.md docs/ARCHITECTURE.md CLAUDE.md
 git commit -m "feat(eval): eval v2bis (buckets en_base, precision segment chaud >=60%) + docs brique 3bis"
 ```
+
+---
+
+### Task 5: « Jeu de preuve » daté dans l'UI (`annotated_at` + `as_of` + onglet /eval)
+
+**Modèle d'exécution recommandé : sonnet**
+
+**Décision produit d'Alexis (2026-07-08, encodée telle quelle) :**
+> « Le jeu de preuve doit être dispo dans un onglet de l'UI, filtrable par date, pour voir le jeu tel qu'il existait à une date précise. »
+
+Le jeu de vérité devient un **journal daté append-only** : chaque ligne porte une date d'annotation (`annotated_at`). L'UI /eval gagne une section « Jeu de preuve » filtrable par date (`as_of`) qui reconstitue l'état du jeu à cette date, avec la **prédiction actuelle** du pipeline (issue du **cache** d'éval — **jamais** de recalcul LLM) et un drapeau de **désaccord** (mapping v2bis, cf. T4).
+
+**Files:**
+- Modify: `backend/app/ingestion/eval/instagram_groundtruth.csv` (nouvelle colonne `annotated_at`, backfill de TOUTES les lignes à `2026-07-04`)
+- Modify: `backend/app/ingestion/eval/run.py` (`PRED_BUCKET`, `is_disagreement`, `_cached_predictions`, `groundtruth_asof`)
+- Modify: `backend/app/main.py` (endpoint `GET /api/eval/groundtruth` dans le `eval_router` existant)
+- Modify: `backend/tests/test_eval.py` (tests : filtrage `as_of`, backfill lisible, fail-soft cache absent)
+- Modify: `frontend/lib/types.ts` (`GroundtruthRow`, `GroundtruthResult`)
+- Modify: `frontend/lib/api.ts` (`api.getGroundtruth`)
+- Modify: `frontend/lib/labels.ts` (`EVAL_LABEL_LABELS`, `EVAL_LABEL_STYLES`)
+- Modify: `frontend/app/eval/page.tsx` (section « Jeu de preuve »)
+
+**Interfaces:**
+- **CSV** — colonne `annotated_at` (`YYYY-MM-DD`) ajoutée **en dernière position** (après `expected_siren`, pour ne casser aucun consommateur `DictReader` : `run_eval`/`detailed_result` ignorent la colonne). **Backfill** : toutes les lignes existantes → `2026-07-04` (date de la session d'annotation d'origine). **Journal append-only** : les passes futures **ajoutent** des lignes datées, on ne réécrit jamais une ligne existante.
+- `run.PRED_BUCKET: Dict[str, str]` — bucket cible par **label prédit** (miroir de `TRUE_BUCKET` de T4, dans le même espace de buckets `a_contacter`/`a_surveiller`/`en_base`/`ecarte`). `unknown → en_base` (lead neutre, cf. routage T2). Sert au calcul du désaccord.
+- `run.is_disagreement(true_label: str, predicted_label: Optional[str]) -> bool` — **pure**, testable sans réseau. Désaccord = `TRUE_BUCKET[true_label] != PRED_BUCKET[predicted_label]` (les deux dans le **même** espace de buckets v2bis). `predicted_label` `None` (pas de prédiction cachée) OU label inconnu → `False` (on n'affiche pas de désaccord contre une prédiction absente).
+- `run._cached_predictions() -> Dict[str, Optional[str]]` — `{handle: predicted_label}` du **dernier résultat d'éval CACHÉ** (`RESULT_PATH`). **N'exécute JAMAIS le LLM** : lit uniquement le fichier de cache ; absent/illisible → `{}` (fail-soft, `predicted=None` partout). ⚠️ **ne PAS** appeler `cached_result()` ici : `cached_result()` **recalcule** (LLM) quand le cache est absent — exactement ce qu'on interdit. On réutilise donc le **cache écrit par `cached_result()`** (même fichier `RESULT_PATH`, mêmes clés `rows[].predicted_label`) via une lecture seule.
+- `run.groundtruth_asof(as_of: Optional[str] = None) -> dict` — jeu de preuve daté. Filtre `annotated_at <= as_of` (défaut `None` → **toutes** les lignes). Renvoie `{"as_of": <effectif>, "total": int, "rows": [...]}` où `as_of` effectif = le paramètre s'il est fourni, sinon la **date d'annotation la plus récente** présente (l'état « le plus à jour »). Par ligne : `handle, name, label, confidence, rationale, annotated_at, ig_url, has_snapshot, predicted (label prédit caché | None), disagreement (bool)`.
+- **API** — `GET /api/eval/groundtruth?as_of=YYYY-MM-DD` (dans le `eval_router` existant, à côté de `/instagram`). `as_of` optionnel. Renvoie l'objet de `groundtruth_asof`.
+- **Frontend** — `api.getGroundtruth(asOf?: string) -> Promise<GroundtruthResult>`. La page `/eval` gagne une section « Jeu de preuve » : `<input type="date">` (as_of), tableau (handle cliquable → Instagram, label vérité, confiance, prédiction actuelle, annoté le, justification), lignes en **désaccord surlignées**, compteur « N comptes au JJ/MM/AAAA ». Réutilise le composant `Badge` et le pattern d'états (loading/error) existants ; libellés FR via `EVAL_LABEL_LABELS`/`EVAL_LABEL_STYLES` (labels.ts).
+- **Aucune modification de T4** : `TRUE_BUCKET` est consommé tel quel ; `detailed_result` (donc `RESULT_PATH`) expose déjà `rows[].predicted_label`. T5 lit, ne redéfinit rien.
+
+- [ ] **Step 1: Backfill du CSV + tests backend qui échouent**
+
+**a)** Backfiller `backend/app/ingestion/eval/instagram_groundtruth.csv` : ajouter `,annotated_at` à l'en-tête et suffixer **chaque** ligne de données existante par `,2026-07-04` (règle uniforme : la colonne étant en dernière position, on ajoute un champ ; les lignes à `expected_siren` vide passent de `…",` à `…",,2026-07-04`). Contenu final complet, exact, à écrire (Write) :
+
+```csv
+handle,name,label,confidence,provenance,rationale,expected_siren,annotated_at
+loumasrestaurant,Lou Mas,opening,high,opened_this_session,"2 posts, bio 'ouverture prochainement Printemps/Ete 2026', decor pas encore pose",992408872,2026-07-04
+chezgratien_hotelbistrospa,Chez Gratien,opening,high,opened_this_session,"Bio 'Juillet 2026', highlights Travaux + Recrutement, pre-ouverture confirmee",,2026-07-04
+tregusto_sartrouville,Tres Gusto,opening,med,opened_this_session,"4 posts / 58 abonnes, resto italien qui demarre, pas d'horaires ni resa",989119201,2026-07-04
+brasseriedelafontainelourmarin,Brasserie de la Fontaine,opening,med,prior_run,"13 posts, highlights SOON = pre-ouverture (non rouvert perso cette session)",,2026-07-04
+imagine.trouville,Imagine,just_opened,med,opened_this_session,"Horaires affiches (mer-dim) = tout juste ouvert/imminent, petit format artisanal",105127385,2026-07-04
+monica_stgermain,Monica,just_opened,low,prior_run,"4 posts mais horaires deja affiches = statut ouverture incertain",,2026-07-04
+giorgina_restaurant,Giorgina,established,low,opened_this_session,"15 posts / 662 abonnes, aucun signal d'ouverture explicite, ambigu",,2026-07-04
+lartemise_colmar,l'Artemise,established,high,opened_this_session,"682 posts, horaires affiches, salon de the etabli, decor fige",841751183,2026-07-04
+osabaita,Osabaita,established,high,opened_this_session,"101 posts, reservation active (tel), deja ouvert et decore",,2026-07-04
+lemourerouge_cannes,Le Moure Rouge,established,high,opened_this_session,"193 posts, ouvert 7j/7, reouverture saisonniere, decor en place",899355770,2026-07-04
+calaroya_plage,Cala Roya,established,high,opened_this_session,"46 posts, 'open everyday', menu actif = deja ouvert ; SIREN 940096415 verifie le 2026-07-05 (enseigne CALA ROYA, route de la Roya, Saint-Florent, 56.10A - nom legal SASU BJ)",940096415,2026-07-04
+lamerpaulettetrouville,La Mer Paulette,established,high,opened_this_session,"172 posts, site + menu + brunch, restaurant etabli rue des Bains",909471096,2026-07-04
+villa.henriette_cabourg,Villa Henriette,opening,high,opened_this_session,"48 posts, site de resa actif MAIS posts 'Ouverture 10 Juillet 2026'/'OPENING SOON' = pre-ouverture hoteliere ; label corrige le 2026-07-09 (annotation initiale erronee)",,2026-07-04
+cafe_mokaparis,MOKA,chain_multisite,high,opened_this_session,"3 adresses en bio (Champs/Opera/Galeries Lafayette), 'open everyday', chaine etablie",,2026-07-04
+cherescousinesbagels,Cheres Cousines,chain_multisite,med,prior_run,"Marque etablie multi-sites (Lyon 6 + Paris 11), nouvelle adresse = decor replique",994929917,2026-07-04
+lemarcchiato,Le Marcchiato,chain_multisite,med,prior_run,"139 posts, 5k abonnes, 2e adresse d'une marque etablie, decor centralise probable",979892619,2026-07-04
+un_lieu_une_ame_,Un Lieu Une Ame,not_venue,high,opened_this_session,"Agence de design/storytelling (2 creatrices), pas un etablissement CHR",,2026-07-04
+maisonaurea,Aurea,not_venue,high,opened_this_session,"Marque de bijoux au Portugal, hors secteur et hors France - piege OCR",,2026-07-04
+maisonsaintaubain,Maison Saint-Aubain,not_venue,high,opened_this_session,"Boucherie-fromagerie belge (.be), hors secteur CHR et hors France",,2026-07-04
+chickntikka94,Chick'n Tikka,noise,high,opened_this_session,"Fast-food, 2 posts / 1 abonne, pas de bio, quasi mort ; SIREN 100445048 (Paris 12) NON corrobore geo (compte a Ivry, handle 94) - verifie le 2026-07-05, no-match attendu",,2026-07-04
+```
+
+**b)** Ajouter à `backend/tests/test_eval.py` (fonctions pures + `groundtruth_asof` avec `load_groundtruth`/`_cached_predictions`/`RESULT_PATH` **monkeypatchés** → aucun réseau, aucun LLM) :
+
+```python
+def test_is_disagreement_v2bis_mapping():
+    from app.ingestion.eval.run import is_disagreement
+    # Vérité 'opening' (bucket a_contacter) vs prédiction 'established' (en_base) -> désaccord.
+    assert is_disagreement("opening", "established") is True
+    # Vérité 'opening' vs prédiction 'opening_soon' (a_contacter) -> accord.
+    assert is_disagreement("opening", "opening_soon") is False
+    # Vérité 'established' (en_base) vs prédiction 'unknown' (en_base) -> accord.
+    assert is_disagreement("established", "unknown") is False
+    # Vérité 'noise' (ecarte) vs prédiction 'unknown' (en_base) -> désaccord.
+    assert is_disagreement("noise", "unknown") is True
+    # Pas de prédiction cachée (None) ou label inconnu -> jamais de désaccord affiché.
+    assert is_disagreement("opening", None) is False
+    assert is_disagreement("opening", "???") is False
+
+
+def test_groundtruth_asof_filters_by_date(monkeypatch):
+    import app.ingestion.eval.run as run
+    fake = [
+        {"handle": "a", "name": "A", "label": "opening", "confidence": "high",
+         "rationale": "r-a", "annotated_at": "2026-07-04"},
+        {"handle": "b", "name": "B", "label": "established", "confidence": "low",
+         "rationale": "r-b", "annotated_at": "2026-07-08"},
+    ]
+    monkeypatch.setattr(run, "load_groundtruth", lambda: [dict(r) for r in fake])
+    monkeypatch.setattr(run, "_cached_predictions", lambda: {})
+    # as_of à la 1re annotation -> seule 'a' visible, as_of effectif = celui demandé.
+    res = run.groundtruth_asof(as_of="2026-07-04")
+    assert [r["handle"] for r in res["rows"]] == ["a"]
+    assert res["total"] == 1 and res["as_of"] == "2026-07-04"
+    # Défaut (toutes) -> as_of effectif = date d'annotation la plus récente.
+    res_all = run.groundtruth_asof()
+    assert res_all["total"] == 2 and res_all["as_of"] == "2026-07-08"
+    assert {r["handle"] for r in res_all["rows"]} == {"a", "b"}
+
+
+def test_groundtruth_asof_fail_soft_without_cache(monkeypatch, tmp_path):
+    import app.ingestion.eval.run as run
+    fake = [{"handle": "a", "name": "A", "label": "opening", "confidence": "high",
+             "rationale": "r", "annotated_at": "2026-07-04"}]
+    monkeypatch.setattr(run, "load_groundtruth", lambda: [dict(r) for r in fake])
+    # Cache d'éval ABSENT -> predicted None, disagreement False, aucun crash, aucun LLM.
+    monkeypatch.setattr(run, "RESULT_PATH", tmp_path / "absent.json")
+    res = run.groundtruth_asof(as_of="2026-07-04")
+    assert res["rows"][0]["predicted"] is None
+    assert res["rows"][0]["disagreement"] is False
+
+
+def test_groundtruth_csv_backfilled_readable():
+    # Le CSV réel porte la colonne annotated_at, remplie sur TOUTES les lignes,
+    # et le backfill d'origine vaut 2026-07-04 (session d'annotation initiale).
+    from app.ingestion.eval.run import load_groundtruth
+    rows = load_groundtruth()
+    assert rows and all(r.get("annotated_at", "").strip() for r in rows)
+    assert any(r["annotated_at"].strip() == "2026-07-04" for r in rows)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `python -m pytest tests/test_eval.py -q`
+Expected: FAIL — `ImportError` (`is_disagreement`/`groundtruth_asof`/`_cached_predictions` absents de `run.py`). `test_groundtruth_csv_backfilled_readable` **passe déjà** (backfill fait au Step 1) — c'est une assertion de non-régression, pas un test rouge.
+
+- [ ] **Step 3: Write the implementation (backend)**
+
+**a) `backend/app/ingestion/eval/run.py`** — ajouter, après le dict `TRUE_BUCKET` (révisé par T4) :
+
+```python
+# Bucket cible par label PRÉDIT (miroir de TRUE_BUCKET, même espace de buckets
+# v2bis). Sert à comparer vérité vs prédiction dans le « jeu de preuve ».
+# unknown -> en_base (lead neutre « en base », cf. routage brique 3bis).
+PRED_BUCKET = {
+    "opening_soon": "a_contacter",
+    "just_opened": "a_surveiller",
+    "established": "en_base",
+    "chain_multisite": "en_base",
+    "unknown": "en_base",
+    "not_venue": "ecarte",
+    "noise": "ecarte",
+}
+
+
+def is_disagreement(true_label: str, predicted_label: Optional[str]) -> bool:
+    """Désaccord = la prédiction tombe dans un bucket v2bis INCOMPATIBLE avec le
+    bucket cible du label vérité (TRUE_BUCKET vs PRED_BUCKET, même espace).
+    None (pas de prédiction cachée) ou label inconnu -> False (on n'affiche pas de
+    désaccord contre une prédiction absente)."""
+    if not predicted_label:
+        return False
+    tb = TRUE_BUCKET.get(true_label)
+    pb = PRED_BUCKET.get(predicted_label)
+    if tb is None or pb is None:
+        return False
+    return tb != pb
+```
+
+Ajouter, après `cached_result` (réutilise SON cache fichier, sans jamais recalculer) :
+
+```python
+def _cached_predictions() -> Dict[str, Optional[str]]:
+    """Prédictions (label prédit) du DERNIER résultat d'éval CACHÉ, par handle.
+    Lecture SEULE du cache fichier écrit par cached_result() : n'exécute JAMAIS le
+    LLM. Cache absent/illisible -> {} (fail-soft : predicted=None partout)."""
+    if not RESULT_PATH.exists():
+        return {}
+    try:
+        cached = json.loads(RESULT_PATH.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+    return {r["handle"]: r.get("predicted_label") for r in cached.get("rows", [])}
+
+
+def groundtruth_asof(as_of: Optional[str] = None) -> dict:
+    """Jeu de preuve DATÉ : lignes du CSV annotées à `as_of` inclus (défaut :
+    toutes). Journal append-only -> filtre lexicographique `annotated_at <= as_of`
+    (les dates ISO YYYY-MM-DD se comparent comme des chaînes). Enrichit chaque
+    ligne de la prédiction du dernier résultat d'éval CACHÉ (jamais de LLM) et d'un
+    drapeau de désaccord (mapping v2bis). -> {as_of effectif, total, rows}."""
+    preds = _cached_predictions()
+    gt = load_groundtruth()
+    dates = sorted({r.get("annotated_at", "").strip()
+                    for r in gt if r.get("annotated_at", "").strip()})
+    effective = as_of or (dates[-1] if dates else None)
+    rows: List[dict] = []
+    for row in gt:
+        annotated_at = row.get("annotated_at", "").strip()
+        if as_of and annotated_at and annotated_at > as_of:
+            continue
+        h = row["handle"].strip()
+        true_label = row["label"].strip()
+        predicted = preds.get(h)
+        rows.append({
+            "handle": h,
+            "name": row.get("name", "").strip(),
+            "label": true_label,
+            "confidence": row.get("confidence", "").strip(),
+            "rationale": row.get("rationale", "").strip(),
+            "annotated_at": annotated_at,
+            "ig_url": f"https://instagram.com/{h}",
+            "has_snapshot": snapshot_path(h).exists(),
+            "predicted": predicted,
+            "disagreement": is_disagreement(true_label, predicted),
+        })
+    return {"as_of": effective, "total": len(rows), "rows": rows}
+```
+
+**b) `backend/app/main.py`** — ajouter l'endpoint dans le `eval_router` existant, juste après `eval_instagram` (avant `app.include_router(eval_router)`) :
+
+```python
+@eval_router.get("/groundtruth")
+def eval_groundtruth(as_of: Optional[str] = None):
+    """Jeu de preuve daté : lignes annotées <= as_of (défaut : toutes), avec la
+    prédiction du dernier résultat d'éval CACHÉ (sans recalcul LLM) et le drapeau
+    de désaccord (mapping v2bis). `as_of` au format YYYY-MM-DD."""
+    from .ingestion.eval.run import groundtruth_asof
+
+    try:
+        return groundtruth_asof(as_of=as_of)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Jeu de preuve indisponible : {exc}")
+```
+
+(`Optional` est déjà importé en tête de `main.py` — `from typing import List, Optional`.)
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `python -m pytest tests/test_eval.py -q` → PASS.
+Run: `python -m pytest tests/ -q` → tout vert (la colonne CSV est ignorée des consommateurs existants ; `groundtruth_asof` n'est appelé que par les nouveaux tests, monkeypatchés).
+
+- [ ] **Step 5: Write the implementation (frontend)**
+
+**a) `frontend/lib/types.ts`** — ajouter (ex. après `Meta`) :
+
+```typescript
+export interface GroundtruthRow {
+  handle: string;
+  name: string;
+  label: string;
+  confidence: string;
+  rationale: string;
+  annotated_at: string;
+  ig_url: string;
+  has_snapshot: boolean;
+  predicted: string | null;
+  disagreement: boolean;
+}
+
+export interface GroundtruthResult {
+  as_of: string | null;
+  total: number;
+  rows: GroundtruthRow[];
+}
+```
+
+**b) `frontend/lib/api.ts`** — importer les types et ajouter la méthode :
+
+```typescript
+import type {
+  DashboardStats,
+  GeneratedMessages,
+  GroundtruthResult,
+  IngestStats,
+  Meta,
+  OpportunityList,
+  OpportunityRead,
+  Pipeline,
+  Settings,
+} from "./types";
+```
+
+et, dans l'objet `api` (ex. après `getSettings`/`updateSettings`) :
+
+```typescript
+  getGroundtruth: (asOf?: string) => {
+    const qs = asOf ? `?as_of=${encodeURIComponent(asOf)}` : "";
+    return request<GroundtruthResult>(`/api/eval/groundtruth${qs}`);
+  },
+```
+
+**c) `frontend/lib/labels.ts`** — ajouter les libellés FR + styles des labels d'éval (vérité ET prédiction partagent le même espace, `opening`/`opening_soon` distincts) :
+
+```typescript
+// Libellés FR des labels d'éval (jeu de vérité + prédictions du pipeline).
+export const EVAL_LABEL_LABELS: Record<string, string> = {
+  opening: "Ouverture",
+  opening_soon: "Ouverture prochaine",
+  just_opened: "Ouvert récemment",
+  established: "Établi",
+  chain_multisite: "Chaîne multi-sites",
+  not_venue: "Hors CHR",
+  noise: "Bruit",
+  unknown: "Indéterminé",
+};
+
+// Classes Tailwind par label d'éval (badge).
+export const EVAL_LABEL_STYLES: Record<string, string> = {
+  opening: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  opening_soon: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  just_opened: "bg-cyan-50 text-cyan-700 ring-cyan-200",
+  established: "bg-slate-100 text-slate-600 ring-slate-200",
+  chain_multisite: "bg-violet-50 text-violet-700 ring-violet-200",
+  not_venue: "bg-rose-50 text-rose-700 ring-rose-200",
+  noise: "bg-amber-50 text-amber-700 ring-amber-200",
+  unknown: "bg-slate-100 text-slate-500 ring-slate-200",
+};
+```
+
+**d) `frontend/app/eval/page.tsx`** — ajouter les imports en tête (le composant `Badge` est déjà défini dans ce fichier ; on réutilise `formatDate` de labels) :
+
+```typescript
+import { api } from "@/lib/api";
+import type { GroundtruthResult } from "@/lib/types";
+import { EVAL_LABEL_LABELS, EVAL_LABEL_STYLES, formatDate } from "@/lib/labels";
+```
+
+Rendre la section dans `EvalPage`, à l'intérieur du `<div className="p-8 max-w-6xl">`, **juste avant sa balise fermante `</div>`** (après le bloc `{data && ( … )}`) :
+
+```tsx
+      <GroundtruthSection />
+```
+
+Puis ajouter le composant en bas du fichier (à côté de `Metric`) :
+
+```tsx
+function GroundtruthSection() {
+  const [gt, setGt] = useState<GroundtruthResult | null>(null);
+  const [asOf, setAsOf] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .getGroundtruth(asOf || undefined)
+      .then((res) => {
+        if (!cancelled) setGt(res);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Erreur de chargement");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [asOf]);
+
+  const effective = gt?.as_of ?? null;
+  const effectiveLabel = effective
+    ? ` au ${new Date(effective).toLocaleDateString("fr-FR")}`
+    : "";
+
+  return (
+    <section className="mt-12 border-t border-slate-200 pt-8">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-900">Jeu de preuve</h2>
+          <p className="mt-1 max-w-2xl text-sm text-slate-500">
+            Le jeu de vérité annoté tel qu'il existait à une date donnée (journal
+            daté, append-only). Filtre par date pour revoir l'état passé ; la
+            « prédiction actuelle » vient du dernier résultat d'éval en cache.
+          </p>
+        </div>
+        <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+          Au
+          <input
+            type="date"
+            value={asOf}
+            onChange={(e) => setAsOf(e.target.value)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal normal-case text-slate-700"
+          />
+        </label>
+      </div>
+
+      {loading && <p className="mt-6 text-sm text-slate-500">Chargement…</p>}
+      {error && <p className="mt-6 text-sm text-rose-600">Erreur : {error}</p>}
+
+      {gt && !loading && (
+        <>
+          <p className="mt-4 text-sm font-medium text-slate-600">
+            {gt.total} compte{gt.total > 1 ? "s" : ""}
+            {effectiveLabel}
+          </p>
+          <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-400">
+                  <th className="px-4 py-3 font-medium">Compte</th>
+                  <th className="px-4 py-3 font-medium">Label vérité</th>
+                  <th className="px-4 py-3 font-medium">Confiance</th>
+                  <th className="px-4 py-3 font-medium">Prédiction actuelle</th>
+                  <th className="px-4 py-3 font-medium">Annoté le</th>
+                  <th className="px-4 py-3 font-medium">Justification</th>
+                </tr>
+              </thead>
+              <tbody>
+                {gt.rows.map((row) => (
+                  <tr
+                    key={row.handle}
+                    className={`border-b border-slate-100 align-top last:border-0 ${
+                      row.disagreement ? "bg-rose-50/60" : ""
+                    }`}
+                  >
+                    <td className="px-4 py-3">
+                      <a
+                        href={row.ig_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 font-medium text-brand-700 hover:underline"
+                      >
+                        @{row.handle}
+                        <ExternalLink size={12} />
+                      </a>
+                      <div className="text-xs text-slate-400">{row.name}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge
+                        text={EVAL_LABEL_LABELS[row.label] || row.label}
+                        cls={EVAL_LABEL_STYLES[row.label] || "bg-slate-100 text-slate-600 ring-slate-200"}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{row.confidence || "—"}</td>
+                    <td className="px-4 py-3">
+                      {row.predicted ? (
+                        <Badge
+                          text={EVAL_LABEL_LABELS[row.predicted] || row.predicted}
+                          cls={EVAL_LABEL_STYLES[row.predicted] || "bg-slate-100 text-slate-600 ring-slate-200"}
+                        />
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
+                      {row.disagreement && (
+                        <div className="mt-1 text-xs font-semibold text-rose-600">désaccord</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{formatDate(row.annotated_at)}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{row.rationale}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+```
+
+- [ ] **Step 6: Vérification frontend**
+
+Run (depuis `frontend/`, **PAS** `npm run build` si un dev server tourne) : `npx tsc --noEmit` → **0 erreur**.
+
+- [ ] **Step 7: Gates finaux (tout vert AVANT de committer)**
+
+```
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+(+ `npx tsc --noEmit` vert au Step 6.) Attendu : pytest **vert** ; aucun appel réseau/LLM dans les tests.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add backend/app/ingestion/eval/instagram_groundtruth.csv backend/app/ingestion/eval/run.py backend/app/main.py backend/tests/test_eval.py frontend/lib/types.ts frontend/lib/api.ts frontend/lib/labels.ts frontend/app/eval/page.tsx
+git commit -m "feat(eval): jeu de preuve date dans l'UI (annotated_at + as_of + onglet /eval)"
+```
+
+**Cohérence avec T1-T4 (auto-relecture) :**
+- **Consomme, ne redéfinit pas** : `TRUE_BUCKET` (révisé par T4) et `RESULT_PATH`/`rows[].predicted_label` (produits par `detailed_result`/`cached_result`, inchangés) sont réutilisés tels quels. `PRED_BUCKET` est **nouveau** (miroir prédiction), aligné sur le même espace de buckets v2bis que `TRUE_BUCKET` — pas de contradiction.
+- **Zéro LLM / zéro réseau** : `_cached_predictions()` lit **uniquement** le fichier de cache (jamais `cached_result()` qui recalculerait). Fail-soft cache absent → `predicted=None`. Tous les tests monkeypatchent `load_groundtruth`/`_cached_predictions`/`RESULT_PATH`.
+- **Dépendance d'ordre** : T5 s'exécute **après** T4 (donc après T1-T3). Si le cache d'éval n'a jamais été généré (`RESULT_PATH` absent), l'onglet fonctionne quand même (prédictions vides) — pas de couplage dur au gate live de T4.
+- **CSV rétro-compatible** : la colonne `annotated_at` en dernière position est ignorée par `run_eval`/`detailed_result` (accès par clé `DictReader`) → `recall_opening` / `hot_precision` inchangés.
 
 ---
 
