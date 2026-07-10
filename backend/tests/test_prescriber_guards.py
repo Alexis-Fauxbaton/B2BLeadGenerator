@@ -2,7 +2,11 @@
 """Gardes déterministes prescripteurs (A1, T3). Grounded sur les 4 hors_cible de
 la sonde : endora (coach/cours), habiteretgrandir (coach), atelierlesimple
 (menuiserie), cotefauteuils (tapissier)."""
+import json
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 from app.ingestion.prescriber_guards import (
     guard_prescripteur, _has_formation_cue, _has_artisan_metier,
@@ -10,6 +14,15 @@ from app.ingestion.prescriber_guards import (
 )
 
 TODAY = date(2026, 7, 10)
+
+_SNAP = Path(__file__).resolve().parents[1] / "app" / "ingestion" / "eval" / "snapshots_architectes"
+
+
+def _snap(handle: str) -> dict:
+    p = _SNAP / f"{handle}.json"
+    if not p.exists():
+        pytest.skip(f"snapshot {handle} absent")
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def test_formation_coach_is_hors_cible():
@@ -122,3 +135,43 @@ def test_manufacturer_fabricant_without_archi_title_is_hors_cible():
             "fullName": "Schmidt Cambrai", "postsCount": 483, "followersCount": 522}
     assert _has_artisan_metier(prof) and not _has_archi_title(prof)
     assert guard_prescripteur(prof, TODAY) == "hors_cible"
+
+
+# --- FRONTIÈRE PRESCRIPTEUR/EXÉCUTANT (precision-archi-1) : 5 faux positifs mesurés
+#     doivent tomber au garde ; les 5 vrais + zelee doivent le PASSER (-> juge). ---
+
+@pytest.mark.parametrize("handle", [
+    "agenceurmenuisier.fr",   # menuisier-agenceur (handle) MALGRÉ « Architecte d'Intérieur » en bio
+    "sartorius_mobilier",     # fabricant de mobilier (nom/handle « mobilier »)
+    "rekto_agencement",       # cuisiniste-poseur (bio « Cuisine - Salle de bain - Dressing »)
+    "pensart.bzh",            # carreleur / béton ciré
+    "lys_brocque_archi_immo", # mandataire immobilier
+])
+def test_five_measured_false_positives_are_hors_cible_at_guard(handle):
+    assert guard_prescripteur(_snap(handle), TODAY) == "hors_cible"
+
+
+def test_menuisier_in_handle_beats_archi_title_in_bio():
+    # agenceurmenuisier.fr : la bio DIT « Architecte d'Intérieur » mais le handle
+    # trahit un menuisier -> le garde DUR d'identité écarte MALGRÉ le titre.
+    prof = _snap("agenceurmenuisier.fr")
+    assert _has_archi_title(prof)  # le titre EST là...
+    assert guard_prescripteur(prof, TODAY) == "hors_cible"  # ...mais ne rachète pas
+
+
+@pytest.mark.parametrize("handle", [
+    "zelee_design_studio",          # concept store + archi : fabrication SOUS-TRAITÉE -> juge
+    "constantinspire",
+    "relionconception",
+    "soa.interieur",
+    "addiction_design_decoration",
+])
+def test_five_true_studios_pass_guard_to_judge(handle):
+    # AUCUN de ces vrais ne doit être écarté par le garde (verdict None = va au juge).
+    assert guard_prescripteur(_snap(handle), TODAY) is None
+
+
+def test_espacesprojets_mobilier_in_bio_only_passes_to_judge():
+    # Garde-fou anti-régression : « mobilier » en BIO (service listé) ne suffit PAS ;
+    # seul « mobilier » dans le NOM/handle (marque) écarte. espacesprojets = studio_actif.
+    assert guard_prescripteur(_snap("espacesprojets"), TODAY) is None
