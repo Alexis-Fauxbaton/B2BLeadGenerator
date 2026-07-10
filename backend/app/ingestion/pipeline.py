@@ -119,6 +119,7 @@ class IngestStats:
     chr_matched: int = 0
     created: int = 0
     updated: int = 0
+    purged: int = 0  # fiches supprimées sur requalification vers un label sans lead
     skipped_dupes: int = 0
     skipped_closed: int = 0
     errors: int = 0
@@ -413,6 +414,12 @@ def run_instagram(
                         proof_url=proof_url,
                     )
                     _process_candidate(session, cand, stats, seen_refs, enricher)
+                else:
+                    # SYMÉTRIE avec run_prescripteurs : un handle CHR DÉJÀ en base
+                    # re-jugé not_venue/noise (absent de LABEL_ROUTING -> routing None)
+                    # ne doit pas rester figé sur son ancien lifecycle_label -> purge
+                    # de sa fiche 'chr'. Même trou que côté archi, même correctif.
+                    _purge_requalified(session, "instagram", c["handle"], "chr", stats)
                 # Commit unique (verdict + lead) PAR candidat : un échec ultérieur
                 # ne défait ni ce couple ni les précédents (isolation du lot).
                 session.commit()
@@ -532,6 +539,12 @@ def run_prescripteurs(
                         proof_url=proof_url,
                     )
                     _process_candidate(session, cand, stats, seen_refs, enricher)
+                else:
+                    # REQUALIFICATION : label sans lead (hors_cible/compte_perso/noise
+                    # -> absent de PRESCRIBER_ROUTING). Si une fiche archi existait pour
+                    # ce handle (studio_actif d'un run précédent), elle est caduque ->
+                    # purge (cas rolitech_renovations, atelier_paul_b re-jugés hors_cible).
+                    _purge_requalified(session, "instagram", c["handle"], "architecte", stats)
                 session.commit()
             except Exception:
                 stats.errors += 1
@@ -973,6 +986,31 @@ def _delete_opportunity(session: Session, opp: Opportunity) -> None:
     session.exec(delete(ContactHistory).where(ContactHistory.opportunity_id == opp.id))
     session.exec(delete(Signal).where(Signal.opportunity_id == opp.id))
     session.delete(opp)
+
+
+def _purge_requalified(
+    session: Session, source: str, source_ref: str, population: str, stats: IngestStats
+) -> bool:
+    """REQUALIFICATION vers un label SANS lead (funnel Insta) : un handle DÉJÀ en
+    base, re-jugé cette fois hors_cible/compte_perso/not_venue/noise (labels absents
+    de LABEL_ROUTING/PRESCRIBER_ROUTING -> `routing is None`), ne DOIT PAS rester
+    figé sur son ancien label. On SUPPRIME proprement sa fiche Opportunity (avec ses
+    Signals + ContactHistory, comme _delete_opportunity) et on compte `purged`.
+    Idempotent : renvoie False sans rien faire si aucune fiche n'existe (cas normal
+    d'un handle jamais devenu lead). La population fait partie de la clé (étanchéité
+    cross-population : un re-verdict archi ne purge pas une fiche CHR du même handle)."""
+    existing = session.exec(
+        select(Opportunity).where(
+            Opportunity.source == source,
+            Opportunity.source_ref == source_ref,
+            Opportunity.population == population,
+        )
+    ).first()
+    if existing is None:
+        return False
+    _delete_opportunity(session, existing)
+    stats.purged += 1
+    return True
 
 
 def _reenrich_one(opp: Opportunity, enricher: SireneEnricher, stats: ReenrichStats) -> str:

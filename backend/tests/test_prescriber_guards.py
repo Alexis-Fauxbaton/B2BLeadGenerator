@@ -10,7 +10,7 @@ import pytest
 
 from app.ingestion.prescriber_guards import (
     guard_prescripteur, _has_formation_cue, _has_artisan_metier,
-    _has_archi_title, _is_dead_account,
+    _has_archi_title, _is_dead_account, _furniture_store_identity,
 )
 
 TODAY = date(2026, 7, 10)
@@ -175,3 +175,41 @@ def test_espacesprojets_mobilier_in_bio_only_passes_to_judge():
     # Garde-fou anti-régression : « mobilier » en BIO (service listé) ne suffit PAS ;
     # seul « mobilier » dans le NOM/handle (marque) écarte. espacesprojets = studio_actif.
     assert guard_prescripteur(_snap("espacesprojets"), TODAY) is None
+
+
+# --- FRONTIÈRE DESIGN-BUILD (precision-archi-2) : le commerce d'ameublement
+#     auto-déclaré est écarté MÊME avec titre archi ; zelee (concept store, pas
+#     « magasin d'ameublement ») reste au juge. ---
+
+def test_furniture_store_design_build_beats_archi_title():
+    # bontemps.esquisse : bio « Designer & architecte d'intérieur / Magasin
+    # d'ameublement et décoration ». Le titre archi EST là mais ne rachète pas un
+    # magasin d'ameublement (design-build qui vend/fabrique ce qu'il pose).
+    prof = _snap("bontemps.esquisse")
+    assert _has_archi_title(prof)             # titre présent...
+    assert _furniture_store_identity(prof)    # ...mais commerce d'ameublement déclaré
+    assert guard_prescripteur(prof, TODAY) == "hors_cible"
+
+
+def test_jks_ebenistes_design_build_is_hors_cible():
+    # jks_ebenistes (2e cas design-build) : ébéniste-fabricant -> hors_cible au garde.
+    assert guard_prescripteur(_snap("jks_ebenistes"), TODAY) == "hors_cible"
+
+
+def test_zelee_concept_store_not_over_blocked():
+    # ANTI-SUR-BLOCAGE : zelee_design_studio est un « Boutique Concept Store &
+    # architecte d'intérieur » qui SOUS-TRAITE la fabrication (Atelier Franchini).
+    # Il ne se déclare PAS « magasin/boutique d'ameublement/de meubles/de
+    # décoration » -> la garde design-build l'ÉPARGNE, il descend au juge.
+    prof = _snap("zelee_design_studio")
+    assert not _furniture_store_identity(prof)
+    assert guard_prescripteur(prof, TODAY) is None
+
+
+def test_furniture_store_keywords_are_contiguous_phrases_only():
+    # « décoration » seul (décoratrice prescriptrice) NE déclenche PAS la garde ;
+    # seule la phrase contiguë « magasin/boutique de décoration » le fait.
+    assert not _furniture_store_identity(
+        {"biography": "Architecte d'intérieur & décoration sur-mesure à Lyon"})
+    assert _furniture_store_identity(
+        {"biography": "Architecte d'intérieur — Magasin de meubles et boutique de décoration"})
