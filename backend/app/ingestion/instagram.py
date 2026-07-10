@@ -211,6 +211,24 @@ def discover_prescripteurs(posts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     return out
 
 
+_MENTION_RE = re.compile(r"@([a-zA-Z0-9_.]+)")
+
+
+def extract_tagged_studios(profiles: Dict[str, Dict[str, Any]]) -> "set":
+    """Scanne les légendes des derniers posts de profils CHR pour les mentions
+    @compte -> ensemble de handles mentionnés (minuscules, sans @). PUR.
+    Matérialise le tier T1 : un studio archi tagué dans les posts de chantier d'un
+    lead CHR détecté par la machine (« j'ai vu votre projet X »). Le filtrage
+    (est-ce vraiment un studio archi ?) se fait ensuite par intersection avec les
+    handles découverts en population archi — on n'infère rien ici."""
+    tagged: set = set()
+    for prof in (profiles or {}).values():
+        for x in (prof.get("latestPosts") or []):
+            for m in _MENTION_RE.findall(x.get("caption") or ""):
+                tagged.add(m.lower())
+    return tagged
+
+
 def scrape_profiles(handles: List[str], timeout: int = 180) -> Dict[str, Dict[str, Any]]:
     """Scrape les profils Instagram (actor profil) -> {username: profil}.
     2e passe, sur les seuls survivants (donc peu coûteuse). Fail-soft {} si pas de

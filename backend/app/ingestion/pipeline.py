@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Set, Tuple
 
 from sqlalchemy import and_, or_
 from sqlmodel import Session, delete, select
@@ -34,7 +34,10 @@ from .enrichment.naf_classifier import classify_naf
 from .enrichment.sirene import SireneEnricher
 from .enrichment import siret_matcher
 from .enrichment.siret_matcher import MatchResult, match as match_siret
-from .instagram import discover, scrape_hashtags, scrape_profiles, classify_profiles
+from .instagram import (
+    discover, scrape_hashtags, scrape_profiles, classify_profiles,
+    discover_prescripteurs, classify_prescripteurs, extract_tagged_studios,
+)
 from . import verdict_cache
 
 # Besoins probables par type d'établissement (alignés sur l'offre LumaPro).
@@ -81,6 +84,22 @@ LABEL_ROUTING = {
     "established":     (NEUTRAL_SIGNAL,         [],                 "established"),
     "chain_multisite": (NEUTRAL_SIGNAL,         [MULTISITE_SIGNAL], "chain_multisite"),
     "unknown":         (NEUTRAL_SIGNAL,         [],                 "unknown"),
+}
+
+# Signal NEUTRE des leads PRESCRIPTEURS (A1) : hors familles de scoring CHR
+# (services/scoring.py) -> score naturellement bas ; ce sont les libellés de tier
+# (projet CHR détecté / portfolio hospitality/CHR) qui portent la priorité.
+PRESCRIBER_SIGNAL = "prescripteur actif"
+DORMANT_SECONDARY = "studio en sommeil"
+T1_SECONDARY = "projet CHR détecté"
+T2_SECONDARY = "portfolio hospitality/CHR"
+
+# Routage label prescripteur -> (main_signal, secondary_base, lifecycle_label).
+# compte_perso/hors_cible/noise ABSENTS -> cache seul (pas de lead). Les tiers
+# T1/T2 ajoutent leur libellé secondaire au moment du routage (cf. run_prescripteurs).
+PRESCRIBER_ROUTING = {
+    "studio_actif":   (PRESCRIBER_SIGNAL, [],                   "studio_actif"),
+    "studio_dormant": (PRESCRIBER_SIGNAL, [DORMANT_SECONDARY],  "studio_dormant"),
 }
 
 CONNECTORS = {
@@ -406,6 +425,129 @@ def run_instagram(
             session.close()
 
     return stats
+
+
+def _build_tagged_studios(session: Session, scrape_fn=scrape_profiles,
+                          limit: int = 200) -> Set[str]:
+    """Ensemble des @comptes tagués dans les posts des leads CHR Instagram
+    existants (matérialise le tier T1). Scrape borné (limit) des profils CHR, puis
+    extract_tagged_studios. Fail-soft : set() si aucun lead / pas de token.
+    `scrape_fn` injectable pour les tests."""
+    handles = [
+        o.instagram for o in session.exec(
+            select(Opportunity).where(
+                Opportunity.source == "instagram",
+                Opportunity.population == "chr",
+                Opportunity.instagram.is_not(None),
+            )
+        ).all()[:limit]
+        if o.instagram
+    ]
+    if not handles:
+        return set()
+    profiles = scrape_fn(handles) or {}
+    return extract_tagged_studios(profiles)
+
+
+def run_prescripteurs(
+    hashtags: Optional[List[str]] = None,
+    limit: int = 40,
+    session: Optional[Session] = None,
+    posts: Optional[List[dict]] = None,
+    tagged_studios: Optional[Set[str]] = None,
+) -> IngestStats:
+    """Population ARCHITECTES (A1) : MIROIR de run_instagram, sans filtre CHR/IdF.
+    Apify (hashtags archi) -> discover_prescripteurs -> cache -> scrape_profiles ->
+    classify_prescripteurs (gardes/juge prescripteur/tiering) -> upsert cache ->
+    LeadCandidate(population='architecte') routé par PRESCRIBER_ROUTING.
+
+    Deux ajustements de la revue de plan (Notes de revue) sont appliqués ici :
+    (1) la clé du cache partagé HandleVerdict est PRÉFIXÉE `arch:` — elle évite une
+    collision avec un verdict CHR du même handle (vu via #agencement) sans toucher
+    run_instagram (CHR bit-à-bit intact) ; (2) `match_fn=None` — le matcher SIRET
+    est CHR-gated (renvoie structurellement None pour un NAF archi) : l'appeler
+    coûterait une recherche Sirene/LLM par candidat pour rien. `establishment_name`
+    retombe sur le nom découvert, le juge travaille déjà sur le profil seul."""
+    init_db()
+    own_session = session is None
+    session = session or Session(engine)
+    stats = IngestStats(source="instagram", mode="prescripteurs")
+    enricher = SireneEnricher()
+
+    try:
+        raw_posts = posts if posts is not None else scrape_hashtags(
+            hashtags or _archi_hashtags(), limit)
+        candidates = discover_prescripteurs(raw_posts)
+        due = [c for c in candidates
+               if verdict_cache.should_rejudge(session, f"arch:{c['handle']}")]
+        profiles = scrape_profiles([c["handle"] for c in due]) if due else {}
+        if tagged_studios is None:
+            tagged_studios = _build_tagged_studios(session)
+        today = date.today()
+        labeled = classify_prescripteurs(due, profiles, tagged_studios=tagged_studios,
+                                         match_fn=None, today=today)
+        stats.fetched = len(labeled)
+        seen_refs: set = set()
+        for c in labeled:
+            prof = profiles.get(c["handle"].lower()) or {}
+            has_data = bool(prof.get("latestPosts") or prof.get("postsCount") is not None)
+            # Mêmes règles de cacheabilité que CHR : un studio_actif 'basse'
+            # fail-soft (scrape/juge KO) N'EST PAS caché -> re-jugé au prochain run.
+            cacheable = has_data and not (
+                c["label"] == "studio_actif" and (c.get("confidence") or "basse") == "basse"
+            )
+            routing = PRESCRIBER_ROUTING.get(c["label"])
+            try:
+                if cacheable:
+                    verdict_cache.upsert(session, f"arch:{c['handle']}", c["label"],
+                                         c.get("confidence"), prof, today=today)
+                if routing is not None:
+                    main_signal, secondary_base, lifecycle_label = routing
+                    secondary = list(secondary_base)
+                    if c.get("tier") == "T1":
+                        secondary.append(T1_SECONDARY)
+                    elif c.get("tier") == "T2":
+                        secondary.append(T2_SECONDARY)
+                    m = c.get("_match")
+                    proof_text, proof_url = _instagram_proof(c, prof)
+                    cand = LeadCandidate(
+                        source="instagram",
+                        source_ref=c["handle"],
+                        establishment_name=(m.enseigne if (m and m.enseigne) else c["name"]),
+                        city=c["city"],
+                        address=c.get("address", ""),
+                        email=c.get("email"),
+                        website=c.get("website"),
+                        extra_addresses=c.get("extra_addresses", []),
+                        extra_emails=c.get("extra_emails", []),
+                        main_signal=main_signal,
+                        secondary_signals=secondary,
+                        lifecycle_label=lifecycle_label,
+                        population="architecte",
+                        detection_date=today,
+                        classification_text=c["name"],
+                        establishment_type="architecte d'intérieur",
+                        instagram=c["handle"],
+                        proof_text=proof_text or "",
+                        proof_url=proof_url,
+                    )
+                    _process_candidate(session, cand, stats, seen_refs, enricher)
+                session.commit()
+            except Exception:
+                stats.errors += 1
+                session.rollback()
+        session.commit()
+    finally:
+        if own_session:
+            session.close()
+
+    return stats
+
+
+def _archi_hashtags() -> List[str]:
+    """Hashtags archi par défaut (importés paresseusement pour éviter un cycle)."""
+    from .instagram import ARCHI_HASHTAGS
+    return ARCHI_HASHTAGS
 
 
 def _source_cursor(session: Session, source: str) -> Optional[date]:
