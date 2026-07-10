@@ -83,6 +83,9 @@ export default function EvalPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Incrémenté après un recalcul : force la section "jeu de preuve" à relire
+  // le cache (ses prédictions viennent du même fichier, réécrit par refresh).
+  const [gtVersion, setGtVersion] = useState(0);
 
   async function load(refresh = false) {
     if (refresh) setRefreshing(true);
@@ -94,6 +97,7 @@ export default function EvalPage() {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
+      if (refresh) setGtVersion((v) => v + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur de chargement");
     } finally {
@@ -238,7 +242,7 @@ export default function EvalPage() {
         </>
       )}
 
-      <GroundtruthSection />
+      <GroundtruthSection reloadKey={gtVersion} />
     </div>
   );
 }
@@ -263,7 +267,7 @@ function Metric({
   );
 }
 
-function GroundtruthSection() {
+function GroundtruthSection({ reloadKey = 0 }: { reloadKey?: number }) {
   const [gt, setGt] = useState<GroundtruthResult | null>(null);
   const [asOf, setAsOf] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -287,7 +291,7 @@ function GroundtruthSection() {
     return () => {
       cancelled = true;
     };
-  }, [asOf]);
+  }, [asOf, reloadKey]);
 
   const effective = gt?.as_of ?? null;
   const effectiveLabel = effective
