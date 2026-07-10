@@ -180,6 +180,16 @@ def run_instagram_endpoint(limit: int = 40):
         raise HTTPException(status_code=502, detail=f"Ingestion Instagram échouée : {exc}")
 
 
+@dev_router.post("/run-prescripteurs")
+def run_prescripteurs_endpoint(limit: int = 40):
+    from .ingestion.pipeline import run_prescripteurs, stats_to_dict
+
+    try:
+        return stats_to_dict(run_prescripteurs(limit=limit))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ingestion prescripteurs échouée : {exc}")
+
+
 app.include_router(dev_router)
 
 

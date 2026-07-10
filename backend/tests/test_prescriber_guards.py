@@ -98,3 +98,27 @@ def test_dead_account_is_noise():
     prof = {"biography": "", "postsCount": 1, "followersCount": 3}
     assert _is_dead_account(prof)
     assert guard_prescripteur(prof, TODAY) == "noise"
+
+
+def test_stylized_unicode_artisan_bio_is_hors_cible():
+    # jks_ebenistes (annotation navigateur, T6) : bio en lettres stylisées
+    # Unicode (mathématiques italiques) « É𝘣é𝘯𝘪𝘴𝘵𝘦𝘳𝘪𝘦 » -> doit normaliser en
+    # « ebenisterie » (NFKC AVANT le strip d'accents NFD) pour matcher le garde
+    # artisan, sans quoi le compte échappe au garde et atterrit à tort chez le
+    # juge (constaté : classé studio_actif en run live).
+    prof = {"biography": "É𝘣é𝘯𝘪𝘴𝘵𝘦𝘳𝘪𝘦 | 𝘈𝘵𝘦𝘭𝘪𝘦𝘳 | 𝘔𝘰𝘣𝘪𝘭𝘪𝘦𝘳 | 𝘈𝘨𝘦𝘯𝘤𝘦𝘮𝘦𝘯𝘵𝘴 | 𝘚𝘶𝘳-𝘮𝘦𝘴𝘶𝘳𝘦 |",
+            "fullName": "Jks Ébénistes", "postsCount": 95, "followersCount": 536}
+    assert _has_artisan_metier(prof) and not _has_archi_title(prof)
+    assert guard_prescripteur(prof, TODAY) == "hors_cible"
+
+
+def test_manufacturer_fabricant_without_archi_title_is_hors_cible():
+    # schmidt_cambrai (annotation navigateur, T6) : franchise de fabricant
+    # (« 1er fabricant français ») sans titre archi -> hors_cible déterministe.
+    # Constaté en run live : classé studio_actif, parfois même T2 (hospitality_proof)
+    # -> violation du gate « 0 hors_cible en T1/T2 » (non-déterminisme LLM à temp 0).
+    prof = {"biography": "Spécialiste de l'aménagement sur mesure. Votre projet, notre "
+                          "objectif. 1er fabricant français.",
+            "fullName": "Schmidt Cambrai", "postsCount": 483, "followersCount": 522}
+    assert _has_artisan_metier(prof) and not _has_archi_title(prof)
+    assert guard_prescripteur(prof, TODAY) == "hors_cible"

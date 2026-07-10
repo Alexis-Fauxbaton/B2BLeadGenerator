@@ -14,3 +14,8 @@ atelierlesimple,Atelier Lesimple,hors_cible,high,sonde,"'Menuiserie & Ebenisteri
 cotefauteuils,Cote Fauteuils,hors_cible,high,sonde,"'Artisan Tapissier Decorateur' = artisan textile/mobilier, pas architecte",2026-07-10
 endora.studio3d,Endora Studio 3D,hors_cible,high,sonde,"'Cours prives SketchUp pour les architectes d'interieur' = formation B2B2B",2026-07-10
 habiteretgrandir,Habiter et Grandir,hors_cible,high,sonde,"'coach HOMER®' + contenu lifestyle = coaching/formation, pas studio de projets clients",2026-07-10
+jks_ebenistes,Jks Ebenistes,hors_cible,high,annotation_browser,"bio 'Ebenisterie | Atelier | Mobilier | Agencements | Sur-mesure' en unicode stylise (garde texte plat ne matche pas) = artisan/fabricant, pas de titre archi ; decouvert via #agencement, tagge T2 a tort par le juge live",2026-07-10
+mokko_agencement,MOKKO Agencement,hors_cible,high,annotation_browser,"bio 'Atelier Normand Mobilier & agencement sur-mesure', post 'REJOINDRE L'ATELIER - poste MENUISIER-FABRICANT' = artelier de fabrication, pas de titre archi",2026-07-10
+schmidt_cambrai,Schmidt Cambrai,hors_cible,high,annotation_browser,"franchise magasin '1er fabricant francais' (Schmidt cuisines/rangements), lien vers page magasin du reseau, pas un studio independant",2026-07-10
+mathildecros.archi,Mathilde CROS,studio_actif,high,annotation_browser,"titre 'Architecte d'interieur', posts tres actifs (quasi quotidiens), legendes techniques projet reel (PROJET OASIS, dessin/suivi de chantier) malgre email @gmail (contrebalance par cadence + contenu pro)",2026-07-10
+cabinet_pauline.s,Pauline Seignon,studio_actif,high,annotation_browser,"membre FEDAI (federation pro), site domaine propre cabinet-paulines.com, nombreux highlights de projets nommes, 858 posts",2026-07-10

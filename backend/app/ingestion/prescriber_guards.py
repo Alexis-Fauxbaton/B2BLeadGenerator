@@ -28,10 +28,10 @@ _FORMATION_KW = ("coach", "coaching", "cours prive", "cours prives", "formation"
                  "masterclass", "mentorat", "e-learning", "e learning", "apprendre le")
 
 # Métiers d'artisan / fabricant VOISINS (fournisseurs, pas prescripteurs). Grounded :
-# atelierlesimple (menuiserie/ébénisterie), cotefauteuils (tapissier).
+# atelierlesimple (menuiserie/ébénisterie), cotefauteuils (tapissier), schmidt_cambrai
+# (franchise « 1er fabricant français », annotation navigateur T6).
 _ARTISAN_KW = ("menuiserie", "menuisier", "ebenisterie", "ebeniste", "tapissier",
-               "tapisserie", "serrurier", "marbrier", "ferronnier",
-               "fabricant de meubles", "fabrication de meubles")
+               "tapisserie", "serrurier", "marbrier", "ferronnier", "fabricant")
 
 # Titre archi/design d'intérieur : sa présence NEUTRALISE le garde artisan (un
 # studio qui parle de « menuiserie sur-mesure » n'est pas un menuisier).
@@ -53,7 +53,12 @@ _FOREIGN_TLD = frozenset({"be", "ch", "ca", "lu"})
 
 
 def _norm(text: Optional[str]) -> str:
-    text = (text or "").lower()
+    # NFKC D'ABORD (comme siret_matcher.clean_name) : les lettres stylisées Insta
+    # (ex. bio en Unicode mathématique italique « É𝘣é𝘯𝘪𝘴𝘵𝘦𝘳𝘪𝘦 ») se décomposent en
+    # ASCII normal via la compatibilité NFKC ; NFD seul les laisse intactes et les
+    # gardes mots-clés (artisan/formation/…) les ratent silencieusement (grounded
+    # jks_ebenistes, annotation navigateur T6). NFD ensuite pour retirer les accents.
+    text = unicodedata.normalize("NFKC", text or "").lower()
     return "".join(c for c in unicodedata.normalize("NFD", text)
                    if unicodedata.category(c) != "Mn")
 
