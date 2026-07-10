@@ -751,6 +751,19 @@ def test_instagram_discover_filters_chr_idf():
     assert next(d for d in got if d["handle"] == "cafe_92")["type"] == "café"
 
 
+def test_city_from_location_keeps_compound_hyphenated_names():
+    # Dette connue (HANDOFF.md « Extraction de ville cassée ») : le découpage sur
+    # TOUT tiret mutilait les villes composées (Château-Gontier -> "Château").
+    # Fix : ne découper que sur la virgule et le tiret ESPACÉ (' - '), jamais le
+    # tiret collé des noms composés.
+    from app.ingestion.instagram import _city_from_location
+
+    assert _city_from_location("Château-Gontier") == "Château-Gontier"
+    assert _city_from_location("Paris, France") == "Paris"
+    assert _city_from_location("Le Mans - Centre") == "Le Mans"
+    assert _city_from_location("Saint-Denis") == "Saint-Denis"
+
+
 def test_osm_name_matching():
     from app.ingestion.enrichment.osm import _name_matches
 

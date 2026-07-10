@@ -47,6 +47,35 @@ DEFAULT_HASHTAGS = [
     "ouvertureprochaine",
 ]
 
+# Hashtags ARCHITECTES (A1). Mesurés par la sonde (sonde-architectes.json) :
+# architectedinterieur 70 %, architecturedinterieure 70 %, agencement 80 % de
+# comptes distincts ; recouvrement inter-tags quasi nul -> les combiner multiplie
+# la couverture. `agencement` est le plus large (~50 % d'artisans dans la sonde) :
+# ratissé large à la découverte, le garde/juge trie la précision en aval.
+ARCHI_HASHTAGS = [
+    "architectedinterieur", "architecturedinterieure", "agencement",
+    "architecteinterieur", "architectedinterieurparis",
+]
+
+# Mots-clés PRESCRIPTEUR (normalisés, sans accent) : auto-déclaration en bio/nom
+# d'un métier d'architecture d'intérieur / d'agencement. Volontairement large
+# (VOLUME MAX national) — le garde/juge écarte ensuite artisans, coachs, comptes
+# perso. AUCUN filtre CHR ni IdF n'est appliqué (les hashtags archi sont nationaux).
+# On inclut les formes À espace ET les formes CONTIGUËS des hashtags composés :
+# la sonde montre que #architectedinterieur / #architecturedinterieure (contigus,
+# sans espace) sont les tags les plus productifs et que les mots-clés à espace
+# seuls ne les captent PAS (« architecte dinterieur » n'est pas dans
+# « architectedinterieur »).
+PRESCRIBER_KEYWORDS = (
+    "architecte d'interieur", "architecte dinterieur", "architecture interieure",
+    "interior design", "interior architect", "designer d'interieur",
+    "design d'interieur", "decoration d'interieur", "agencement",
+    "studio d'architecture",
+    # Formes contiguës (hashtags composés) — cf. sonde.
+    "architectedinterieur", "architecteinterieur", "architecturedinterieure",
+    "decorationdinterieur", "interiordesign", "designdinterieur",
+)
+
 # Mots-clés CHR (dans nom/caption/hashtags).
 CHR_KEYWORDS = (
     "restaurant", "resto", "cafe", "coffee", "coffeeshop", "bar", "brasserie",
@@ -137,6 +166,46 @@ def discover(posts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
             "city": _city_from_location(location),
             "type": _chr_type(text),  # pré-classé (validé CHR à la découverte)
             "caption": (post.get("caption") or "")[:300],  # pour le juge LLM
+        })
+    return out
+
+
+def _is_prescripteur(post: Dict[str, Any]) -> bool:
+    """Vrai si le post révèle un métier d'archi d'intérieur / agencement (large).
+    Deux voies : (1) ses `hashtags` intersectent ARCHI_HASHTAGS — le compte a été
+    DÉCOUVERT par ce hashtag, on le garde même sans phrase en clair (rattrape les
+    hashtags COMPOSÉS, contigus, que les mots-clés à espace ratent) ; (2) le texte
+    (nom / caption / hashtags / lieu) contient un mot-clé prescripteur."""
+    tags = {_norm(h) for h in (post.get("hashtags") or [])}
+    if tags & {_norm(h) for h in ARCHI_HASHTAGS}:
+        return True
+    t = _norm(_post_text(post))
+    return any(kw in t for kw in (_norm(k) for k in PRESCRIBER_KEYWORDS))
+
+
+def discover_prescripteurs(posts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Posts bruts Apify -> [{handle, name, city, type, caption, population}] :
+    architectes d'intérieur (auto-déclaration en bio/nom), dédupliqués par handle.
+    Fonction PURE (testable). MIROIR de discover() mais SANS filtre CHR ni IdF :
+    population 'architecte', découverte NATIONALE et VOLUME MAX (décision produit).
+    La précision (artisan, coach, compte perso) est traitée en aval par
+    prescriber_guards + judge_prescripteur, jamais ici."""
+    seen: set = set()
+    out: List[Dict[str, str]] = []
+    for post in posts:
+        handle = (post.get("ownerUsername") or "").strip()
+        if not handle or handle in seen:
+            continue
+        if not _is_prescripteur(post):
+            continue
+        seen.add(handle)
+        out.append({
+            "handle": handle,
+            "name": (post.get("ownerFullName") or handle).strip(),
+            "city": _city_from_location(post.get("locationName") or ""),
+            "type": "architecte d'intérieur",
+            "caption": (post.get("caption") or "")[:300],  # pour le juge
+            "population": "architecte",
         })
     return out
 
@@ -483,11 +552,15 @@ def _chr_type(text: str) -> str:
 
 
 def _city_from_location(location: str) -> str:
-    """Extrait une ville exploitable de locationName (ex: 'Nanterre Prefecture'
-    -> 'Nanterre'). Défaut : 'Paris'."""
+    """Extrait une ville exploitable de locationName (ex: 'Paris, France' ->
+    'Paris' ; 'Le Mans - Centre' -> 'Le Mans'). Découpe UNIQUEMENT sur la virgule
+    et le tiret ESPACÉ (' - ') : le tiret COLLÉ des noms de villes composés
+    (Château-Gontier, Saint-Denis, Boulogne-Billancourt) est préservé intact —
+    dette connue corrigée (HANDOFF.md « Extraction de ville cassée »). Défaut :
+    'Paris'."""
     loc = (location or "").strip()
     if not loc:
         return "Paris"
-    # Premier segment avant une virgule / mot parasite.
-    first = re.split(r"[,\-]", loc)[0].strip()
+    # Premier segment avant une virgule ou un tiret espacé (jamais le tiret collé).
+    first = re.split(r",| - ", loc)[0].strip()
     return first or "Paris"
