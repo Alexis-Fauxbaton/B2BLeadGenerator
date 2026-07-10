@@ -47,6 +47,7 @@ NEEDS_BY_TYPE = {
 
 TIMING_BY_SIGNAL = {
     "création récente": "J-30",
+    "rénovation": "J-30",
     "reprise": "J-60",
     "changement propriétaire": "J-60",
 }
@@ -67,6 +68,10 @@ MULTISITE_SIGNAL = "extension multi-sites"
 LABEL_ROUTING = {
     "opening_soon":    ("ouverture prochaine", [],                 "opening_soon"),
     "just_opened":     ("création récente",    [],                 "just_opened"),
+    # renovation : établi EN TRAVAUX = segment CHAUD (fenêtre d'aménagement
+    # ouverte). main_signal 'rénovation' -> famille RENOVATION du scoring
+    # (services/scoring.py), bonus de nature -> lead priorisé, jamais caché.
+    "renovation":      ("rénovation",          [],                 "renovation"),
     "established":     (NEUTRAL_SIGNAL,         [],                 "established"),
     "chain_multisite": (NEUTRAL_SIGNAL,         [MULTISITE_SIGNAL], "chain_multisite"),
     "unknown":         (NEUTRAL_SIGNAL,         [],                 "unknown"),

@@ -142,6 +142,33 @@ def test_opening_still_hot(tmp_path, monkeypatch):
     assert opp.proof_url == "https://instagram.com/loumas"
 
 
+def test_renovation_becomes_hot_lead_never_cached(tmp_path, monkeypatch):
+    # Passe 3 : un établi EN TRAVAUX (guard -> None via veto works cue) jugé
+    # renovation devient un lead CHAUD (main_signal 'rénovation', famille scoring
+    # RENOVATION) et n'est JAMAIS mis en cache (segment chaud à re-suivre).
+    from app.ingestion import verdict_cache
+    # bio « depuis 1995 » (établi) + caption travaux -> guard renvoie None -> juge.
+    prof = {"postsCount": 30, "biography": "Bar depuis 1995, 12 rue X 75005 Paris",
+            "latestPosts": [{"timestamp": "2026-07-01T10:00:00.000Z",
+                             "caption": "Fermé pour travaux, on refait la salle !"}]}
+    _prep(monkeypatch, {"renov": prof},
+          judge_json='{"reasoning":"x","label":"renovation","confidence":"haute",'
+                     '"addresses":[],"emails":[],"opening_date":null}')
+    engine = _engine(tmp_path)
+    _, opps, verdicts = _run(engine, [_post("renov", "bar à Paris", ())])
+    opp = opps["renov"]
+    assert opp.lifecycle_label == "renovation"
+    assert opp.main_signal == "rénovation"
+    assert not (set(opp.secondary_signals or []))
+    # Segment chaud -> aucune fenêtre de sommeil ; should_rejudge reste vrai.
+    assert "renovation" not in verdict_cache.REVISIT_MONTHS
+    assert verdicts.get("renov") == "renovation"  # verdict tout de même persisté
+    with Session(engine) as s:
+        assert verdict_cache.should_rejudge(s, "renov") is True
+    # Bonus de nature « rénovation » -> score non nul.
+    assert opp.opportunity_score >= 2
+
+
 def test_established_lead_stage_is_coherent(tmp_path, monkeypatch):
     # Cohérence bout-en-bout : une fiche « en base » established (signal NEUTRE, ni
     # avis, ni origine, ni date d'activité) doit exposer lifecycle_stage='établi',

@@ -88,6 +88,38 @@ def test_judge_prompt_covers_new_account_not_new_venue():
     assert "established" in t
 
 
+def test_judge_prompt_defines_renovation_label_and_rule():
+    """Passe 3 : le label renovation (établi EN TRAVAUX = segment chaud) et sa
+    règle de datation doivent être présents dans le system prompt, ET dans l'enum
+    du format JSON attendu."""
+    from app.ingestion.instagram import _DOSSIER_SYSTEM
+    t = _DOSSIER_SYSTEM.lower()
+    # Label défini + segment chaud.
+    assert "renovation" in t
+    assert "travaux" in t
+    # Règle de datation : travaux EN COURS / réouverture récente -> renovation,
+    # réouverture plus ancienne / opère normalement -> established.
+    assert "en cours" in t
+    assert "established" in t
+    # L'enum du format JSON de sortie propose bien renovation (sinon le juge ne
+    # peut PAS émettre le label).
+    client = _FakeClient('{"reasoning":"x","label":"renovation","confidence":'
+                         '"haute","addresses":[],"emails":[],"opening_date":null}')
+    out = judge_dossier(client, "x", "X", PROFILE, today=TODAY)
+    assert out["label"] == "renovation"
+    joined = " ".join(m["content"] for m in client.last_messages)
+    assert "renovation" in joined
+
+
+def test_judge_prompt_hardens_just_opened():
+    """Passe 3 (section B) : just_opened exige une preuve EXPLICITE de lancement
+    récent ; horaires + historique SANS preuve = established."""
+    from app.ingestion.instagram import _DOSSIER_SYSTEM
+    t = _DOSSIER_SYSTEM.lower()
+    assert "just_opened exige" in t
+    assert "preuve explicite" in t
+
+
 def test_judge_prompt_has_three_hardening_rules():
     """Remédiation 3bis : le juge sur-prédisait opening_soon. Trois règles ajoutées
     au system prompt doivent être présentes (garde le juge honnête)."""

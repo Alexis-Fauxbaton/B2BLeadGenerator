@@ -96,6 +96,7 @@ export const EVAL_LABEL_LABELS: Record<string, string> = {
   opening: "Ouverture",
   opening_soon: "Ouverture prochaine",
   just_opened: "Ouvert récemment",
+  renovation: "Rénovation en cours",
   established: "Établi",
   chain_multisite: "Chaîne multi-sites",
   not_venue: "Hors CHR",
@@ -108,6 +109,7 @@ export const EVAL_LABEL_STYLES: Record<string, string> = {
   opening: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   opening_soon: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   just_opened: "bg-cyan-50 text-cyan-700 ring-cyan-200",
+  renovation: "bg-orange-50 text-orange-700 ring-orange-200",
   established: "bg-slate-100 text-slate-600 ring-slate-200",
   chain_multisite: "bg-violet-50 text-violet-700 ring-violet-200",
   not_venue: "bg-rose-50 text-rose-700 ring-rose-200",
@@ -121,6 +123,7 @@ export const EVAL_LABEL_STYLES: Record<string, string> = {
 export const LIFECYCLE_LABEL_LABELS: Record<string, string> = {
   opening_soon: "Ouverture prochaine",
   just_opened: "Vient d'ouvrir",
+  renovation: "Rénovation en cours",
   established: "Établi",
   chain_multisite: "Chaîne / multi-sites",
   unknown: "À qualifier",
@@ -130,6 +133,7 @@ export const LIFECYCLE_LABEL_LABELS: Record<string, string> = {
 export const LIFECYCLE_LABEL_ORDER = [
   "opening_soon",
   "just_opened",
+  "renovation",
   "established",
   "chain_multisite",
   "unknown",
@@ -140,6 +144,7 @@ export const LIFECYCLE_LABEL_ORDER = [
 export const LIFECYCLE_LABEL_STYLES: Record<string, string> = {
   opening_soon: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   just_opened: "bg-cyan-50 text-cyan-700 ring-cyan-200",
+  renovation: "bg-orange-50 text-orange-700 ring-orange-200",
   established: "bg-slate-100 text-slate-600 ring-slate-200",
   chain_multisite: "bg-violet-50 text-violet-700 ring-violet-200",
   unknown: "bg-slate-100 text-slate-500 ring-slate-200",

@@ -3,8 +3,8 @@
 Métier PUR, session SQLModel injectée (aucun engine global) : le cache évite de
 re-scraper/re-juger un handle déjà tranché tant que sa fenêtre de revisite n'est
 pas expirée. Fenêtres : not_venue +12 mois, established/chain_multisite +6 mois,
-noise/unknown +2 mois, opening_soon/just_opened jamais mis en sommeil (watchlist
-active, brique 4).
+noise/unknown +2 mois, opening_soon/just_opened/renovation jamais mis en sommeil
+(segments chauds / watchlist active, brique 4).
 
 INVALIDATION PAR EMPREINTE (profile_hash) — ATTENTION : elle n'est exercée que
 lorsqu'un profil est PASSÉ à should_rejudge. Or le seul appelant en production
@@ -36,7 +36,7 @@ REVISIT_MONTHS = {
     "noise": 2,
     "unknown": 2,
 }
-NEVER_CACHED = ("opening_soon", "just_opened")
+NEVER_CACHED = ("opening_soon", "just_opened", "renovation")
 
 
 def profile_hash(profile: Dict[str, Any]) -> str:

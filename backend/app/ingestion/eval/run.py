@@ -34,8 +34,10 @@ RESULT_PATH = ROOT / "eval_result.json"  # cache du dernier résultat détaillé
 ECARTE = "ecarte"
 
 # Labels prédits qui tombent dans le bucket "à contacter" (projection binaire).
-FRESH_LABELS = {"opening_soon", "just_opened", "unknown"}
-# Mapping du label VÉRITÉ (CSV) vers l'espace des labels prédits.
+# renovation (établi EN TRAVAUX) = segment chaud -> a_contacter.
+FRESH_LABELS = {"opening_soon", "just_opened", "renovation", "unknown"}
+# Mapping du label VÉRITÉ (CSV) vers l'espace des labels prédits. 'renovation'
+# est déjà un label prédit valide -> pas de mapping (identité).
 TRUTH_LABEL_MAP = {"opening": "opening_soon"}
 # Gates durs d'acceptation.
 GATE_RECALL_OPENING = 1.0
@@ -53,6 +55,7 @@ GATE_HOT_PRECISION = 0.60
 TRUE_BUCKET = {
     "opening": "a_contacter",
     "just_opened": "a_surveiller",
+    "renovation": "a_contacter",
     "established": "en_base",
     "chain_multisite": "en_base",
     "not_venue": "ecarte",
@@ -65,6 +68,7 @@ TRUE_BUCKET = {
 PRED_BUCKET = {
     "opening_soon": "a_contacter",
     "just_opened": "a_surveiller",
+    "renovation": "a_contacter",
     "established": "en_base",
     "chain_multisite": "en_base",
     "unknown": "en_base",

@@ -12,6 +12,7 @@ from app.ingestion.profile_guards import (
     _has_reservation_in_bio,
     _has_reservation_in_posts,
     _has_opening_cue,
+    _has_works_cue,
     _multi_city_in_bio,
     _is_dead_account,
     _looks_like_venue,
@@ -298,10 +299,63 @@ def test_looks_like_venue_category_beats_food_keyword_in_bio():
 # année d'ouverture PASSÉE = established, même si le compte vient d'être créé.
 # Régression de prod : shywawapub (bio « Nouveau compte / Ouverts depuis 1995 »)
 # était sorti opening_soon confiance haute le 2026-07-09.
-def test_shywawapub_declared_seniority_established_by_guard():
+def test_shywawapub_declared_seniority_defers_to_judge_on_works_cue():
+    # Passe 3 (cas déclencheur) : bio « Ouverts depuis 1995 » -> _declares_seniority
+    # reste True (l'ancienneté EST déclarée). MAIS le snapshot réel porte des
+    # légendes de TRAVAUX / réouverture (« Première semaine depuis la réouverture »,
+    # finitions) -> le VETO travaux (_has_works_cue) prime : guard_verdict renvoie
+    # None (PLUS « established » direct au garde), le compte descend au juge qui
+    # datera renovation (travaux en cours / réouverture < 1 mois) vs established
+    # (réouverture plus ancienne, opère normalement).
     snap = json.loads((SNAP / "shywawapub.json").read_text(encoding="utf-8"))
     assert "1995" in (snap.get("biography") or "")
     assert _declares_seniority(snap, TODAY) is True
+    assert _has_works_cue(snap) is True
+    assert guard_verdict(snap, TODAY) is None
+
+
+def test_has_works_cue_helper():
+    # Indices de travaux / rénovation / réouverture (bio OU légendes récentes).
+    assert _has_works_cue({"biography": "Fermé pour travaux, réouverture bientôt"})
+    assert _has_works_cue({"latestPosts": [{"caption": "le chantier avance 👷"}]})
+    assert _has_works_cue({"latestPosts": [{"caption": "on refait la salle"}]})
+    assert _has_works_cue(
+        {"latestPosts": [{"caption": "Première semaine depuis la réouverture"}]})
+    assert _has_works_cue({"latestPosts": [{"caption": "grosse rénovation en cours"}]})
+    # DISTINCT de _has_opening_cue : une pré-ouverture pure de lieu NEUF n'est PAS
+    # un works cue (sinon on tuerait le veto en le confondant avec l'ouverture).
+    assert not _has_works_cue({"biography": "Ouverture prochainement Printemps 2026"})
+    assert not _has_works_cue({"latestPosts": [{"caption": "cocktails & happy hours"}]})
+
+
+def test_low_post_established_with_works_cue_defers_to_judge():
+    # Établi FAIBLE (ancienneté déclarée, PEU de posts) + indice de travaux -> veto
+    # travaux -> None (le juge date). Profil synthétique type shywawapub-en-mai.
+    prof = {"postsCount": 20, "biography": "Bar depuis 1998, 5 rue X 75005 Paris",
+            "latestPosts": [{"timestamp": "2026-06-25T10:00:00.000Z",
+                             "caption": "Fermé pour travaux, on refait la salle !"}]}
+    assert _has_works_cue(prof) is True
+    assert _declares_seniority(prof, TODAY) is True
+    assert guard_verdict(prof, TODAY) is None
+
+
+def test_high_volume_established_wins_over_works_cue():
+    # SÉPARATION passe 3 : un compte à GROS volume de posts (>150) reste established
+    # DÉTERMINISTE même avec un indice de travaux/réouverture — un long historique
+    # IG dénote une exploitation opérationnelle, pas la fenêtre de rénovation (dont
+    # la cible est un compte NEUF à ancienneté déclarée). Cas ancré :
+    # lemourerouge_cannes (193 posts, « Ouvert 7j/7 », « réouverture »/travaux).
+    snap = json.loads((SNAP / "lemourerouge_cannes.json").read_text(encoding="utf-8"))
+    assert _has_works_cue(snap) is True
+    assert (snap.get("postsCount") or 0) > 150
+    assert guard_verdict(snap, TODAY) == "established"
+
+
+def test_established_without_works_cue_still_captured():
+    # Symétrique du veto : un établi SANS aucun indice de travaux reste tranché
+    # « established » au garde (osabaita : résa tel + newtable, pas de chantier).
+    snap = json.loads((SNAP / "osabaita.json").read_text(encoding="utf-8"))
+    assert _has_works_cue(snap) is False
     assert guard_verdict(snap, TODAY) == "established"
 
 
