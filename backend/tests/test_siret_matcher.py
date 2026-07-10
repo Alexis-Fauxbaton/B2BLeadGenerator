@@ -45,6 +45,13 @@ def test_name_overlap_uses_distinctive_tokens():
     assert _name_overlap("CHÈRES COUSINES", "CC ROQUETTE (CHERES COUSINES)") is True
 
 
+def test_name_overlap_normalizes_stylized_letters():
+    """Piège Unicode (fiche 319) : les lettres mathématiques Insta (𝐺𝑖𝑜𝑟𝑔𝑖𝑛𝑎)
+    doivent tokeniser comme de l'ASCII (NFKC avant NFD, comme clean_name) —
+    sinon tokens vides -> identité inconfirmable -> fiche vidée à tort."""
+    assert _name_overlap("\U0001d43a\U0001d456\U0001d45c\U0001d45f\U0001d454\U0001d456\U0001d45b\U0001d44e 💙", "GIORGINA") is True
+
+
 from app.ingestion.enrichment.siret_matcher import _candidates, pick_by_name, _result
 
 # Extraits réels de l'API recherche-entreprises (test du 2026-07-04).
