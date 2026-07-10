@@ -23,6 +23,7 @@ export interface OpportunityList {
   source: string;
   source_ref: string | null;
   lifecycle_label: string | null;
+  population: string;
   siren: string | null;
   naf: string | null;
   phone: string | null;

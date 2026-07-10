@@ -28,6 +28,7 @@ import {
   ScoreBadge,
   SignalBadge,
   SourceBadge,
+  PopulationBadge,
   StatusBadge,
   StageBadge,
   HeatBadge,
@@ -224,6 +225,12 @@ export default function OpportunitiesPage() {
               <option value="instagram">Instagram</option>
             </select>
 
+            <select className={SELECT_CLS} value={filters.population ?? ""} onChange={(e) => set({ population: e.target.value })}>
+              <option value="">Toutes les populations</option>
+              <option value="chr">CHR</option>
+              <option value="architecte">Architectes</option>
+            </select>
+
             <select className={SELECT_CLS} value={filters.lifecycle_label ?? ""} onChange={(e) => set({ lifecycle_label: e.target.value })}>
               <option value="">Tous les cycles de vie</option>
               {LIFECYCLE_LABEL_ORDER.map((l) => (
@@ -287,6 +294,7 @@ export default function OpportunitiesPage() {
                             {o.establishment_name}
                           </span>
                           <SourceBadge source={o.source} />
+                          <PopulationBadge population={o.population} />
                         </div>
                       </td>
                       <td className="px-4 py-3 capitalize text-slate-600">{o.establishment_type}</td>

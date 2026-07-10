@@ -33,6 +33,13 @@ SIGNAL_TYPES = [
     # Signal NEUTRE des leads « en base » (établis/chaînes/indéterminés du funnel
     # Insta) : membre d'AUCUNE famille de scoring -> aucun bonus de nature.
     "établissement en activité",
+    # Population ARCHITECTES (A1) : signal NEUTRE des prescripteurs (hors familles
+    # de scoring CHR -> aucun bonus de nature) + libellés de tier (bonus ajoutés
+    # en T3, jamais émis par les leads CHR -> scores CHR inchangés).
+    "prescripteur actif",
+    "projet CHR détecté",
+    "portfolio hospitality/CHR",
+    "studio en sommeil",
 ]
 
 CHANNELS = ["instagram", "telephone", "email", "linkedin"]
@@ -103,6 +110,12 @@ class Opportunity(SQLModel, table=True):
     # fiche : opening_soon | just_opened | established | chain_multisite | unknown.
     # NULL pour les sources registre (BODACC/Sirene) qui n'étiquettent pas encore.
     lifecycle_label: Optional[str] = Field(default=None, index=True)
+
+    # Population du lead : 'chr' (défaut, toutes les sources registre + funnel CHR)
+    # ou 'architecte' (prescripteurs d'archi d'intérieur, A1). Les architectes NE
+    # passent PAS par le classifieur CHR ni le juge CHR ; ils ont leur propre
+    # découverte/juge/tiering et un main_signal neutre 'prescripteur actif'.
+    population: str = Field(default="chr", index=True)
 
     # Contact (enrichissement gratuit : OSM + scrape de site).
     phone: Optional[str] = None

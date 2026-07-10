@@ -127,6 +127,9 @@ export const LIFECYCLE_LABEL_LABELS: Record<string, string> = {
   established: "Établi",
   chain_multisite: "Chaîne / multi-sites",
   unknown: "À qualifier",
+  // Population architectes (A1).
+  studio_actif: "Studio actif",
+  studio_dormant: "Studio en sommeil",
 };
 
 // Ordre d'affichage (filtre + légendes) — même ordre que LABEL_ORDER côté éval.
@@ -148,4 +151,17 @@ export const LIFECYCLE_LABEL_STYLES: Record<string, string> = {
   established: "bg-slate-100 text-slate-600 ring-slate-200",
   chain_multisite: "bg-violet-50 text-violet-700 ring-violet-200",
   unknown: "bg-slate-100 text-slate-500 ring-slate-200",
+  studio_actif: "bg-indigo-50 text-indigo-700 ring-indigo-200",
+  studio_dormant: "bg-slate-100 text-slate-500 ring-slate-200",
+};
+
+// Population du lead (A1) : CHR (défaut) ou architectes d'intérieur (prescripteurs).
+export const POPULATION_LABELS: Record<string, string> = {
+  chr: "CHR",
+  architecte: "Architecte",
+};
+
+export const POPULATION_STYLES: Record<string, string> = {
+  chr: "bg-slate-100 text-slate-500 ring-slate-200",
+  architecte: "bg-indigo-50 text-indigo-700 ring-indigo-200",
 };

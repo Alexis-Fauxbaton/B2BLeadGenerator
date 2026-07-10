@@ -1,6 +1,7 @@
 """Endpoint des statistiques du dashboard."""
 from collections import Counter
 from datetime import date
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
@@ -18,8 +19,15 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
 @router.get("/stats", response_model=DashboardStats)
-def get_stats(session: Session = Depends(get_session)):
-    opportunities = session.exec(select(Opportunity)).all()
+def get_stats(session: Session = Depends(get_session),
+              population: Optional[str] = "chr"):
+    # Par défaut, le dashboard ne compte QUE le CHR : les leads architectes (A1)
+    # ne polluent NI les compteurs, NI by_signal, NI le top 5 « hottest ».
+    # ?population=architecte cible les archis ; ?population= (vide) = toutes.
+    query = select(Opportunity)
+    if population:
+        query = query.where(Opportunity.population == population)
+    opportunities = session.exec(query).all()
     today = date.today()
 
     total = len(opportunities)

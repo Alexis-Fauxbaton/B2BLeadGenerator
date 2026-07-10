@@ -35,6 +35,7 @@ export interface OpportunityFilters {
   recommended_channel?: string;
   source?: string;
   lifecycle_label?: string;
+  population?: string;
   sort_by?: string;
   order?: string;
 }

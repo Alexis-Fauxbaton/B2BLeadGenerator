@@ -2,6 +2,8 @@ import {
   CHANNEL_LABELS,
   LIFECYCLE_LABEL_LABELS,
   LIFECYCLE_LABEL_STYLES,
+  POPULATION_LABELS,
+  POPULATION_STYLES,
   SOURCE_LABELS,
   STATUS_LABELS,
   STATUS_STYLES,
@@ -20,6 +22,19 @@ export function SourceBadge({ source }: { source: string }) {
       title={isReal ? "Lead réel importé" : "Donnée de démonstration"}
     >
       {SOURCE_LABELS[source] ?? source}
+    </span>
+  );
+}
+
+export function PopulationBadge({ population }: { population: string }) {
+  // 'chr' = défaut discret ; 'architecte' = teinte indigo distinctive.
+  const cls = POPULATION_STYLES[population] ?? POPULATION_STYLES.chr;
+  return (
+    <span
+      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset ${cls}`}
+      title={population === "architecte" ? "Prescripteur (architecte d'intérieur)" : "Établissement CHR"}
+    >
+      {POPULATION_LABELS[population] ?? population}
     </span>
   );
 }

@@ -67,6 +67,7 @@ def _run_lightweight_migrations() -> None:
         "extra_addresses": "ALTER TABLE opportunities ADD COLUMN extra_addresses JSON",
         "extra_emails": "ALTER TABLE opportunities ADD COLUMN extra_emails JSON",
         "lifecycle_label": "ALTER TABLE opportunities ADD COLUMN lifecycle_label VARCHAR",
+        "population": "ALTER TABLE opportunities ADD COLUMN population VARCHAR DEFAULT 'chr'",
     }
     with engine.begin() as conn:
         for column, ddl in additions.items():

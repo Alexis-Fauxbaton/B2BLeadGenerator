@@ -69,6 +69,7 @@ def get_meta(session: Session = Depends(get_session)):
         "signal_types": SIGNAL_TYPES,
         "channels": CHANNELS,
         "statuses": STATUSES,
+        "populations": ["chr", "architecte"],
         "cities": cities,
     }
 

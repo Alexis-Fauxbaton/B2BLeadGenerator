@@ -46,6 +46,9 @@ NEEDS_BY_TYPE = {
     "bar": ["éclairage de bar", "mobilier", "enseigne lumineuse"],
     "brasserie": ["réagencement", "luminaires de salle", "mobilier de terrasse"],
     "traiteur": ["éclairage de boutique", "mobilier de présentation"],
+    # Prescripteur (A1) : besoins orientés prescription/sourcing, pas aménagement
+    # d'une salle en propre.
+    "architecte d'intérieur": ["prescription luminaires", "mobilier sur-mesure", "sourcing produits"],
 }
 
 TIMING_BY_SIGNAL = {
@@ -443,6 +446,9 @@ def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate
     opp.instagram = opp.instagram or cand.instagram
     opp.naf = opp.naf or cand.naf
     opp.lifecycle_label = opp.lifecycle_label or cand.lifecycle_label
+    # Fusion cross-source : ne jamais reclasser la population par une valeur
+    # différente (un lead 'chr' corroboré ne devient pas 'architecte').
+    opp.population = opp.population or cand.population
     opp.activity_start_date = opp.activity_start_date or cand.activity_start_date
     # BODACC/Sirene apportent chacun une valeur propre (dirigeants, preuve) :
     # on la garde même quand la fusion n'est pas de nature "corroboré instagram".
@@ -499,12 +505,18 @@ def _process_candidate(
     seen_refs: set,
     enricher: Optional[SireneEnricher] = None,
 ) -> None:
+    # ARCHITECTES (A1) : population dédiée. Ils NE passent NI par l'enricher Sirene
+    # (données/NAF CHR non pertinents ; pas de SIREN en A1, matcher CHR-gated) NI
+    # par le classifieur CHR (un NAF archi 71.11Z renverrait None -> lead droppé à
+    # tort). Le type est pris tel quel (déjà validé « archi » à la découverte).
+    is_architecte = cand.population == "architecte"
+
     # 1. Enrichissement Sirene (NAF, enseigne, adresse, état) si activé.
     # Source "sirene" exclue : données INSEE déjà autoritatives et fraîches
     # (l'enrichisseur écraserait l'adresse d'un établissement secondaire par
     # celle du siège — extension multi-sites) ; la passe `refresh` gère les
     # fermetures pour cette source, sans le coût réseau (~0,5 s/candidat/run).
-    if enricher is not None and cand.source != "sirene":
+    if enricher is not None and cand.source != "sirene" and not is_architecte:
         enricher.enrich(cand)
         # Reprise : dater l'origine réelle du local via le précédent exploitant
         # (2e lookup Sirene) -> un vieux local repris = lieu "établi".
@@ -517,18 +529,18 @@ def _process_candidate(
             stats.skipped_closed += 1
             return  # établissement fermé : on n'en fait pas un lead
 
-    # 2. Classification CHR.
-    # Si on a un NAF (enrichi), il fait AUTORITÉ : un NAF non-CHR écarte le lead,
-    # même si la description BODACC contient des mots-clés CHR (cas des holdings
-    # immobilières dont l'objet social mentionne "hôtel, restaurant").
-    # Sans NAF (enrichissement indisponible), on retombe sur les mots-clés.
-    text = " ".join(filter(None, [cand.classification_text, cand.establishment_name]))
-    if cand.naf:
-        etype = classify_naf(cand.naf, text)  # NAF fait autorité
-    elif cand.establishment_type:
-        etype = cand.establishment_type  # déjà validé CHR (ex. découverte Instagram)
+    # 2. Classification.
+    if is_architecte:
+        etype = cand.establishment_type or "architecte d'intérieur"
     else:
-        etype = classify(text)
+        # Classification CHR : si on a un NAF (enrichi), il fait AUTORITÉ.
+        text = " ".join(filter(None, [cand.classification_text, cand.establishment_name]))
+        if cand.naf:
+            etype = classify_naf(cand.naf, text)  # NAF fait autorité
+        elif cand.establishment_type:
+            etype = cand.establishment_type  # déjà validé CHR (ex. découverte Instagram)
+        else:
+            etype = classify(text)
     if not etype:
         return  # pas du CHR pertinent
     stats.chr_matched += 1
@@ -669,6 +681,9 @@ def _process_candidate(
         # Rafraîchir le label de cycle de vie (un opening peut devenir established
         # à un run ultérieur, ou l'inverse) — ne pas écraser par None (BODACC).
         existing.lifecycle_label = cand.lifecycle_label or existing.lifecycle_label
+        # La population ne change pas d'un run à l'autre pour un même handle ;
+        # on la (re)pose défensivement (une ancienne fiche pré-A1 est 'chr').
+        existing.population = cand.population or existing.population
         existing.activity_start_date = cand.activity_start_date
         existing.venue_origin_date = cand.venue_origin_date
         existing.estimated_timing = timing
@@ -717,6 +732,7 @@ def _process_candidate(
         siren_match_confidence=cand.siren_match_confidence,
         instagram=cand.instagram,
         lifecycle_label=cand.lifecycle_label,
+        population=cand.population,
         email=cand.email,
         website=cand.website,
         extra_addresses=cand.extra_addresses,
