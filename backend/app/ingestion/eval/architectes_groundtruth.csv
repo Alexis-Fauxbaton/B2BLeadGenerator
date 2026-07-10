@@ -1,0 +1,16 @@
+handle,name,label,confidence,provenance,rationale,annotated_at
+atelier_jdp,Juliette de Poncins,studio_actif,high,sonde,"titre exact 'architecte d'interieur', site propre, 132 posts, projets nommes",2026-07-10
+desmursetdesreves,Des Murs et des Reves,studio_actif,high,sonde,"duo 'architectes d'interieur', email domaine propre, 154 posts cadence hebdo",2026-07-10
+atelierdularge,Atelier du Large,studio_actif,high,sonde,"agence (pluriel 'nous concevons'), site propre, businessAddress structuree, collab CHR @hotel_restaurant_locean",2026-07-10
+bifur.architecture,Bifur Architecture,studio_actif,high,sonde,"email domaine propre g.drege@bifur.fr, site, 100 posts, pole BIFUR COMMERCE (retail)",2026-07-10
+grangermargon,Granger Margon,studio_actif,high,sonde,"email domaine propre, ecole Camondo, 399 posts, duo nomme",2026-07-10
+em.archi.design,EM Archi Design,studio_actif,high,sonde,"titre exact 'architecte d'interieur', site propre em-archidesign.fr, zone Compiegne/Oise",2026-07-10
+almonainterieurs,Almona Interieurs,studio_actif,med,sonde,"businessCategory 'Home decor', 30 posts recents 'Projet X', linktr.ee seul (jeune)",2026-07-10
+anartchi,Anartchi,studio_actif,med,sonde,"vocabulaire metier 'conception/suivi des travaux/sur mesure', cadence pro, petit studio jeune",2026-07-10
+espacesprojets,Atelier Espaces & Projets,studio_actif,med,sonde,"'amenagement bureaux & mobilier', zone geo en bio, segment tertiaire, profil hybride studio/revendeur",2026-07-10
+divnaanni,Divna Anni,compte_perso,med,sonde,"titre 'architecte d'interieur' MAIS email @gmail, cadence tres irreguliere, ton 'mon univers'",2026-07-10
+helene.gombert,Helene Gombert,studio_dormant,med,sonde,"gros compte (17k abonnes, 447 posts) email pro MAIS feed incoherent, activite en pause",2026-07-10
+atelierlesimple,Atelier Lesimple,hors_cible,high,sonde,"'Menuiserie & Ebenisterie depuis 1892' = artisan/fabricant, pas architecte",2026-07-10
+cotefauteuils,Cote Fauteuils,hors_cible,high,sonde,"'Artisan Tapissier Decorateur' = artisan textile/mobilier, pas architecte",2026-07-10
+endora.studio3d,Endora Studio 3D,hors_cible,high,sonde,"'Cours prives SketchUp pour les architectes d'interieur' = formation B2B2B",2026-07-10
+habiteretgrandir,Habiter et Grandir,hors_cible,high,sonde,"'coach HOMER®' + contenu lifestyle = coaching/formation, pas studio de projets clients",2026-07-10
