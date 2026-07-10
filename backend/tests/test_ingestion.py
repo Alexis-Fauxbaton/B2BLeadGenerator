@@ -751,6 +751,50 @@ def test_instagram_discover_filters_chr_idf():
     assert next(d for d in got if d["handle"] == "cafe_92")["type"] == "café"
 
 
+def test_city_from_location_keeps_compound_hyphenated_names():
+    # Dette connue (HANDOFF.md « Extraction de ville cassée ») : le découpage sur
+    # TOUT tiret mutilait les villes composées (Château-Gontier -> "Château").
+    # Fix : ne découper que sur la virgule et le tiret ESPACÉ (' - '), jamais le
+    # tiret collé des noms composés.
+    from app.ingestion.instagram import _city_from_location
+
+    assert _city_from_location("Château-Gontier") == "Château-Gontier"
+    assert _city_from_location("Paris, France") == "Paris"
+    assert _city_from_location("Le Mans - Centre") == "Le Mans"
+    assert _city_from_location("Saint-Denis") == "Saint-Denis"
+
+
+def test_discover_hyphenated_idf_city_reaches_live_matcher(monkeypatch):
+    """Régression revue T2 round 1 : le fix de `_city_from_location` (Château-
+    Gontier) est PARTAGÉ avec `discover()` CHR, dont `city` part tel quel dans
+    `pipeline._match_result` -> `match_siret` (chemin LIVE de l'ingestion, pas
+    l'éval offline `match_eval` qui reconstruit sa propre ville depuis un
+    `CITY_HINTS` codé en dur, indépendant de `_city_from_location`, et ne peut
+    donc rien détecter ici). On prouve qu'une commune IdF composée à tiret
+    (Boulogne-Billancourt) atteint désormais le matcher ENTIÈRE — plus tronquée
+    en 'Boulogne' comme avant le fix."""
+    from app.ingestion import pipeline
+    from app.ingestion.instagram import discover
+
+    posts = [
+        {"ownerUsername": "cafe_bb", "ownerFullName": "Café du Pont",
+         "caption": "Nouveau café, ouverture prochaine", "hashtags": [],
+         "locationName": "Boulogne-Billancourt, France"},
+    ]
+    lead = discover(posts)[0]
+    assert lead["city"] == "Boulogne-Billancourt"  # pas 'Boulogne' (tronqué)
+
+    captured = {}
+
+    def fake_match_siret(*, name, city, postal, address, context):
+        captured["city"] = city
+        return None
+
+    monkeypatch.setattr(pipeline, "match_siret", fake_match_siret)
+    pipeline._match_result(lead)
+    assert captured["city"] == "Boulogne-Billancourt"
+
+
 def test_osm_name_matching():
     from app.ingestion.enrichment.osm import _name_matches
 

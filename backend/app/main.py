@@ -69,6 +69,7 @@ def get_meta(session: Session = Depends(get_session)):
         "signal_types": SIGNAL_TYPES,
         "channels": CHANNELS,
         "statuses": STATUSES,
+        "populations": ["chr", "architecte"],
         "cities": cities,
     }
 
@@ -177,6 +178,16 @@ def run_instagram_endpoint(limit: int = 40):
         return stats_to_dict(run_instagram(limit=limit))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Ingestion Instagram échouée : {exc}")
+
+
+@dev_router.post("/run-prescripteurs")
+def run_prescripteurs_endpoint(limit: int = 40):
+    from .ingestion.pipeline import run_prescripteurs, stats_to_dict
+
+    try:
+        return stats_to_dict(run_prescripteurs(limit=limit))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ingestion prescripteurs échouée : {exc}")
 
 
 app.include_router(dev_router)

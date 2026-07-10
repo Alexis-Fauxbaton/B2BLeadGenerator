@@ -1,0 +1,37 @@
+"""Métriques d'éval de la classification PRESCRIPTEURS (A1) — fonctions PURES.
+
+Entrée = paires (label_vérité, label_prédit) et/ou lignes {true_label, tier}.
+Gate principal : précision de studio_actif (un studio_actif prédit EST-il un vrai
+studio_actif ?). Gate dur : 0 hors_cible vrai rangé dans un tier chaud (T1/T2)."""
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
+
+Pair = Tuple[str, str]
+
+LABEL_ORDER = ["studio_actif", "studio_dormant", "compte_perso", "hors_cible"]
+
+
+def studio_actif_precision(pairs: List[Pair]) -> Tuple[Optional[float], int, int]:
+    """(vrais studio_actif parmi les prédits studio_actif) / prédits studio_actif.
+    -> (précision|None, vrais_positifs, total_prédits). None si aucun prédit."""
+    predicted = [truth for truth, pred in pairs if pred == "studio_actif"]
+    if not predicted:
+        return None, 0, 0
+    tp = sum(1 for truth in predicted if truth == "studio_actif")
+    return tp / len(predicted), tp, len(predicted)
+
+
+def hors_cible_in_tiers(rows: List[dict]) -> List[str]:
+    """Handles dont la VÉRITÉ = hors_cible mais rangés en tier chaud (T1/T2).
+    DOIT être vide (gate dur : 0 hors_cible en T1/T2)."""
+    return [r["handle"] for r in rows
+            if r.get("true_label") == "hors_cible" and r.get("tier") in ("T1", "T2")]
+
+
+def label_confusion(pairs: List[Pair]) -> Dict[str, Dict[str, int]]:
+    matrix: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for truth, pred in pairs:
+        matrix[truth][pred] += 1
+    return {t: dict(row) for t, row in matrix.items()}

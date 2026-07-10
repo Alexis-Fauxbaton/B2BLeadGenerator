@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from . import profile_guards
+from . import prescriber_guards
 from .enrichment.siret_matcher import _age_label
 from .enrichment.url_filter import is_real_website
 from ..services.contact_quality import normalize_email
@@ -46,6 +47,35 @@ DEFAULT_HASHTAGS = [
     # pré-ouverture pure
     "ouvertureprochaine",
 ]
+
+# Hashtags ARCHITECTES (A1). Mesurés par la sonde (sonde-architectes.json) :
+# architectedinterieur 70 %, architecturedinterieure 70 %, agencement 80 % de
+# comptes distincts ; recouvrement inter-tags quasi nul -> les combiner multiplie
+# la couverture. `agencement` est le plus large (~50 % d'artisans dans la sonde) :
+# ratissé large à la découverte, le garde/juge trie la précision en aval.
+ARCHI_HASHTAGS = [
+    "architectedinterieur", "architecturedinterieure", "agencement",
+    "architecteinterieur", "architectedinterieurparis",
+]
+
+# Mots-clés PRESCRIPTEUR (normalisés, sans accent) : auto-déclaration en bio/nom
+# d'un métier d'architecture d'intérieur / d'agencement. Volontairement large
+# (VOLUME MAX national) — le garde/juge écarte ensuite artisans, coachs, comptes
+# perso. AUCUN filtre CHR ni IdF n'est appliqué (les hashtags archi sont nationaux).
+# On inclut les formes À espace ET les formes CONTIGUËS des hashtags composés :
+# la sonde montre que #architectedinterieur / #architecturedinterieure (contigus,
+# sans espace) sont les tags les plus productifs et que les mots-clés à espace
+# seuls ne les captent PAS (« architecte dinterieur » n'est pas dans
+# « architectedinterieur »).
+PRESCRIBER_KEYWORDS = (
+    "architecte d'interieur", "architecte dinterieur", "architecture interieure",
+    "interior design", "interior architect", "designer d'interieur",
+    "design d'interieur", "decoration d'interieur", "agencement",
+    "studio d'architecture",
+    # Formes contiguës (hashtags composés) — cf. sonde.
+    "architectedinterieur", "architecteinterieur", "architecturedinterieure",
+    "decorationdinterieur", "interiordesign", "designdinterieur",
+)
 
 # Mots-clés CHR (dans nom/caption/hashtags).
 CHR_KEYWORDS = (
@@ -139,6 +169,64 @@ def discover(posts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
             "caption": (post.get("caption") or "")[:300],  # pour le juge LLM
         })
     return out
+
+
+def _is_prescripteur(post: Dict[str, Any]) -> bool:
+    """Vrai si le post révèle un métier d'archi d'intérieur / agencement (large).
+    Deux voies : (1) ses `hashtags` intersectent ARCHI_HASHTAGS — le compte a été
+    DÉCOUVERT par ce hashtag, on le garde même sans phrase en clair (rattrape les
+    hashtags COMPOSÉS, contigus, que les mots-clés à espace ratent) ; (2) le texte
+    (nom / caption / hashtags / lieu) contient un mot-clé prescripteur."""
+    tags = {_norm(h) for h in (post.get("hashtags") or [])}
+    if tags & {_norm(h) for h in ARCHI_HASHTAGS}:
+        return True
+    t = _norm(_post_text(post))
+    return any(kw in t for kw in (_norm(k) for k in PRESCRIBER_KEYWORDS))
+
+
+def discover_prescripteurs(posts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Posts bruts Apify -> [{handle, name, city, type, caption, population}] :
+    architectes d'intérieur (auto-déclaration en bio/nom), dédupliqués par handle.
+    Fonction PURE (testable). MIROIR de discover() mais SANS filtre CHR ni IdF :
+    population 'architecte', découverte NATIONALE et VOLUME MAX (décision produit).
+    La précision (artisan, coach, compte perso) est traitée en aval par
+    prescriber_guards + judge_prescripteur, jamais ici."""
+    seen: set = set()
+    out: List[Dict[str, str]] = []
+    for post in posts:
+        handle = (post.get("ownerUsername") or "").strip()
+        if not handle or handle in seen:
+            continue
+        if not _is_prescripteur(post):
+            continue
+        seen.add(handle)
+        out.append({
+            "handle": handle,
+            "name": (post.get("ownerFullName") or handle).strip(),
+            "city": _city_from_location(post.get("locationName") or ""),
+            "type": "architecte d'intérieur",
+            "caption": (post.get("caption") or "")[:300],  # pour le juge
+            "population": "architecte",
+        })
+    return out
+
+
+_MENTION_RE = re.compile(r"@([a-zA-Z0-9_.]+)")
+
+
+def extract_tagged_studios(profiles: Dict[str, Dict[str, Any]]) -> "set":
+    """Scanne les légendes des derniers posts de profils CHR pour les mentions
+    @compte -> ensemble de handles mentionnés (minuscules, sans @). PUR.
+    Matérialise le tier T1 : un studio archi tagué dans les posts de chantier d'un
+    lead CHR détecté par la machine (« j'ai vu votre projet X »). Le filtrage
+    (est-ce vraiment un studio archi ?) se fait ensuite par intersection avec les
+    handles découverts en population archi — on n'infère rien ici."""
+    tagged: set = set()
+    for prof in (profiles or {}).values():
+        for x in (prof.get("latestPosts") or []):
+            for m in _MENTION_RE.findall(x.get("caption") or ""):
+                tagged.add(m.lower())
+    return tagged
 
 
 def scrape_profiles(handles: List[str], timeout: int = 180) -> Dict[str, Dict[str, Any]]:
@@ -466,6 +554,207 @@ def judge_dossier(client, handle: str, name: Optional[str],
         return {}
 
 
+_PRESCRIBER_SYSTEM = (
+    "Tu classes UN compte Instagram d'ARCHITECTE D'INTÉRIEUR / studio d'agencement "
+    "en France, pour un fournisseur B2B de luminaires et mobilier qui cherche des "
+    "PRESCRIPTEURS (studios qui recommandent ses produits à leurs clients). On te "
+    "donne un dossier : bio, compteurs, catégorie, site/lien, âge du DERNIER post "
+    "et cadence récente (déjà calculés), légende de découverte, derniers posts "
+    "datés. Choisis UN label :\n"
+    "- studio_actif : studio ou indépendant d'architecture d'intérieur / "
+    "d'agencement, EN FRANCE, avec un portfolio ACTIF (posts récents de projets — "
+    "« Projet X », conception, rénovation, sur-mesure — cadence régulière). Site "
+    "propre ou email à domaine propre = signal fort.\n"
+    "- studio_dormant : studio d'archi d'intérieur RÉEL mais INACTIF (dernier post "
+    "ancien — plusieurs mois — ou cadence quasi nulle). Ne pas se fier au seul "
+    "volume total de posts / d'abonnés : un gros compte peut être en sommeil.\n"
+    "- compte_perso : passionné de déco / particulier, bio à la 1re personne "
+    "orientée « mon univers / mon intérieur », email @gmail sans domaine propre, "
+    "cadence irrégulière, PAS de portfolio de projets clients.\n"
+    "- hors_cible : coach/formation VERS d'autres archis, artisan/fabricant "
+    "(menuisier, ébéniste, tapissier), graphiste/webdesign/photographe/média, "
+    "marque de produits, architecte de BÂTIMENT / maîtrise d'œuvre gros œuvre SANS "
+    "aménagement intérieur, ou compte ÉTRANGER (ville/‑domaine hors France).\n"
+    "RÈGLES : le titre « architecte d'intérieur » en bio est un signal FORT mais "
+    "PAS suffisant seul — croise-le avec la RÉCENCE (dernier post), la cadence, le "
+    "ton (portfolio de projets vs vie perso) et les signaux pro (site/email à "
+    "domaine propre vs @gmail/linktr.ee). Un compte à email @gmail, cadence "
+    "irrégulière et ton « mon univers » = compte_perso même avec le titre. Un "
+    "« coach »/« cours privés » = hors_cible même avec le titre. En cas de doute "
+    "entre studio_actif et studio_dormant, regarde l'âge du DERNIER post fourni "
+    "(récent -> actif ; vieux de plusieurs mois -> dormant).\n"
+    "hospitality_proof (booléen) : true SI le portfolio (bio/posts) montre un "
+    "projet d'HOSPITALITY / RETAIL / CHR (hôtel, restaurant, café, bar, boutique, "
+    "commerce, espace d'accueil du public) — un studio qui prescrit déjà pour ce "
+    "secteur est prioritaire ; sinon false. Raisonne D'ABORD brièvement (2 phrases "
+    ": activité/récence, cible du portfolio) PUIS décide. Extrais aussi, "
+    "UNIQUEMENT depuis la bio/les posts de CE compte, addresses (adresses postales "
+    "complètes) et emails. Réponds STRICTEMENT en JSON."
+)
+
+
+def _recent_cadence(profile: Dict[str, Any], today: date, window_days: int = 90) -> int:
+    """Nombre de posts (parmi les ~12 derniers) datés des `window_days` derniers
+    jours. Calculé EN CODE (les petits LLM ratent l'arithmétique de dates)."""
+    from datetime import datetime
+    n = 0
+    for x in (profile.get("latestPosts") or [])[:12]:
+        ts = (x.get("timestamp") or "")[:10]
+        try:
+            d = datetime.strptime(ts, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if 0 <= (today - d).days <= window_days:
+            n += 1
+    return n
+
+
+def judge_prescripteur(client, handle: str, name: Optional[str],
+                       profile: Dict[str, Any], caption: Optional[str] = None,
+                       match_result=None, today: Optional[date] = None) -> Dict[str, Any]:
+    """Juge prescripteur UNITAIRE : un appel LLM par compte. Renvoie {reasoning,
+    label, confidence, hospitality_proof, addresses, emails} ou {} (fail-soft :
+    pas de client / erreur / JSON invalide). Récence et cadence PRÉCALCULÉES en
+    code (jamais de timestamp brut à soustraire par le LLM) — MÊME infra que
+    judge_dossier (OPENAI_JUDGE_MODEL)."""
+    if client is None:
+        return {}
+    today = today or date.today()
+    latest = profile.get("latestPosts") or []
+    # Âge du post le plus récent (récence = discriminant actif/dormant).
+    newest = None
+    for x in latest:
+        ts = (x.get("timestamp") or "")[:10]
+        if ts and (newest is None or ts > newest):
+            newest = ts
+    recency = _age_label(newest, today) if newest else "?"
+    cadence = _recent_cadence(profile, today)
+    posts_block = "\n".join(
+        f'  - {_age_label((x.get("timestamp") or "")[:10], today)} : '
+        f'{(x.get("caption") or "")[:160]}'
+        for x in latest[:10]
+    )
+    site = profile.get("externalUrl") or ""
+    for e in (profile.get("externalUrls") or []):
+        site = site or (e.get("url") or "")
+    block = (
+        f'@{handle} | {name} | posts={profile.get("postsCount")} '
+        f'| abonnés={profile.get("followersCount")} '
+        f'| catégorie={profile.get("businessCategoryName")}\n'
+        f'bio : {(profile.get("biography") or "")[:250]}\n'
+        f'site/lien : {site[:120] or "(aucun)"}\n'
+        f'dernier post : {recency} | posts sur 90 jours : {cadence}\n'
+        f'légende de découverte : {(caption or "")[:160]}\n'
+        f'derniers posts (âge daté) :\n{posts_block or "  (aucun)"}'
+    )
+    user = (
+        f"Date du jour : {today.isoformat()}\n"
+        f"Dossier :\n{block}\n\n"
+        'Format EXACT : {"reasoning":"<2 phrases max>","label":"studio_actif|'
+        'studio_dormant|compte_perso|hors_cible","confidence":"haute|moyenne|basse",'
+        '"hospitality_proof":true|false,"addresses":[],"emails":[]}'
+    )
+    try:
+        completion = client.chat.completions.create(
+            model=os.getenv("OPENAI_JUDGE_MODEL", "gpt-4o"),
+            messages=[{"role": "system", "content": _PRESCRIBER_SYSTEM},
+                      {"role": "user", "content": user}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        return json.loads(completion.choices[0].message.content)
+    except Exception:
+        return {}
+
+
+def classify_prescripteurs(
+    candidates: List[Dict[str, Any]],
+    profiles: Optional[Dict[str, Dict[str, Any]]] = None,
+    *, tagged_studios: Optional[set] = None, match_fn=None,
+    client=_USE_ENV, today: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    """Étiquette CHAQUE candidat archi d'un label prescripteur + un tier de
+    priorité. Chaîne : gardes déterministes (prescriber_guards) -> sinon matcher
+    SIRET (CHR-gated -> None pour les archis en A1, mais appelé « tel quel ») ->
+    juge unitaire (judge_prescripteur). Fail-soft (pas de client / juge {}) ->
+    studio_actif confiance basse (gardé, protège le VOLUME ; NON caché en aval).
+    Tiering (studio_actif uniquement) : T1 si handle ∈ tagged_studios (studio tagué
+    sur un chantier CHR détecté) ; T2 si studio_actif ET hospitality_proof ; T3 si
+    studio_actif ; sinon None. Annote label, tier, confidence, hospitality_proof,
+    _match, enrichissement (adresse/email/site). Sans DB (injectable)."""
+    if not candidates:
+        return candidates
+    today = today or date.today()
+    profiles = profiles or {}
+    tagged = {t.lower() for t in (tagged_studios or set())}
+    resolved_client = _openai_client() if client is _USE_ENV else client
+
+    out: List[Dict[str, Any]] = []
+    for c in candidates:
+        prof = profiles.get(c["handle"].lower()) or {}
+        has_data = bool(prof.get("latestPosts") or prof.get("postsCount") is not None)
+
+        # 1. Gardes déterministes (hors_cible / noise), gratuits.
+        guard = prescriber_guards.guard_prescripteur(prof, today) if has_data else None
+        if guard:
+            c["label"] = guard
+            c["confidence"] = "haute"
+            c["tier"] = None
+            c["hospitality_proof"] = False
+            c["_match"] = None
+            out.append(c)
+            continue
+
+        # 2. Pré-enrichissement + matcher SIRET (appelé tel quel ; CHR-gated ->
+        # None pour un NAF archi -> le juge travaille sur le profil seul en A1).
+        struct_addr = _struct_address(prof)
+        struct_city = _clean_city((prof.get("businessAddress") or {}).get("city_name"))
+        if struct_addr:
+            c["address"] = struct_addr
+        c["bio_snippet"] = (prof.get("biography") or "")[:300]
+        match = match_fn(c) if match_fn else None
+        c["_match"] = match
+
+        # 3. Juge unitaire (fail-soft : studio_actif basse, gardé).
+        verdict = (judge_prescripteur(resolved_client, c["handle"], c.get("name"), prof,
+                                      caption=c.get("caption"), match_result=match, today=today)
+                   if (resolved_client and has_data) else {})
+        c["label"] = verdict.get("label") or "studio_actif"
+        c["confidence"] = verdict.get("confidence") or ("basse" if not verdict else "moyenne")
+        c["hospitality_proof"] = bool(verdict.get("hospitality_proof"))
+
+        # 4. Tiering (studio_actif seulement).
+        if c["label"] == "studio_actif":
+            if c["handle"].lower() in tagged:
+                c["tier"] = "T1"          # tagué sur un chantier CHR détecté
+            elif c["hospitality_proof"]:
+                c["tier"] = "T2"          # preuve hospitality/CHR au portfolio
+            else:
+                c["tier"] = "T3"          # studio actif générique
+        else:
+            c["tier"] = None
+
+        # 5. Post-enrichissement (adresses/emails/site).
+        llm_addrs = [a for a in (verdict.get("addresses") or []) if a]
+        llm_emails = [e for e in (normalize_email(e) for e in (verdict.get("emails") or [])) if e]
+        biz_email = normalize_email(prof.get("businessEmail") or prof.get("public_email"))
+        addresses = ([struct_addr] if struct_addr else []) + [a for a in llm_addrs if a != struct_addr]
+        emails = ([biz_email] if biz_email else []) + [e for e in llm_emails if e != biz_email]
+        if addresses:
+            c["address"] = addresses[0]
+            c["extra_addresses"] = addresses[1:]
+        if struct_city:
+            c["city"] = struct_city
+        if emails:
+            c["email"] = emails[0]
+            c["extra_emails"] = emails[1:]
+        website = _external_url(prof)
+        if website:
+            c["website"] = website
+        out.append(c)
+    return out
+
+
 def _chr_type(text: str) -> str:
     """Sous-type CHR à partir des mots-clés (le lead est déjà validé CHR)."""
     t = _norm(text)
@@ -483,11 +772,15 @@ def _chr_type(text: str) -> str:
 
 
 def _city_from_location(location: str) -> str:
-    """Extrait une ville exploitable de locationName (ex: 'Nanterre Prefecture'
-    -> 'Nanterre'). Défaut : 'Paris'."""
+    """Extrait une ville exploitable de locationName (ex: 'Paris, France' ->
+    'Paris' ; 'Le Mans - Centre' -> 'Le Mans'). Découpe UNIQUEMENT sur la virgule
+    et le tiret ESPACÉ (' - ') : le tiret COLLÉ des noms de villes composés
+    (Château-Gontier, Saint-Denis, Boulogne-Billancourt) est préservé intact —
+    dette connue corrigée (HANDOFF.md « Extraction de ville cassée »). Défaut :
+    'Paris'."""
     loc = (location or "").strip()
     if not loc:
         return "Paris"
-    # Premier segment avant une virgule / mot parasite.
-    first = re.split(r"[,\-]", loc)[0].strip()
+    # Premier segment avant une virgule ou un tiret espacé (jamais le tiret collé).
+    first = re.split(r",| - ", loc)[0].strip()
     return first or "Paris"

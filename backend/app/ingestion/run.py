@@ -1,16 +1,18 @@
 """CLI d'ingestion (ETL).
 
 Modes :
-  window       fenêtre fixe (--since jours) — le plus simple
-  incremental  passe A : nouveaux leads depuis le dernier curseur (+ chevauchement)
-  backfill     filet de sécurité : large fenêtre, comble les annonces manquées
-  reenrich     passe B : guérit les leads sans NAF via Sirene (sans retaper BODACC)
+  window         fenêtre fixe (--since jours) — le plus simple
+  incremental    passe A : nouveaux leads depuis le dernier curseur (+ chevauchement)
+  backfill       filet de sécurité : large fenêtre, comble les annonces manquées
+  reenrich       passe B : guérit les leads sans NAF via Sirene (sans retaper BODACC)
+  prescripteurs  population architectes d'intérieur (A1) : hashtags archi -> juge prescripteur
 
 Exemples :
     python -m app.ingestion.run --mode window --since 60 --limit 200
     python -m app.ingestion.run --mode incremental
     python -m app.ingestion.run --mode backfill --since 120
     python -m app.ingestion.run --mode reenrich
+    python -m app.ingestion.run --mode prescripteurs --limit 40
 """
 import argparse
 
@@ -20,6 +22,7 @@ from .pipeline import (
     run_incremental,
     run_ingestion,
     run_instagram,
+    run_prescripteurs,
     run_reenrich,
     run_refresh,
     stats_to_dict,
@@ -31,7 +34,16 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         default="window",
-        choices=["window", "incremental", "backfill", "reenrich", "contact", "refresh", "instagram"],
+        choices=[
+            "window",
+            "incremental",
+            "backfill",
+            "reenrich",
+            "contact",
+            "refresh",
+            "instagram",
+            "prescripteurs",
+        ],
     )
     parser.add_argument("--source", default="bodacc", help="Connecteur à utiliser.")
     parser.add_argument("--since", type=int, default=90, help="Fenêtre en jours (window/backfill).")
@@ -62,6 +74,8 @@ def main() -> None:
         stats = run_refresh(source=args.source)
     elif args.mode == "instagram":
         stats = run_instagram(limit=args.limit)
+    elif args.mode == "prescripteurs":
+        stats = run_prescripteurs(limit=args.limit)
     elif args.mode == "contact":
         stats = run_contact_enrich(source=args.source)
     elif args.mode == "incremental":

@@ -43,6 +43,8 @@ class LeadCandidate:
     # Label de cycle de vie du funnel Insta (persisté sur la fiche). None pour les
     # sources registre (BODACC/Sirene).
     lifecycle_label: Optional[str] = None
+    # Population du lead : 'chr' (défaut) ou 'architecte' (prescripteur, A1).
+    population: str = "chr"
     decision_maker: Optional[str] = None
     dirigeants: List[str] = field(default_factory=list)
     establishment_type: Optional[str] = None
