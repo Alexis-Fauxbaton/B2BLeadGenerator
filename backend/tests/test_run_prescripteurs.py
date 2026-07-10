@@ -115,6 +115,84 @@ def test_fail_soft_studio_actif_basse_not_cached(tmp_path, monkeypatch):
         assert "douteux" not in verdicts  # basse fail-soft : non caché (re-jugé au prochain run)
 
 
+def _seed_architecte_lead(session, handle):
+    """Crée une fiche archi 'studio_actif' déjà en base (simule un run précédent)."""
+    from app.ingestion.base import LeadCandidate
+    from app.ingestion.pipeline import IngestStats, _process_candidate
+    _process_candidate(session, LeadCandidate(
+        source="instagram", source_ref=handle, establishment_name=handle,
+        city="Paris", address="", main_signal="prescripteur actif",
+        detection_date=date(2026, 6, 1), population="architecte",
+        establishment_type="architecte d'intérieur", instagram=handle,
+        lifecycle_label="studio_actif"), IngestStats(source="instagram"), set(), None)
+    session.commit()
+
+
+def test_requalif_hors_cible_purges_existing_architecte_lead(tmp_path, monkeypatch):
+    # Fiche archi existante + re-verdict hors_cible (garde design-build : bio magasin
+    # d'ameublement) -> la fiche caduque est SUPPRIMÉE et stats.purged=1.
+    from app.models import ContactHistory, Signal
+    prof = {"biography": "Designer & architecte d'intérieur\nMagasin d'ameublement et décoration",
+            "fullName": "Bontemps", "postsCount": 198, "followersCount": 470,
+            "latestPosts": [{"timestamp": "2026-07-05T10:00:00.000Z", "caption": "cuisine sur mesure"}]}
+    _prep(monkeypatch, {"rolitech": prof})
+    with Session(_engine(tmp_path)) as s:
+        _seed_architecte_lead(s, "rolitech")
+        assert s.exec(select(Opportunity).where(Opportunity.source_ref == "rolitech")).first() is not None
+        stats = pl.run_prescripteurs(posts=[_post("rolitech", "magasin", ("agencement",))],
+                                     session=s, tagged_studios=set())
+        s.commit()
+        assert stats.purged == 1
+        assert s.exec(select(Opportunity).where(Opportunity.source_ref == "rolitech")).first() is None
+        # Purge propre : ni Signal ni ContactHistory orphelins.
+        assert s.exec(select(Signal)).all() == []
+        assert s.exec(select(ContactHistory)).all() == []
+
+
+def test_requalif_studio_actif_keeps_and_updates_existing_lead(tmp_path, monkeypatch):
+    # Fiche archi existante + re-verdict studio_actif -> CONSERVÉE (mise à jour),
+    # aucune purge.
+    prof = {"biography": "Architecte d'intérieur à Paris", "postsCount": 60, "followersCount": 800,
+            "latestPosts": [{"timestamp": "2026-07-05T10:00:00.000Z", "caption": "Projet"}]}
+    _prep(monkeypatch, {"studioa": prof},
+          judge_json='{"reasoning":"x","label":"studio_actif","confidence":"haute",'
+                     '"hospitality_proof":false,"addresses":[],"emails":[]}')
+    with Session(_engine(tmp_path)) as s:
+        _seed_architecte_lead(s, "studioa")
+        stats = pl.run_prescripteurs(posts=[_post("studioa")], session=s, tagged_studios=set())
+        s.commit()
+        assert stats.purged == 0 and stats.updated == 1
+        opp = s.exec(select(Opportunity).where(Opportunity.source_ref == "studioa")).first()
+        assert opp is not None and opp.lifecycle_label == "studio_actif"
+
+
+def test_requalif_not_venue_purges_existing_chr_lead(tmp_path, monkeypatch):
+    # SYMÉTRIE CHR : une fiche CHR existante re-jugée not_venue (funnel run_instagram)
+    # est purgée elle aussi (même trou, même correctif).
+    from app.ingestion.base import LeadCandidate
+    from app.ingestion.pipeline import IngestStats, _process_candidate
+    monkeypatch.setattr(pl, "scrape_profiles", lambda handles, **k: {"exresto": {
+        "biography": "compte perso", "postsCount": 5, "followersCount": 20,
+        "latestPosts": [{"timestamp": "2026-07-05T10:00:00.000Z"}]}})
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # Force un verdict not_venue déterministe via classify_profiles injecté.
+    monkeypatch.setattr(pl, "classify_profiles",
+                        lambda due, profiles, **k: [dict(c, label="not_venue", confidence="haute") for c in due])
+    with Session(_engine(tmp_path)) as s:
+        _process_candidate(s, LeadCandidate(
+            source="instagram", source_ref="exresto", establishment_name="Ex Resto",
+            city="Paris", address="", main_signal="ouverture prochaine",
+            detection_date=date(2026, 6, 1), establishment_type="restaurant",
+            instagram="exresto", lifecycle_label="opening_soon"),
+            IngestStats(source="instagram"), set(), None)
+        s.commit()
+        assert s.exec(select(Opportunity).where(Opportunity.source_ref == "exresto")).first() is not None
+        stats = pl.run_instagram(posts=[_post("exresto", "resto", ("restaurant",))], session=s)
+        s.commit()
+        assert stats.purged == 1
+        assert s.exec(select(Opportunity).where(Opportunity.source_ref == "exresto")).first() is None
+
+
 def test_build_tagged_studios_from_chr_leads(tmp_path, monkeypatch):
     from app.ingestion.base import LeadCandidate
     from app.ingestion.pipeline import IngestStats, _process_candidate, _build_tagged_studios

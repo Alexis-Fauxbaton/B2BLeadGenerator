@@ -18,7 +18,10 @@ les EXÉCUTANTS (menuisiers, fabricants de mobilier, cuisinistes-poseurs,
 carreleurs, mandataires immobiliers). Règle : un métier d'exécution DANS
 L'IDENTITÉ (nom/handle) écarte le compte MÊME avec un titre archi en bio
 (agenceurmenuisier.fr : bio « Architecte d'Intérieur » mais handle
-« agenceurmenuisier » = menuisier-agenceur). En simple MENTION (post/bio d'un
+« agenceurmenuisier » = menuisier-agenceur). Idem un COMMERCE d'ameublement
+auto-déclaré (« magasin d'ameublement/de meubles/boutique de décoration ») dans la
+bio/catégorie : design-build qui vend/fabrique ce qu'il pose (grounded
+bontemps.esquisse), écarté MÊME avec titre archi. En simple MENTION (post/bio d'un
 studio à titre archi) -> on laisse le juge trancher (zelee_design_studio parle de
 « fabriqué et posé par l'Atelier Franchini » mais reste un studio prescripteur).
 Cas ancrés hors_cible : endora.studio3d (cours privés), habiteretgrandir (coach),
@@ -61,6 +64,22 @@ _EXEC_IDENTITY_KW = ("menuiserie", "menuisier", "ebenisterie", "ebeniste", "tapi
 # Grounded schmidt_cambrai (déjà pris par « fabricant » ; ajouté par sûreté).
 _CUISINE_FRANCHISE_KW = ("schmidt", "mobalpa", "cuisinella", "ixina", "socoo",
                          "cuisine plus", "arthur bonnet", "you cuisines", "cuisines references")
+
+# Commerce d'ameublement/déco AUTO-DÉCLARÉ dans l'IDENTITÉ (bio/catégorie) : un
+# « magasin d'ameublement / de meubles / boutique de décoration » vend le mobilier
+# qu'il présente — il est le COMMERCE, pas le prescripteur qui spécifie à un tiers.
+# Garde DUR : le titre « architecte d'intérieur » en bio ne NEUTRALISE PAS ce cas
+# (design-build : conçoit ET vend/fabrique ce qu'il pose). Grounded bontemps.esquisse
+# (bio « Designer & architecte d'intérieur / Magasin d'ameublement et décoration »).
+# Discriminant DÉTERMINISTE vs zelee_design_studio (« Boutique Concept Store » +
+# archi, fabrication SOUS-TRAITÉE) : zelee ne se déclare PAS « magasin/boutique
+# d'ameublement/de meubles/de décoration » -> épargné, laissé au juge. Phrases
+# contiguës uniquement (pas « décoration » seul, présent chez des décoratrices
+# légitimes almonainterieurs/lydie.cuminetti/...).
+_FURNITURE_STORE_KW = ("magasin d'ameublement", "magasin de meubles", "magasin de meuble",
+                       "magasin de decoration", "magasin de deco",
+                       "boutique d'ameublement", "boutique de meubles",
+                       "boutique de decoration", "boutique de meuble")
 
 # Titre archi/design d'intérieur : sa présence NEUTRALISE les gardes SOUPLES (métier
 # en bio, marque de mobilier, cuisiniste, immobilier) — un studio qui parle de
@@ -139,6 +158,14 @@ def _exec_in_identity(profile: Dict[str, Any]) -> bool:
     Écarte MÊME avec titre archi (agenceurmenuisier.fr)."""
     ident = _identity(profile)
     return any(k in ident for k in _EXEC_IDENTITY_KW)
+
+
+def _furniture_store_identity(profile: Dict[str, Any]) -> bool:
+    """« magasin/boutique d'ameublement / de meubles / de décoration » AUTO-DÉCLARÉ
+    dans la bio/catégorie = commerce d'ameublement, PAS prescripteur — écarte MÊME
+    avec titre archi (design-build, grounded bontemps.esquisse). Phrases contiguës
+    (n'attrape pas « décoration » isolé chez les décoratrices prescriptrices)."""
+    return _kw_present(_haystack(profile), _FURNITURE_STORE_KW)
 
 
 def _mobilier_brand_identity(profile: Dict[str, Any]) -> bool:
@@ -226,6 +253,10 @@ def guard_prescripteur(profile: Dict[str, Any], today: Optional[date] = None) ->
     # Garde DUR : métier d'exécution dans le nom/handle -> le titre archi en bio
     # ne rachète pas un menuisier (agenceurmenuisier.fr).
     if _exec_in_identity(profile):
+        return "hors_cible"
+    # Garde DUR : commerce d'ameublement/déco auto-déclaré (« magasin d'ameublement »)
+    # -> le titre archi ne rachète pas un magasin (design-build, bontemps.esquisse).
+    if _furniture_store_identity(profile):
         return "hors_cible"
     # Gardes SOUPLES : neutralisés par un titre archi/décorateur d'intérieur (un
     # studio qui MENTIONNE menuiserie/mobilier/cuisine d'un projet reste au juge).
