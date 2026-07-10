@@ -19,6 +19,14 @@ RECRUITMENT_SIGNALS = {"recrutement"}
 # ne déclenche PAS le bonus « signaux croisés » (2 familles) — un même état
 # (l'établissement existe et a plusieurs sites) décrit par deux libellés.
 INVENTORY_SIGNALS = {"établissement en activité", "extension multi-sites"}
+# Population ARCHITECTES (A1). 'prescripteur actif' / 'studio en sommeil' = NEUTRES
+# (aucun bonus de nature -> score bas, VOLUME). Les libellés de TIER apportent la
+# priorité : 'projet CHR détecté' (T1, studio tagué sur un chantier CHR détecté)
+# = +3 (accroche « j'ai vu votre projet X ») ; 'portfolio hospitality/CHR' (T2)
+# = +2. Ces libellés ne sont JAMAIS émis par un lead CHR -> scores CHR inchangés.
+PRESCRIBER_NEUTRAL = {"prescripteur actif", "studio en sommeil"}
+PRESCRIBER_HOT = {"projet CHR détecté"}
+PRESCRIBER_WARM = {"portfolio hospitality/CHR"}
 
 # Famille de chaque libellé de signal. Le bonus "signaux croisés" compte les
 # FAMILLES distinctes, pas les libellés : "reprise" + "changement propriétaire"
@@ -29,6 +37,9 @@ SIGNAL_FAMILY = {
     **{s: "renovation" for s in RENOVATION_SIGNALS},
     **{s: "recruitment" for s in RECRUITMENT_SIGNALS},
     **{s: "inventaire" for s in INVENTORY_SIGNALS},
+    **{s: "prescripteur" for s in PRESCRIBER_NEUTRAL},
+    **{s: "prescripteur_hot" for s in PRESCRIBER_HOT},
+    **{s: "prescripteur_warm" for s in PRESCRIBER_WARM},
 }
 
 
@@ -95,6 +106,14 @@ def compute_score(
     if all_signals & RECRUITMENT_SIGNALS:
         points += 2
         reasons.append("recrutement actif")
+    # Population architectes (A1) : priorité par TIER (le main_signal 'prescripteur
+    # actif' reste neutre ; ce sont les libellés de tier qui portent la priorité).
+    if all_signals & PRESCRIBER_HOT:
+        points += 3
+        reasons.append("studio tagué sur un projet CHR détecté")
+    if all_signals & PRESCRIBER_WARM:
+        points += 2
+        reasons.append("portfolio hospitality/CHR")
 
     # Signaux croisés (gradient : 2 familles = +1, 3+ = +2). On compte les
     # FAMILLES distinctes pour ne pas récompenser un même événement décrit par

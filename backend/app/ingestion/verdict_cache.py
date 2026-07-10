@@ -35,6 +35,13 @@ REVISIT_MONTHS = {
     "chain_multisite": 6,
     "noise": 2,
     "unknown": 2,
+    # Population architectes (A1) : hors_cible/compte_perso longtemps en sommeil ;
+    # studio_dormant 6 mois ; studio_actif re-visité souvent (2 mois) pour capter
+    # le booster « nouveau projet » (tier T1).
+    "hors_cible": 12,
+    "compte_perso": 12,
+    "studio_dormant": 6,
+    "studio_actif": 2,
 }
 NEVER_CACHED = ("opening_soon", "just_opened", "renovation")
 
