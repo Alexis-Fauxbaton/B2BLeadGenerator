@@ -884,12 +884,14 @@ def test_enrich_identity_lock_blocks_text_homonym(monkeypatch):
     assert info.match_basis is None
 
     def fake_places_geo(name, **k):
+        # Géo-confirmé ET nom concordant (au moins un token distinctif commun) ->
+        # rempli. La géo confirme un LIEU, mais l'identité reste exigée.
         return {"matched": True, "phone": "0148772136", "website": "https://sushicharlesvii.fr",
-                "review_count": 12, "match_basis": "geo", "display_name": "Autre Nom"}
+                "review_count": 12, "match_basis": "geo", "display_name": "Sushi Charles VII Nogent"}
 
     monkeypatch.setattr(ce, "lookup_places", fake_places_geo)
     info = ce.ContactEnricher().enrich("Sushi Charles VII", None, None, city="Nogent")
-    assert info.phone == "0148772136"                    # géo-confirmé -> rempli
+    assert info.phone == "0148772136"                    # géo-confirmé + nom -> rempli
     assert info.website == "https://sushicharlesvii.fr"
 
     def fake_places_name(name, **k):
@@ -899,6 +901,137 @@ def test_enrich_identity_lock_blocks_text_homonym(monkeypatch):
     monkeypatch.setattr(ce, "lookup_places", fake_places_name)
     info = ce.ContactEnricher().enrich("Giorgina", None, None, city="Nogent-sur-Marne")
     assert info.phone == "0102030405"                    # nom concordant fort -> rempli
+
+
+def test_enrich_geo_requires_identity_soka_bolkiri(monkeypatch):
+    """Cas réel SOKA FOOD / Bolkiri (Saint-Gratien 95210). Une pizzeria fraîchement
+    créée (pas encore sur Places) est géo-confirmée sur son VOISIN Bolkiri (même
+    rue, 218 avis). La proximité confirme un LIEU, pas une IDENTITÉ :
+      (a) géo-confirmé mais ZÉRO recoupement de nom + 218 avis -> RIEN d'écrit ;
+      (b) géo-confirmé, zéro recoupement, SANS avis -> rejet aussi (identité) ;
+      (c) enseigne mono-token concordante + géo -> acceptée (non-régression) ;
+      (d) géo + recoupement OK + peu d'avis + création récente -> acceptée."""
+    from app.ingestion.enrichment import contact_enricher as ce
+    from datetime import date as _date
+
+    # (a) SOKA FOOD géo-confirmé sur « Bolkiri Saint-Gratien », 218 avis.
+    def fake_bolkiri(name, **k):
+        return {"matched": True, "phone": "0183846538",
+                "website": "https://restaurants.bolkiri.fr", "review_count": 218,
+                "match_basis": "geo", "display_name": "Bolkiri Saint-Gratien"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_bolkiri)
+    info = ce.ContactEnricher().enrich(
+        "SOKA FOOD", None, None, city="Saint-Gratien", postal="95210",
+        main_signal="création récente",
+    )
+    assert info.phone is None and info.website is None    # voisin -> rien
+    assert info.review_count is None and info.match_basis is None
+
+    # (b) Zéro recoupement de nom SANS avis : rejeté par le verrou d'identité seul.
+    def fake_zero_overlap(name, **k):
+        return {"matched": True, "phone": "0102030405", "website": "https://voisin.fr",
+                "review_count": 0, "match_basis": "geo", "display_name": "Le Voisin"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_zero_overlap)
+    info = ce.ContactEnricher().enrich(
+        "SOKA FOOD", None, None, city="Saint-Gratien", main_signal="création récente",
+    )
+    assert info.phone is None and info.website is None
+    assert info.match_basis is None
+
+    # (c) Enseigne mono-token concordante + géo (MOKA-style) -> acceptée.
+    def fake_mono(name, **k):
+        return {"matched": True, "phone": "0148772136", "website": "https://moka.fr",
+                "review_count": 8, "match_basis": "geo", "display_name": "Moka"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_mono)
+    info = ce.ContactEnricher().enrich(
+        "Moka", None, None, city="Paris", main_signal="création récente",
+    )
+    assert info.phone == "0148772136"                     # mono-token + géo -> rempli
+    assert info.review_count == 8
+
+    # (d) Recoupement OK + 12 avis + création récente -> pas de sur-blocage.
+    def fake_ok(name, **k):
+        return {"matched": True, "phone": "0140506070", "website": "https://sokafood.fr",
+                "review_count": 12, "match_basis": "geo", "display_name": "Soka Food Pizzeria"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_ok)
+    info = ce.ContactEnricher().enrich(
+        "SOKA FOOD", None, None, city="Saint-Gratien", main_signal="création récente",
+        activity_start_date=_date.today(),
+    )
+    assert info.phone == "0140506070"                     # nom OK + peu d'avis -> rempli
+    assert info.review_count == 12
+
+
+def test_fresh_conflict_only_applies_to_weak_identity(monkeypatch):
+    """Décision produit — la contradiction d'avis ne s'applique qu'à identité
+    FAIBLE. (a) géo + nom FORT + 111 avis + création récente -> REMPLI (cas
+    Giorgina réel : 111 avis, ouvert mi-juin, just_opened confirmé par le
+    propriétaire — un resto parisien hype prend 100 avis en un mois) ;
+    (b) géo + overlap mono-token partiel + 300 avis + création récente ->
+    rejeté (zone grise, voisin probable) ; (c) SOKA/Bolkiri inchangé."""
+    from app.ingestion.enrichment import contact_enricher as ce
+
+    # (a) Identité FORTE (géo + nom fort) : le détecteur s'efface.
+    def fake_giorgina(name, **k):
+        return {"matched": True, "phone": "0184161110",
+                "website": "https://www.restaurant-giorgina.com/",
+                "review_count": 111, "match_basis": "geo", "display_name": "Giorgina"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_giorgina)
+    info = ce.ContactEnricher().enrich(
+        "\U0001d43a\U0001d456\U0001d45c\U0001d45f\U0001d454\U0001d456\U0001d45b\U0001d44e \U0001f499",
+        48.838178, 2.491215, city="Nogent-sur-Marne", main_signal="création récente",
+    )
+    assert info.phone == "0184161110"
+    assert info.website == "https://www.restaurant-giorgina.com/"
+    assert info.review_count == 111
+
+    # (b) Zone grise : overlap partiel (marco seul, aucun sous-ensemble) + 300
+    # avis + création récente -> le détecteur rejette.
+    def fake_grey(name, **k):
+        return {"matched": True, "phone": "0102030405", "website": "https://marcopolo.fr",
+                "review_count": 300, "match_basis": "geo", "display_name": "Marco Polo"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_grey)
+    info = ce.ContactEnricher().enrich(
+        "Marco Del Caffé", None, None, city="Paris", main_signal="création récente",
+    )
+    assert info.phone is None and info.website is None
+    assert info.review_count is None and info.match_basis is None
+
+    # (c) SOKA/Bolkiri : zéro overlap -> toujours rejeté par le verrou d'identité.
+    def fake_bolkiri(name, **k):
+        return {"matched": True, "phone": "0183846538",
+                "website": "https://restaurants.bolkiri.fr", "review_count": 218,
+                "match_basis": "geo", "display_name": "Bolkiri Saint-Gratien"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_bolkiri)
+    info = ce.ContactEnricher().enrich(
+        "SOKA FOOD", None, None, city="Saint-Gratien", main_signal="création récente",
+    )
+    assert info.phone is None and info.website is None and info.review_count is None
+
+
+def test_fresh_review_conflict_detector():
+    """Fix 2 (unité) — le détecteur rejette avis anciens vs création récente,
+    par signal OU par date de début d'activité récente, et n'oppose rien aux
+    faibles volumes / fiches établies. NB : l'appelant (enrich) ne le consulte
+    qu'à identité FAIBLE (géo + nom fort -> exempté, cf. test ci-dessus)."""
+    from app.ingestion.enrichment.contact_enricher import _fresh_review_conflict
+    from datetime import date as _date, timedelta
+
+    assert _fresh_review_conflict("création récente", None, 218) is True
+    assert _fresh_review_conflict("ouverture prochaine", None, 100) is True
+    assert _fresh_review_conflict("création récente", None, 12) is False   # peu d'avis
+    assert _fresh_review_conflict("reprise", None, 900) is False           # signal non frais
+    assert _fresh_review_conflict(None, _date.today() - timedelta(days=20), 300) is True
+    assert _fresh_review_conflict(None, _date.today() - timedelta(days=400), 300) is False
+    assert _fresh_review_conflict(None, _date.today() + timedelta(days=30), 300) is True  # pré-ouverture
+    assert _fresh_review_conflict("création récente", None, None) is False  # avis inconnus
 
 
 def test_external_url_excludes_non_sites():

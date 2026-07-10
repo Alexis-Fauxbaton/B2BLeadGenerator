@@ -55,7 +55,11 @@ def street_number(address: Optional[str]) -> Optional[str]:
 
 
 def _tokens(text: Optional[str]) -> set:
-    text = (text or "").lower()
+    # NFKC D'ABORD (comme clean_name, brique 1) : les lettres stylisées Insta
+    # (mathématiques : 𝐺𝑖𝑜𝑟𝑔𝑖𝑛𝑎 -> Giorgina) redeviennent de l'ASCII AVANT le
+    # lower/strip d'accents NFD — sinon tokens vides -> identité inconfirmable
+    # (fiche 319 vidée à tort par le verrou contact qui réutilise ces tokens).
+    text = unicodedata.normalize("NFKC", text or "").lower()
     text = "".join(c for c in unicodedata.normalize("NFD", text)
                    if unicodedata.category(c) != "Mn")
     return {t for t in re.split(r"[^a-z0-9]+", text)
