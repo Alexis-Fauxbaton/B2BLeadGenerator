@@ -11,8 +11,21 @@ SUFFIT PAS à trancher `studio_actif` (divnaanni le porte mais est compte_perso 
 habiteretgrandir le porte mais est un coach). On ne fait donc AUCUN verdict
 `studio_actif`/`studio_dormant`/`compte_perso` déterministe — seul le juge, avec
 la récence et la cadence PRÉCALCULÉES, distingue actif/dormant/perso.
+
+FRONTIÈRE PRESCRIPTEUR/EXÉCUTANT (itération precision-archi-1, grounded sur 5 faux
+positifs mesurés) : le vocabulaire « agencement / conception / design » aspirait
+les EXÉCUTANTS (menuisiers, fabricants de mobilier, cuisinistes-poseurs,
+carreleurs, mandataires immobiliers). Règle : un métier d'exécution DANS
+L'IDENTITÉ (nom/handle) écarte le compte MÊME avec un titre archi en bio
+(agenceurmenuisier.fr : bio « Architecte d'Intérieur » mais handle
+« agenceurmenuisier » = menuisier-agenceur). En simple MENTION (post/bio d'un
+studio à titre archi) -> on laisse le juge trancher (zelee_design_studio parle de
+« fabriqué et posé par l'Atelier Franchini » mais reste un studio prescripteur).
 Cas ancrés hors_cible : endora.studio3d (cours privés), habiteretgrandir (coach),
-atelierlesimple (menuiserie), cotefauteuils (tapissier)."""
+atelierlesimple (menuiserie), cotefauteuils (tapissier), agenceurmenuisier.fr
+(menuisier), sartorius_mobilier (fabricant mobilier), rekto_agencement
+(cuisiniste-poseur), pensart.bzh (carreleur/béton ciré), lys_brocque_archi_immo
+(mandataire immobilier)."""
 from __future__ import annotations
 
 import re
@@ -27,14 +40,32 @@ from urllib.parse import urlsplit
 _FORMATION_KW = ("coach", "coaching", "cours prive", "cours prives", "formation",
                  "masterclass", "mentorat", "e-learning", "e learning", "apprendre le")
 
-# Métiers d'artisan / fabricant VOISINS (fournisseurs, pas prescripteurs). Grounded :
-# atelierlesimple (menuiserie/ébénisterie), cotefauteuils (tapissier), schmidt_cambrai
-# (franchise « 1er fabricant français », annotation navigateur T6).
-_ARTISAN_KW = ("menuiserie", "menuisier", "ebenisterie", "ebeniste", "tapissier",
-               "tapisserie", "serrurier", "marbrier", "ferronnier", "fabricant")
+# Métiers d'EXÉCUTION (artisan / fabricant / poseur) VOISINS : fournisseurs, pas
+# prescripteurs. Grounded : atelierlesimple (menuiserie/ébénisterie), cotefauteuils
+# (tapissier), schmidt_cambrai (« 1er fabricant français »), pensart.bzh (carrelage/
+# béton ciré). En bio/nom SANS titre archi -> hors_cible.
+_EXEC_TRADE_KW = ("menuiserie", "menuisier", "ebenisterie", "ebeniste", "tapissier",
+                  "tapisserie", "serrurier", "marbrier", "ferronnier", "fabricant",
+                  "carreleur", "carrelage", "cuisiniste", "beton cire", "poseur")
 
-# Titre archi/design d'intérieur : sa présence NEUTRALISE le garde artisan (un
-# studio qui parle de « menuiserie sur-mesure » n'est pas un menuisier).
+# Sous-ensemble des métiers d'exécution qui, présents dans l'IDENTITÉ (nom + handle),
+# écartent le compte MÊME avec un titre archi en bio : un studio prescripteur ne
+# porte JAMAIS un métier de fabrication/pose dans son nom ou son @handle (grounded
+# agenceurmenuisier.fr). Tokens longs (>=8 car.) -> recherche EN SOUS-CHAÎNE sûre
+# sur le handle collé (« agenceurmenuisier » contient « menuisier »).
+_EXEC_IDENTITY_KW = ("menuiserie", "menuisier", "ebenisterie", "ebeniste", "tapissier",
+                     "marbrier", "ferronnier", "serrurier", "fabricant", "carreleur",
+                     "carrelage", "cuisiniste")
+
+# Franchises / réseaux de cuisine (magasin de réseau, PAS studio indépendant).
+# Grounded schmidt_cambrai (déjà pris par « fabricant » ; ajouté par sûreté).
+_CUISINE_FRANCHISE_KW = ("schmidt", "mobalpa", "cuisinella", "ixina", "socoo",
+                         "cuisine plus", "arthur bonnet", "you cuisines", "cuisines references")
+
+# Titre archi/design d'intérieur : sa présence NEUTRALISE les gardes SOUPLES (métier
+# en bio, marque de mobilier, cuisiniste, immobilier) — un studio qui parle de
+# « menuiserie sur-mesure » n'est pas un menuisier. NE neutralise PAS le garde DUR
+# _EXEC_IDENTITY (métier d'exécution dans le nom/handle).
 _ARCHI_TITLE_KW = ("architecte d'interieur", "architecte dinterieur",
                    "architectes d'interieur", "architecture interieure",
                    "interior design", "interior architect", "designer d'interieur",
@@ -44,6 +75,11 @@ _ARCHI_TITLE_KW = ("architecte d'interieur", "architecte dinterieur",
 _NON_PRESCRIBER_KW = ("graphiste", "webdesign", "web design", "ux/ui", "ux ui",
                       "community manager", "photographe", "webmagazine",
                       "motion design", "illustrateur")
+
+# Termes « poseur cuisine-SdB-dressing » : >=2 dans la bio SANS titre archi = agenceur-
+# poseur (cuisiniste), pas prescripteur (grounded rekto_agencement « Cuisine - Salle
+# de bain - Dressing »). Seuil >=2 pour épargner un archi qui rénove UNE salle de bain.
+_FITTER_KW = ("cuisine", "salle de bain", "sdb", "dressing")
 
 # Domaines étrangers (piège CHR connu ; garde léger, aucun cas dans l'échantillon).
 # On compare le VRAI ccTLD (dernier label de l'hôte), jamais une sous-chaîne : sinon
@@ -71,6 +107,16 @@ def _haystack(profile: Dict[str, Any]) -> str:
     ]))
 
 
+def _identity(profile: Dict[str, Any]) -> str:
+    """Identité auto-affichée = nom + handle, normalisés. Le handle est inclus
+    COLLÉ (pour la sous-chaîne « agenceurmenuisier » -> « menuisier ») ET éclaté
+    sur « . » / « _ » (pour le match par token « immo », « mobilier »)."""
+    name = profile.get("fullName") or ""
+    user = profile.get("username") or ""
+    user_split = re.sub(r"[._]+", " ", user)
+    return _norm(" ".join([name, user, user_split]))
+
+
 def _kw_present(hay: str, keywords) -> bool:
     """Mot-clé présent en frontière de mot (évite les sous-chaînes parasites)."""
     return any(re.search(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", hay) for k in keywords)
@@ -85,7 +131,44 @@ def _has_archi_title(profile: Dict[str, Any]) -> bool:
 
 
 def _has_artisan_metier(profile: Dict[str, Any]) -> bool:
-    return _kw_present(_haystack(profile), _ARTISAN_KW)
+    return _kw_present(_haystack(profile), _EXEC_TRADE_KW)
+
+
+def _exec_in_identity(profile: Dict[str, Any]) -> bool:
+    """Métier d'exécution DANS le nom/handle (sous-chaîne sûre, tokens longs).
+    Écarte MÊME avec titre archi (agenceurmenuisier.fr)."""
+    ident = _identity(profile)
+    return any(k in ident for k in _EXEC_IDENTITY_KW)
+
+
+def _mobilier_brand_identity(profile: Dict[str, Any]) -> bool:
+    """« mobilier » dans le NOM/handle = marque/fabricant de mobilier
+    (sartorius_mobilier), PAS un simple service listé en bio (espacesprojets
+    « bureaux & mobilier » reste studio_actif)."""
+    return _kw_present(_identity(profile), ("mobilier", "meuble", "meubles"))
+
+
+def _fitter_combo(profile: Dict[str, Any]) -> bool:
+    """Cuisiniste/poseur : >=2 termes cuisine-SdB-dressing en bio/nom (rekto)."""
+    hay = _haystack(profile)
+    return sum(1 for k in _FITTER_KW if _kw_present(hay, (k,))) >= 2
+
+
+def _cuisine_franchise(profile: Dict[str, Any]) -> bool:
+    return _kw_present(_identity(profile) + " " + _haystack(profile), _CUISINE_FRANCHISE_KW)
+
+
+def _eshop_mobilier(profile: Dict[str, Any]) -> bool:
+    hay = _haystack(profile) + " " + _identity(profile)
+    return _kw_present(hay, ("e-shop", "eshop", "e shop", "boutique de mobilier",
+                             "boutique deco", "boutique de decoration", "vente de mobilier"))
+
+
+def _is_immo(profile: Dict[str, Any]) -> bool:
+    """Mandataire / agent immobilier (identité dominante immobilier), grounded
+    lys_brocque_archi_immo (bio « Immobilier », nom/handle « immo »)."""
+    return (_kw_present(_identity(profile), ("immo", "immobilier"))
+            or _kw_present(_haystack(profile), ("immobilier", "mandataire", "agent immobilier")))
 
 
 def _is_non_prescriber(profile: Dict[str, Any]) -> bool:
@@ -125,11 +208,14 @@ def _is_dead_account(profile: Dict[str, Any]) -> bool:
 
 def guard_prescripteur(profile: Dict[str, Any], today: Optional[date] = None) -> Optional[str]:
     """Verdict déterministe du profil archi, ou None (à confier au juge).
-    Ordre : compte mort -> noise ; formation/coaching -> hors_cible (même avec titre
-    archi : un coach vend du savoir) ; prestataire/média -> hors_cible ; artisan
-    SANS titre archi -> hors_cible ; étranger -> hors_cible ; sinon None (le juge
-    tranche actif/dormant/perso, avec récence/cadence précalculées).
-    AUCUN verdict studio_* déterministe (leçon sonde : titre insuffisant)."""
+    Ordre : compte mort -> noise ; formation/coaching -> hors_cible (même avec
+    titre archi) ; prestataire/média -> hors_cible ; métier d'exécution DANS
+    L'IDENTITÉ -> hors_cible (même avec titre archi) ; métier d'exécution en
+    bio SANS titre archi -> hors_cible ; frontière produit SANS titre archi
+    (marque de mobilier, cuisiniste, franchise cuisine, e-shop, immobilier) ->
+    hors_cible ; étranger -> hors_cible ; sinon None (le juge tranche actif/
+    dormant/perso). AUCUN verdict studio_* déterministe (leçon sonde : titre
+    insuffisant)."""
     today = today or date.today()
     if _is_dead_account(profile):
         return "noise"
@@ -137,8 +223,25 @@ def guard_prescripteur(profile: Dict[str, Any], today: Optional[date] = None) ->
         return "hors_cible"
     if _is_non_prescriber(profile):
         return "hors_cible"
-    if _has_artisan_metier(profile) and not _has_archi_title(profile):
+    # Garde DUR : métier d'exécution dans le nom/handle -> le titre archi en bio
+    # ne rachète pas un menuisier (agenceurmenuisier.fr).
+    if _exec_in_identity(profile):
         return "hors_cible"
+    # Gardes SOUPLES : neutralisés par un titre archi/décorateur d'intérieur (un
+    # studio qui MENTIONNE menuiserie/mobilier/cuisine d'un projet reste au juge).
+    if not _has_archi_title(profile):
+        if _has_artisan_metier(profile):
+            return "hors_cible"
+        if _mobilier_brand_identity(profile):
+            return "hors_cible"
+        if _fitter_combo(profile):
+            return "hors_cible"
+        if _cuisine_franchise(profile):
+            return "hors_cible"
+        if _eshop_mobilier(profile):
+            return "hors_cible"
+        if _is_immo(profile):
+            return "hors_cible"
     if _is_foreign(profile):
         return "hors_cible"
     return None

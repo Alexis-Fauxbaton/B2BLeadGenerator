@@ -63,3 +63,26 @@ def test_prompt_has_date_anchor_precomputed_recency_and_reasoning():
 def test_fail_soft():
     assert judge_prescripteur(None, "x", "X", PROFILE, today=TODAY) == {}
     assert judge_prescripteur(_FakeClient("pas du json"), "x", "X", PROFILE, today=TODAY) == {}
+
+
+def test_prompt_states_prescriber_executant_boundary():
+    # Fix 2 : la frontière prescripteur/exécutant doit être écrite dans le prompt
+    # système (celui qui FABRIQUE/POSE = hors_cible même s'il dit design/agencement ;
+    # la sous-traitance de la fabrication reste prescripteur).
+    from app.ingestion.instagram import _PRESCRIBER_SYSTEM as sys
+    assert "FRONTIÈRE PRESCRIPTEUR/EXÉCUTANT" in sys
+    assert "FABRIQUE ou POSE" in sys
+    assert "mandataire immobilier" in sys
+    assert "SOUS-TRAITE" in sys
+
+
+def test_prompt_requires_hospitality_evidence_and_format():
+    # Fix 3 : hospitality_proof exige un extrait cité (hospitality_evidence) ; le
+    # format de sortie JSON contient le champ.
+    from app.ingestion.instagram import _PRESCRIBER_SYSTEM as sys
+    assert "hospitality_evidence" in sys
+    client = _FakeClient('{"reasoning":"x","label":"studio_actif","confidence":"haute",'
+                         '"hospitality_proof":false,"hospitality_evidence":"","addresses":[],"emails":[]}')
+    judge_prescripteur(client, "x", "X", PROFILE, today=TODAY)
+    joined = " ".join(m["content"] for m in client.last_messages)
+    assert '"hospitality_evidence"' in joined

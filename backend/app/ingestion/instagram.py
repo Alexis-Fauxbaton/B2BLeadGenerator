@@ -575,6 +575,16 @@ _PRESCRIBER_SYSTEM = (
     "(menuisier, ébéniste, tapissier), graphiste/webdesign/photographe/média, "
     "marque de produits, architecte de BÂTIMENT / maîtrise d'œuvre gros œuvre SANS "
     "aménagement intérieur, ou compte ÉTRANGER (ville/‑domaine hors France).\n"
+    "FRONTIÈRE PRESCRIPTEUR/EXÉCUTANT (DÉCISIVE, applique-la AVANT tout) : "
+    "studio_actif = un studio qui CONÇOIT des ESPACES pour des CLIENTS et "
+    "SPÉCIFIE/PRESCRIT des produits (mobilier, luminaires) qu'il NE FABRIQUE PAS. "
+    "Celui qui FABRIQUE ou POSE ce qu'il vend — menuisier, ébéniste, fabricant de "
+    "mobilier, cuisiniste, carreleur, poseur de cuisines/salles de bain — est "
+    "hors_cible, MÊME si sa bio dit « design », « conception » ou « agencement ». "
+    "Un agent / mandataire immobilier qui montre des rendus ou du home-staging est "
+    "hors_cible. En revanche, un studio qui SOUS-TRAITE la fabrication/pose à un "
+    "tiers (« imaginé par nous, fabriqué et posé par l'atelier X ») RESTE "
+    "prescripteur (studio_actif) : il conçoit, il ne fabrique pas.\n"
     "RÈGLES : le titre « architecte d'intérieur » en bio est un signal FORT mais "
     "PAS suffisant seul — croise-le avec la RÉCENCE (dernier post), la cadence, le "
     "ton (portfolio de projets vs vie perso) et les signaux pro (site/email à "
@@ -583,10 +593,14 @@ _PRESCRIBER_SYSTEM = (
     "« coach »/« cours privés » = hors_cible même avec le titre. En cas de doute "
     "entre studio_actif et studio_dormant, regarde l'âge du DERNIER post fourni "
     "(récent -> actif ; vieux de plusieurs mois -> dormant).\n"
-    "hospitality_proof (booléen) : true SI le portfolio (bio/posts) montre un "
-    "projet d'HOSPITALITY / RETAIL / CHR (hôtel, restaurant, café, bar, boutique, "
-    "commerce, espace d'accueil du public) — un studio qui prescrit déjà pour ce "
-    "secteur est prioritaire ; sinon false. Raisonne D'ABORD brièvement (2 phrases "
+    "hospitality_proof (booléen) + hospitality_evidence (extrait) : "
+    "hospitality_proof=true UNIQUEMENT si tu peux CITER dans hospitality_evidence "
+    "l'extrait EXACT de bio/caption qui prouve un PROJET d'HOSPITALITY / RETAIL / "
+    "CHR RÉALISÉ (hôtel, restaurant, café, bar, boutique, commerce, espace "
+    "d'accueil du public) — un PROJET, PAS un mot isolé ni une simple inspiration. "
+    "Si tu ne peux pas citer un tel extrait -> hospitality_proof=false ET "
+    "hospitality_evidence=\"\". Un studio qui prescrit déjà pour ce secteur est "
+    "prioritaire. Raisonne D'ABORD brièvement (2 phrases "
     ": activité/récence, cible du portfolio) PUIS décide. Extrais aussi, "
     "UNIQUEMENT depuis la bio/les posts de CE compte, addresses (adresses postales "
     "complètes) et emails. Réponds STRICTEMENT en JSON."
@@ -652,7 +666,8 @@ def judge_prescripteur(client, handle: str, name: Optional[str],
         f"Dossier :\n{block}\n\n"
         'Format EXACT : {"reasoning":"<2 phrases max>","label":"studio_actif|'
         'studio_dormant|compte_perso|hors_cible","confidence":"haute|moyenne|basse",'
-        '"hospitality_proof":true|false,"addresses":[],"emails":[]}'
+        '"hospitality_proof":true|false,"hospitality_evidence":"<extrait cité ou vide>",'
+        '"addresses":[],"emails":[]}'
     )
     try:
         completion = client.chat.completions.create(
@@ -721,7 +736,13 @@ def classify_prescripteurs(
                    if (resolved_client and has_data) else {})
         c["label"] = verdict.get("label") or "studio_actif"
         c["confidence"] = verdict.get("confidence") or ("basse" if not verdict else "moyenne")
-        c["hospitality_proof"] = bool(verdict.get("hospitality_proof"))
+        # PREUVE HOSPITALITY EXIGÉE (Fix 3) : hospitality_proof n'est retenu QUE si
+        # le juge a cité un extrait NON VIDE le prouvant (hospitality_evidence).
+        # Un true fabriqué sans extrait (grounded rekto_agencement, tag T2 factice)
+        # est REFUSÉ -> pas de tier T2 sur du vent.
+        evidence = (verdict.get("hospitality_evidence") or "").strip()
+        c["hospitality_evidence"] = evidence
+        c["hospitality_proof"] = bool(verdict.get("hospitality_proof")) and bool(evidence)
 
         # 4. Tiering (studio_actif seulement).
         if c["label"] == "studio_actif":

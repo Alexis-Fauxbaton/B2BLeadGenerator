@@ -21,7 +21,7 @@ class _FakeClient:
 
 
 ACTIF = ('{"reasoning": "x", "label": "studio_actif", "confidence": "haute", '
-         '"hospitality_proof": %s, "addresses": [], "emails": []}')
+         '"hospitality_proof": %s, "hospitality_evidence": %s, "addresses": [], "emails": []}')
 
 
 def _cand(handle, name="Studio"):
@@ -46,19 +46,32 @@ def test_fail_soft_keeps_as_studio_actif_basse():
     assert out[0]["tier"] == "T3"  # actif sans preuve hospitality -> T3
 
 
-def test_tier_t2_when_hospitality_proof():
+def test_tier_t2_when_hospitality_proof_with_evidence():
+    # T2 exige hospitality_proof=true ET un extrait cité (hospitality_evidence).
     prof = {"biography": "Architecte d'intérieur", "postsCount": 40, "followersCount": 300,
             "latestPosts": [{"timestamp": "2026-07-01T10:00:00.000Z", "caption": "Hôtel"}]}
-    client = _FakeClient(ACTIF % "true")
+    client = _FakeClient(ACTIF % ("true", '"Aménagement complet de l\'hôtel Le Roch"'))
     out = classify_prescripteurs([_cand("archi")], {"archi": prof},
                                  client=client, match_fn=None, today=TODAY)
     assert out[0]["label"] == "studio_actif" and out[0]["tier"] == "T2"
+    assert out[0]["hospitality_proof"] is True
+
+
+def test_hospitality_true_without_evidence_is_refused():
+    # Fix 3 (tag T2 fabriqué de rekto) : hospitality_proof=true SANS extrait cité
+    # est REFUSÉ par le code -> pas de T2, retombe en T3.
+    prof = {"biography": "Architecte d'intérieur", "postsCount": 40, "followersCount": 300,
+            "latestPosts": [{"timestamp": "2026-07-01T10:00:00.000Z", "caption": "Projet"}]}
+    client = _FakeClient(ACTIF % ("true", '""'))
+    out = classify_prescripteurs([_cand("archi")], {"archi": prof},
+                                 client=client, match_fn=None, today=TODAY)
+    assert out[0]["hospitality_proof"] is False and out[0]["tier"] == "T3"
 
 
 def test_tier_t1_when_tagged_on_detected_chr_project():
     prof = {"biography": "Architecte d'intérieur", "postsCount": 40, "followersCount": 300,
             "latestPosts": [{"timestamp": "2026-07-01T10:00:00.000Z", "caption": "Projet"}]}
-    client = _FakeClient(ACTIF % "false")
+    client = _FakeClient(ACTIF % ("false", '""'))
     out = classify_prescripteurs([_cand("atelierdularge")], {"atelierdularge": prof},
                                  client=client, match_fn=None,
                                  tagged_studios={"atelierdularge"}, today=TODAY)
