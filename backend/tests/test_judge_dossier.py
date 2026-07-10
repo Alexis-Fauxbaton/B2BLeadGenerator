@@ -14,15 +14,17 @@ class _FakeCompletion:
 
 
 class _FakeClient:
-    """Client OpenAI factice : renvoie un JSON fixe et capture le prompt."""
+    """Client OpenAI factice : renvoie un JSON fixe et capture le prompt + kwargs."""
     def __init__(self, content):
         self._content = content
         self.last_messages = None
+        self.last_kwargs = None
         outer = self
 
         class _Completions:
             def create(self, **kwargs):
                 outer.last_messages = kwargs.get("messages")
+                outer.last_kwargs = kwargs
                 return _FakeCompletion(outer._content)
 
         self.chat = type("Chat", (), {"completions": _Completions()})()
@@ -62,6 +64,23 @@ def test_prompt_has_date_anchor_and_reasoning_and_precomputed_ages():
     assert "il y a 1 mois" in joined          # société créée (match)
     assert "2026-06-20" not in joined          # timestamp brut du post absent
     assert ("il y a" in joined or "ce mois-ci" in joined)  # âge des posts
+
+
+def test_judge_uses_dedicated_model_defaulting_to_gpt4o(monkeypatch):
+    """Passe 3 (décision 1) : le juge tourne sur un modèle FORT dédié —
+    OPENAI_JUDGE_MODEL, défaut « gpt-4o » quand la variable est absente. Il ne doit
+    PAS retomber sur OPENAI_MODEL (réservé au reste : arbitre matcher, messages…).
+    gpt-4o-mini est non déterministe à temp 0 sur les profils ambigus (vécu passe 3)."""
+    monkeypatch.delenv("OPENAI_JUDGE_MODEL", raising=False)
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")  # ne doit PAS être utilisé
+    client = _FakeClient('{"reasoning":"x","label":"unknown","confidence":"basse",'
+                         '"addresses":[],"emails":[],"opening_date":null}')
+    judge_dossier(client, "x", "X", PROFILE, today=TODAY)
+    assert client.last_kwargs["model"] == "gpt-4o"
+    # La variable dédiée, si présente, l'emporte.
+    monkeypatch.setenv("OPENAI_JUDGE_MODEL", "gpt-4o-2024-11-20")
+    judge_dossier(client, "x", "X", PROFILE, today=TODAY)
+    assert client.last_kwargs["model"] == "gpt-4o-2024-11-20"
 
 
 def test_judge_dossier_fail_soft():

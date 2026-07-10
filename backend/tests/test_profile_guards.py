@@ -14,6 +14,8 @@ from app.ingestion.profile_guards import (
     _has_opening_cue,
     _has_works_cue,
     _multi_city_in_bio,
+    _multi_postal_in_bio_and_captions,
+    _is_plausible_fr_postal,
     _is_dead_account,
     _looks_like_venue,
     _declares_seniority,
@@ -395,6 +397,101 @@ def test_gt_openings_not_caught_by_seniority_guard():
         snap = json.loads((SNAP / f"{h}.json").read_text(encoding="utf-8"))
         assert _declares_seniority(snap, TODAY) is False, f"{h} pris pour un etabli ancien"
         assert guard_verdict(snap, TODAY) is None, f"{h} tranche a tort par un garde"
+
+
+# --- Passe 3 : détection de chaîne étendue aux CAPTIONS (≥ 2 CP FR distincts) ----
+def test_plausible_fr_postal_filter():
+    # Départements 01-95, Corse 20xxx, DOM 97x -> plausibles.
+    assert _is_plausible_fr_postal("75008")
+    assert _is_plausible_fr_postal("20260")   # Corse
+    assert _is_plausible_fr_postal("97400")   # La Réunion
+    assert _is_plausible_fr_postal("01000")
+    # 96/98/99/00 -> non plausibles.
+    assert not _is_plausible_fr_postal("99999")
+    assert not _is_plausible_fr_postal("00000")
+    assert not _is_plausible_fr_postal("96000")
+
+
+def test_multi_postal_in_captions_makes_chain():
+    # ≥ 2 codes postaux FR distincts semés dans les légendes récentes = chaîne.
+    prof = {
+        "businessCategoryName": "Restaurant",
+        "biography": "Notre enseigne 🍽️",
+        "latestPosts": [
+            {"caption": "Retrouvez-nous au 12 rue X, 75011 Paris ! #resto"},
+            {"caption": "Et notre 2e adresse : 45 av. Y, 69006 Lyon 😋"},
+        ],
+    }
+    assert _multi_postal_in_bio_and_captions(prof) is True
+    assert guard_verdict(prof, TODAY) == "chain_multisite"
+
+
+def test_single_repeated_postal_in_captions_not_chain():
+    # Un SEUL code postal répété d'un post à l'autre (même adresse) -> 1 distinct ->
+    # PAS une chaîne (dédup). Le compte reste None au garde (descend au juge).
+    prof = {
+        "businessCategoryName": "Restaurant",
+        "biography": "Bistrot de quartier",
+        "latestPosts": [
+            {"caption": "Ce soir au 3 rue Z 75011 Paris"},
+            {"caption": "Demain encore au 3 rue Z 75011 Paris"},
+        ],
+    }
+    assert _multi_postal_in_bio_and_captions(prof) is False
+    assert guard_verdict(prof, TODAY) is None
+
+
+def test_opening_year_in_caption_not_counted_as_postal():
+    # Une ANNÉE d'ouverture en légende (« septembre 2026 ») fait 4 chiffres : jamais
+    # captée par \\d{5} -> ne compte pas comme adresse (pas de faux chain_multisite).
+    prof = {
+        "businessCategoryName": "Restaurant",
+        "biography": "Café — 8 rue A 75002 Paris",
+        "latestPosts": [
+            {"caption": "Ouverture prévue septembre 2026 🎉"},
+        ],
+    }
+    # Un seul CP (bio) + une année -> 1 distinct -> pas une chaîne.
+    assert _multi_postal_in_bio_and_captions(prof) is False
+
+
+def test_lemarcchiato_chain_signal_is_street_based_not_postal():
+    # RÉALITÉ MESURÉE (passe 3) : le snapshot lemarcchiato (139 posts, vérité
+    # chain_multisite) exprime sa 2e adresse en TEXTE DE RUE dans les légendes
+    # (« au Marcchiato 2 rue boson », « Marcchiato boson ») — AUCUN code postal
+    # (\\b\\d{5}\\b) en bio ni en captions. La règle STRICTE « ≥ 2 CP distincts »
+    # ne le capte donc PAS au garde : il reste None et descend au juge (gpt-4o),
+    # qui doit trancher chain_multisite (« un tout nouveau Marcchiato », 2e site).
+    # Test-témoin honnête de la limite du mécanisme postal.
+    snap = json.loads((SNAP / "lemarcchiato.json").read_text(encoding="utf-8"))
+    assert _multi_postal_in_bio_and_captions(snap) is False
+    assert guard_verdict(snap, TODAY) is None
+
+
+def test_ruelatte_multi_postal_still_blocked_by_looks_like_venue():
+    # PROTECTION exigée : ruelatte sème ≥ 2 CP parisiens dans ses légendes MAIS
+    # n'a pas l'apparence d'un lieu CHR (média/guide, _looks_like_venue False) ->
+    # la garde chaîne ne se déclenche PAS (reste None -> juge : not_venue).
+    snap = json.loads((SNAP / "ruelatte.json").read_text(encoding="utf-8"))
+    assert _multi_postal_in_bio_and_captions(snap) is True   # les CP sont bien là
+    assert _looks_like_venue(snap) is False
+    assert guard_verdict(snap, TODAY) != "chain_multisite"
+
+
+def test_chain_via_captions_survives_works_cue_and_volume():
+    # Une chaîne dont les CP sont en captions reste chain_multisite MÊME en travaux
+    # (le veto works-cue ne s'applique pas au signal chaîne) ET même à gros volume.
+    prof = {
+        "businessCategoryName": "Restaurant",
+        "postsCount": 300,
+        "biography": "Notre maison 🍴",
+        "latestPosts": [
+            {"caption": "Travaux en cours au 10 rue A 75004 Paris 👷 #renovation"},
+            {"caption": "Notre 2e maison : 22 rue B 33000 Bordeaux"},
+        ],
+    }
+    assert _has_works_cue(prof) is True
+    assert guard_verdict(prof, TODAY) == "chain_multisite"
 
 
 def test_just_opened_monica_survives_guards():

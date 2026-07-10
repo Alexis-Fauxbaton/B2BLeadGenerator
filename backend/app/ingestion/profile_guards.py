@@ -65,6 +65,17 @@ _HOURS_KW = (
 _POSTAL_RE = re.compile(r"\b\d{5}\b")
 _PIN = "\U0001F4CD"  # 📍
 
+# Code postal FR PLAUSIBLE : \b\d{5}\b dont le département tient la route
+# (01-95 métropole, 20xxx Corse/2A-2B, 97x DOM). Écarte les 96/98/99/00 et surtout
+# les nombres à 5 chiffres qui ne sont pas des CP (prix, identifiants). Une année
+# ISO fait 4 chiffres (« 2026 ») -> jamais captée par \d{5} : aucun risque de
+# confondre une DATE d'ouverture en légende avec une 2e adresse.
+def _is_plausible_fr_postal(code: str) -> bool:
+    dept = code[:2]
+    if dept == "97":            # DOM : 971xx-976xx
+        return True
+    return dept.isdigit() and 1 <= int(dept) <= 95   # 01-95 (Corse 20xxx incluse)
+
 # --- Apparence de lieu CHR (garde-fou des verdicts established/chain_multisite) --
 # Motif d'erreur mesuré (passe d'annotation #1) : de longs historiques / des
 # horaires promouvaient en « established » des NON-LIEUX (photographes, médias,
@@ -321,6 +332,26 @@ def _count_addresses_in_bio(bio: Optional[str]) -> int:
     return max(postals, pin_max)
 
 
+def _multi_postal_in_bio_and_captions(profile: Dict[str, Any]) -> bool:
+    """≥ 2 codes postaux FR PLAUSIBLES et DISTINCTS trouvés dans l'ensemble
+    { bio + ~12 dernières légendes } = marque à plusieurs adresses -> chain_multisite.
+    Extension aux CAPTIONS de la détection de chaîne (passe 3) : certaines enseignes
+    n'affichent pas leurs adresses en bio mais les sèment dans leurs posts
+    (nouvelle adresse, 2e établissement). Règle STRICTE (≥ 2 CP distincts) pour
+    rester à faible taux de faux positifs. Détails :
+      - un seul CP répété (même adresse citée dans plusieurs posts) -> 1 distinct
+        -> PAS une chaîne (dédup par `set`) ;
+      - une année ISO d'ouverture en légende (« septembre 2026 ») fait 4 chiffres,
+        jamais captée par \\b\\d{5}\\b -> aucune date comptée comme adresse ;
+      - le VETO travaux (`_has_works_cue`) ne s'applique PAS à ce signal : une
+        chaîne reste une chaîne même en travaux (chain_multisite prime).
+    La garde `_looks_like_venue` reste EXIGÉE en amont (dans `guard_verdict`)."""
+    texts = [profile.get("biography") or ""]
+    texts += [(x.get("caption") or "") for x in (profile.get("latestPosts") or [])[:12]]
+    codes = {m for t in texts for m in _POSTAL_RE.findall(t) if _is_plausible_fr_postal(m)}
+    return len(codes) >= 2
+
+
 def _long_history(profile: Dict[str, Any], today: date, threshold_days: int = 150) -> bool:
     """True si l'exploitation dure depuis des mois (plusieurs posts anciens) =>
     établi. Reprend la logique de _profile_long_history (migrée depuis
@@ -397,7 +428,12 @@ def guard_verdict(profile: Dict[str, Any], today: Optional[date] = None) -> Opti
     # Sinon -> None (le juge tranche : not_venue pour un prestataire/média).
     if not _looks_like_venue(profile):
         return None
-    if _count_addresses_in_bio(bio) >= 2 or _multi_city_in_bio(bio):
+    # Chaîne multi-adresses : bio (codes postaux / liste pin / multi-villes) OU
+    # ≥ 2 codes postaux FR distincts semés dans les CAPTIONS récentes (passe 3).
+    # Placé AVANT le garde volume et le veto travaux : une chaîne reste
+    # chain_multisite même à gros volume de posts et même en pleine rénovation.
+    if (_count_addresses_in_bio(bio) >= 2 or _multi_city_in_bio(bio)
+            or _multi_postal_in_bio_and_captions(profile)):
         return "chain_multisite"
     # Gros VOLUME de posts (>150, ex. Le Palais=200) : établi de façon CERTAINE —
     # un tel compte a un long historique d'exploitation SUR INSTAGRAM, pas une

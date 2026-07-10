@@ -437,8 +437,13 @@ def judge_dossier(client, handle: str, name: Optional[str],
         '"opening_date":"YYYY-MM-DD|null"}'
     )
     try:
+        # Modèle DÉDIÉ au juge (variable propre OPENAI_JUDGE_MODEL, défaut gpt-4o) :
+        # le juge est la SEULE décision LLM porteuse du funnel (opening/renovation/
+        # established…) et gpt-4o-mini est non déterministe à temp 0 sur les profils
+        # ambigus (vécu passe 3 : 7 runs, hot_precision 50->64 %). L'arbitre du
+        # matcher, la génération de messages et le reste gardent OPENAI_MODEL.
         completion = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            model=os.getenv("OPENAI_JUDGE_MODEL", "gpt-4o"),
             messages=[{"role": "system", "content": _DOSSIER_SYSTEM},
                       {"role": "user", "content": user}],
             response_format={"type": "json_object"},
