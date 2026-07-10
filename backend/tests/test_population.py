@@ -94,9 +94,11 @@ def test_api_filters_by_population():
         assert [o.source_ref for o in got] == ["arc1"]
 
 
-def test_dashboard_stats_default_excludes_architectes():
-    # Le dashboard CHR ne doit PAS être pollué par les leads architectes : par
-    # défaut get_stats filtre population=='chr' (compteurs, by_signal, hottest).
+def test_dashboard_stats_default_targets_architectes():
+    # ÉTANCHÉITÉ des populations au dashboard. Défaut produit (pivot
+    # 2026-07-10) : le dashboard cible les ARCHITECTES — les leads CHR ne
+    # polluent NI les compteurs, NI by_signal, NI hottest. ?population=chr
+    # re-cible le CHR ; vide = toutes.
     from app.routes.dashboard import get_stats
     with Session(_engine()) as s:
         for ref, pop, sig, etype in [
@@ -111,11 +113,11 @@ def test_dashboard_stats_default_excludes_architectes():
                                  population=pop),
                 IngestStats(source="instagram"), set(), enricher=None)
         s.commit()
-        default = get_stats(session=s)  # défaut 'chr'
-        assert default.total_opportunities == 2
-        assert all(b.label != "prescripteur actif" for b in default.by_signal)
-        assert all(o.population == "chr" for o in default.hottest)
-        assert get_stats(session=s, population="architecte").total_opportunities == 1
+        default = get_stats(session=s)  # défaut 'architecte'
+        assert default.total_opportunities == 1
+        assert all(b.label != "ouverture prochaine" for b in default.by_signal)
+        assert all(o.population == "architecte" for o in default.hottest)
+        assert get_stats(session=s, population="chr").total_opportunities == 2
         assert get_stats(session=s, population="").total_opportunities == 3  # toutes
 
 

@@ -133,13 +133,20 @@ export const LIFECYCLE_LABEL_LABELS: Record<string, string> = {
 };
 
 // Ordre d'affichage (filtre + légendes) — même ordre que LABEL_ORDER côté éval.
-export const LIFECYCLE_LABEL_ORDER = [
+// Scindé par population : le dropdown cycle de vie s'adapte au filtre population
+// (un combo CHR × studio_actif serait toujours vide).
+export const LIFECYCLE_LABEL_ORDER_CHR = [
   "opening_soon",
   "just_opened",
   "renovation",
   "established",
   "chain_multisite",
   "unknown",
+];
+export const LIFECYCLE_LABEL_ORDER_ARCHI = ["studio_actif", "studio_dormant"];
+export const LIFECYCLE_LABEL_ORDER = [
+  ...LIFECYCLE_LABEL_ORDER_CHR,
+  ...LIFECYCLE_LABEL_ORDER_ARCHI,
 ];
 
 // Classes Tailwind par label de cycle de vie (badge) — mêmes teintes que

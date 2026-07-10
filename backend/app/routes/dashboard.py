@@ -20,10 +20,10 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 @router.get("/stats", response_model=DashboardStats)
 def get_stats(session: Session = Depends(get_session),
-              population: Optional[str] = "chr"):
-    # Par défaut, le dashboard ne compte QUE le CHR : les leads architectes (A1)
-    # ne polluent NI les compteurs, NI by_signal, NI le top 5 « hottest ».
-    # ?population=architecte cible les archis ; ?population= (vide) = toutes.
+              population: Optional[str] = "architecte"):
+    # Défaut produit (pivot 2026-07-10) : le dashboard cible les ARCHITECTES —
+    # la prospection Ambient Home ne veut plus voir le CHR par défaut.
+    # ?population=chr re-cible le CHR ; ?population= (vide) = toutes.
     query = select(Opportunity)
     if population:
         query = query.where(Opportunity.population == population)

@@ -20,6 +20,8 @@ import {
   CHANNEL_LABELS,
   LIFECYCLE_LABEL_LABELS,
   LIFECYCLE_LABEL_ORDER,
+  LIFECYCLE_LABEL_ORDER_ARCHI,
+  LIFECYCLE_LABEL_ORDER_CHR,
   STATUS_LABELS,
   formatDate,
 } from "@/lib/labels";
@@ -75,6 +77,9 @@ export default function OpportunitiesPage() {
   const [filters, setFilters] = useState<OpportunityFilters>({
     sort_by: "score",
     order: "desc",
+    // Défaut produit (pivot 2026-07-10) : la prospection Ambient Home cible les
+    // architectes — le CHR reste accessible via le sélecteur de population.
+    population: "architecte",
   });
   // Persiste les filtres entre navigations (retour depuis une fiche).
   const [ready, setReady] = useState(false);
@@ -233,7 +238,13 @@ export default function OpportunitiesPage() {
 
             <select className={SELECT_CLS} value={filters.lifecycle_label ?? ""} onChange={(e) => set({ lifecycle_label: e.target.value })}>
               <option value="">Tous les cycles de vie</option>
-              {LIFECYCLE_LABEL_ORDER.map((l) => (
+              {/* Options adaptées à la population sélectionnée (combo croisé = toujours vide). */}
+              {(filters.population === "architecte"
+                ? LIFECYCLE_LABEL_ORDER_ARCHI
+                : filters.population === "chr"
+                  ? LIFECYCLE_LABEL_ORDER_CHR
+                  : LIFECYCLE_LABEL_ORDER
+              ).map((l) => (
                 <option key={l} value={l}>{LIFECYCLE_LABEL_LABELS[l]}</option>
               ))}
             </select>
