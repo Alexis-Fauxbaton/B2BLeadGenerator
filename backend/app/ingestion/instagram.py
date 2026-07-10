@@ -292,6 +292,11 @@ _DOSSIER_SYSTEM = (
     "récemment, peu d'historique d'exploitation).\n"
     "- established : opère depuis des mois/années (historique de service, "
     "'depuis <année>', anniversaire, société ancienne au registre).\n"
+    "- renovation : établissement à l'apparence ÉTABLIE (ancienneté déclarée, "
+    "long historique, horaires) actuellement EN TRAVAUX / rénovation, OU rouvert "
+    "il y a quelques JOURS à peine après un chantier dont les posts montrent "
+    "encore les finitions. Segment CHAUD (fenêtre d'aménagement ouverte "
+    "MAINTENANT).\n"
     "- chain_multisite : marque à PLUSIEURS adresses OU en EXPANSION — plusieurs "
     "lieux listés, OU la bio/les posts annoncent une 2e adresse ou un 2e "
     "établissement de la MÊME enseigne (ex. '<enseigne> 2', 'nouvelle adresse', "
@@ -325,7 +330,12 @@ _DOSSIER_SYSTEM = (
     "opening_soon et just_opened exigent des "
     "indices EXPLICITES (travaux, compte à rebours, date d'ouverture, 'bientôt', "
     "lancement récent). Sans indice explicite -> unknown ou established, JAMAIS "
-    "opening_soon. CHAÎNE : une nouvelle adresse d'une enseigne qui existe déjà "
+    "opening_soon. JUST_OPENED exige une PREUVE EXPLICITE d'ouverture récente "
+    "(< 3 mois) : posts de lancement (« nous avons ouvert », « premier jour », "
+    "inauguration, « nouvelle adresse » d'un lieu neuf), ou société créée "
+    "récemment au registre. Des horaires affichés + un historique de service "
+    "SANS preuve de lancement récent = established, PAS just_opened. CHAÎNE : une "
+    "nouvelle adresse d'une enseigne qui existe déjà "
     "ailleurs = chain_multisite, même si la création est récente. "
     "l'ÂGE des posts seul ne tranche pas (une pré-ouverture peut teaser "
     "des mois) — ce qui compte est le LONG historique d'EXPLOITATION et l'âge de "
@@ -335,7 +345,43 @@ _DOSSIER_SYSTEM = (
     "ANTÉRIEURE : dans ce cas une annonce « ouvre bientôt » / « ouverture de… » "
     "est une RÉOUVERTURE saisonnière (ou l'ouverture d'un nouvel espace/patio/salle "
     "d'une maison existante), donc established (ou chain_multisite si nouveau site), "
-    "JAMAIS opening_soon. opening_soon et just_opened sont réservés à un lieu SANS "
+    "JAMAIS opening_soon. RÉNOVATION (label renovation, segment CHAUD) : un "
+    "établissement à l'apparence ÉTABLIE (ancienneté déclarée, long historique "
+    "d'exploitation, horaires/résa) dont les posts RÉCENTS montrent des TRAVAUX "
+    "ACTUELLEMENT EN COURS (chantier, « fermé pour travaux », « on refait la "
+    "salle », finitions non terminées), OU une réouverture il y a seulement "
+    "quelques JOURS avec travaux encore visibles = renovation (la fenêtre "
+    "d'aménagement est ouverte MAINTENANT). MAIS un établi qui a DÉJÀ rouvert et "
+    "opère normalement (service, carte, horaires) depuis plus de quelques jours — "
+    "même si la réouverture est récente (quelques semaines) et même si des posts "
+    "évoquent des travaux PASSÉS — a une fenêtre travaux CLOSE = established, PAS "
+    "renovation. renovation exige des travaux EN COURS ou tout juste terminés, "
+    "jamais un simple souvenir de chantier. "
+    "PRIORITÉS QUI TRANCHENT (applique-les AVANT de choisir un label chaud) : "
+    "(a) ANCIENNETÉ DÉCLARÉE DOMINE — si la bio déclare une ancienneté (« depuis "
+    "1995 », « ouverts depuis <année passée> », « est. 19xx »), le lieu EST "
+    "established, quels que soient des posts de réouverture ou un compte clairsemé ; "
+    "au MAXIMUM renovation SI un chantier est ACTUELLEMENT en cours, JAMAIS "
+    "just_opened ni opening_soon. "
+    "(b) RÉOUVERTURE OPÉRATIONNELLE = established — un lieu qui a rouvert et OPÈRE "
+    "(posts de service, carte/menu, cocktails, « vous accueille », happy hours, "
+    "horaires actifs, « 7j/7 ») a sa fenêtre travaux CLOSE : established, même si la "
+    "réouverture date de quelques semaines et même si un long chantier (« après 2 "
+    "ans de travaux ») est évoqué. renovation seulement si le lieu est ENCORE fermé "
+    "ou en plein chantier. "
+    "(c) LONG HISTORIQUE = established (RÈGLE FORTE) — un compte à 100 posts ou "
+    "PLUS a un long historique d'exploitation : il ne peut être NI just_opened NI "
+    "opening_soon. Il est established (ou chain_multisite si plusieurs adresses ; "
+    "ou renovation UNIQUEMENT si le lieu est actuellement FERMÉ / en plein "
+    "chantier). Un restaurant à 100+ posts qui poste sa carte, ses plats, ses "
+    "horaires (« Ouvert 7j/7 ») ou « vous accueille » OPÈRE — même s'il vient de "
+    "rouvrir après un long chantier (« après 2 ans de travaux ») : c'est "
+    "established, PAS renovation ni just_opened. "
+    "(d) CHAÎNE DOMINE RÉNOVATION — une enseigne à plusieurs adresses (2e/3e "
+    "établissement, plusieurs lieux listés, « nouvelle adresse ») = chain_multisite, "
+    "même si le NOUVEAU site est en travaux ; chain_multisite l'emporte sur "
+    "renovation. "
+    "opening_soon et just_opened sont réservés à un lieu SANS "
     "AUCUN passé d'exploitation (aucun post de l'an dernier, société tout juste créée). "
     "En cas de doute sur la fraîcheur -> unknown, JAMAIS "
     "opening_soon par défaut. COMPTE RÉCENT ≠ ÉTABLISSEMENT RÉCENT : un compte "
@@ -386,13 +432,18 @@ def judge_dossier(client, handle: str, name: Optional[str],
         f"Date du jour : {today.isoformat()}\n"
         f"Dossier :\n{block}\n\n"
         'Format EXACT : {"reasoning":"<2 phrases max>","label":"opening_soon|'
-        'just_opened|established|chain_multisite|not_venue|noise|unknown",'
+        'just_opened|renovation|established|chain_multisite|not_venue|noise|unknown",'
         '"confidence":"haute|moyenne|basse","addresses":[],"emails":[],'
         '"opening_date":"YYYY-MM-DD|null"}'
     )
     try:
+        # Modèle DÉDIÉ au juge (variable propre OPENAI_JUDGE_MODEL, défaut gpt-4o) :
+        # le juge est la SEULE décision LLM porteuse du funnel (opening/renovation/
+        # established…) et gpt-4o-mini est non déterministe à temp 0 sur les profils
+        # ambigus (vécu passe 3 : 7 runs, hot_precision 50->64 %). L'arbitre du
+        # matcher, la génération de messages et le reste gardent OPENAI_MODEL.
         completion = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            model=os.getenv("OPENAI_JUDGE_MODEL", "gpt-4o"),
             messages=[{"role": "system", "content": _DOSSIER_SYSTEM},
                       {"role": "user", "content": user}],
             response_format={"type": "json_object"},

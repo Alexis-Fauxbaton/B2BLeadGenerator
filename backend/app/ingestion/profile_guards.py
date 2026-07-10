@@ -37,6 +37,17 @@ _OPENING_CUES = ("ouverture", "on ouvre", "ouvre bientot", "opening soon",
                  "openingsoon", "coming soon", "comingsoon", "bientot",
                  "prochainement")
 
+# Indices de TRAVAUX / rénovation (normalisés, sans accent). DISTINCTS des
+# _OPENING_CUES (pré-ouverture d'un lieu NEUF) : ils dénotent un chantier sur un
+# lieu qui EXISTE déjà — travaux en cours ou réouverture après rénovation. Leur
+# présence en bio OU dans une légende récente sur un compte à l'apparence ÉTABLIE
+# empêche un verdict `established` DÉTERMINISTE : le compte descend au juge, qui
+# sait dater (âges précalculés) — travaux en cours / réouverture < 1 mois =
+# renovation (segment chaud) ; réouverture plus ancienne = established. Cas ancré :
+# shywawapub (bio « ouverts depuis 1995 » MAIS posts « réouverture »/travaux).
+_WORKS_CUES = ("travaux", "renovation", "reouverture", "chantier",
+               "ferme pour travaux", "on refait")
+
 # Villes connues (multi-sites en bio). Volontairement des grandes villes non
 # ambiguës — évite de compter un simple gentilé comme une 2e adresse.
 _CITY_TOKENS = ("paris", "lyon", "marseille", "bordeaux", "lille", "toulouse",
@@ -53,6 +64,17 @@ _HOURS_KW = (
 )
 _POSTAL_RE = re.compile(r"\b\d{5}\b")
 _PIN = "\U0001F4CD"  # 📍
+
+# Code postal FR PLAUSIBLE : \b\d{5}\b dont le département tient la route
+# (01-95 métropole, 20xxx Corse/2A-2B, 97x DOM). Écarte les 96/98/99/00 et surtout
+# les nombres à 5 chiffres qui ne sont pas des CP (prix, identifiants). Une année
+# ISO fait 4 chiffres (« 2026 ») -> jamais captée par \d{5} : aucun risque de
+# confondre une DATE d'ouverture en légende avec une 2e adresse.
+def _is_plausible_fr_postal(code: str) -> bool:
+    dept = code[:2]
+    if dept == "97":            # DOM : 971xx-976xx
+        return True
+    return dept.isdigit() and 1 <= int(dept) <= 95   # 01-95 (Corse 20xxx incluse)
 
 # --- Apparence de lieu CHR (garde-fou des verdicts established/chain_multisite) --
 # Motif d'erreur mesuré (passe d'annotation #1) : de longs historiques / des
@@ -177,6 +199,21 @@ def _has_opening_cue(profile: Dict[str, Any]) -> bool:
     return any(cue in joined for cue in _OPENING_CUES)
 
 
+def _has_works_cue(profile: Dict[str, Any]) -> bool:
+    """True si la bio OU une des ~12 dernières légendes porte un indice de TRAVAUX
+    / rénovation / réouverture (chantier en cours, « fermé pour travaux », « on
+    refait », réouverture d'un lieu déjà existant). PUR. Distinct de
+    `_has_opening_cue` (pré-ouverture d'un lieu NEUF) : sert de veto aux verdicts
+    `established` DÉTERMINISTES (ancienneté, historique, horaires, résa) pour
+    qu'un compte établi en pleine fenêtre de rénovation ne soit pas enterré au
+    garde — le juge tranche et sait dater (travaux en cours / réouverture < 1 mois
+    -> renovation ; réouverture plus ancienne -> established)."""
+    texts = [profile.get("biography") or ""]
+    texts += [(x.get("caption") or "") for x in (profile.get("latestPosts") or [])[:12]]
+    joined = _norm(" \n ".join(texts))
+    return any(cue in joined for cue in _WORKS_CUES)
+
+
 def _is_dead_account(profile: Dict[str, Any]) -> bool:
     """Compte quasi mort = BRUIT certain : très peu de posts (<=3) ET quasi aucun
     abonné (<=10) ET bio vide/quasi-vide, ET AUCUN indice de (pré-)ouverture.
@@ -295,6 +332,26 @@ def _count_addresses_in_bio(bio: Optional[str]) -> int:
     return max(postals, pin_max)
 
 
+def _multi_postal_in_bio_and_captions(profile: Dict[str, Any]) -> bool:
+    """≥ 2 codes postaux FR PLAUSIBLES et DISTINCTS trouvés dans l'ensemble
+    { bio + ~12 dernières légendes } = marque à plusieurs adresses -> chain_multisite.
+    Extension aux CAPTIONS de la détection de chaîne (passe 3) : certaines enseignes
+    n'affichent pas leurs adresses en bio mais les sèment dans leurs posts
+    (nouvelle adresse, 2e établissement). Règle STRICTE (≥ 2 CP distincts) pour
+    rester à faible taux de faux positifs. Détails :
+      - un seul CP répété (même adresse citée dans plusieurs posts) -> 1 distinct
+        -> PAS une chaîne (dédup par `set`) ;
+      - une année ISO d'ouverture en légende (« septembre 2026 ») fait 4 chiffres,
+        jamais captée par \\b\\d{5}\\b -> aucune date comptée comme adresse ;
+      - le VETO travaux (`_has_works_cue`) ne s'applique PAS à ce signal : une
+        chaîne reste une chaîne même en travaux (chain_multisite prime).
+    La garde `_looks_like_venue` reste EXIGÉE en amont (dans `guard_verdict`)."""
+    texts = [profile.get("biography") or ""]
+    texts += [(x.get("caption") or "") for x in (profile.get("latestPosts") or [])[:12]]
+    codes = {m for t in texts for m in _POSTAL_RE.findall(t) if _is_plausible_fr_postal(m)}
+    return len(codes) >= 2
+
+
 def _long_history(profile: Dict[str, Any], today: date, threshold_days: int = 150) -> bool:
     """True si l'exploitation dure depuis des mois (plusieurs posts anciens) =>
     établi. Reprend la logique de _profile_long_history (migrée depuis
@@ -351,8 +408,10 @@ def guard_verdict(profile: Dict[str, Any], today: Optional[date] = None) -> Opti
     """Verdict déterministe du profil, ou None (à confier au juge LLM).
     Ordre : compte-mort -> noise ; puis — UNIQUEMENT si le compte a l'apparence
     d'un lieu CHR (_looks_like_venue) — multi-adresses / multi-villes ->
-    chain_multisite, sinon volume / historique / horaires / résa -> established ;
-    sinon None.
+    chain_multisite ; gros volume de posts (>150) -> established ; puis VETO
+    travaux (_has_works_cue) -> None (un établi FAIBLE au chantier peut être en
+    fenêtre de rénovation, le juge date) ; sinon ancienneté / historique /
+    horaires / résa -> established ; sinon None.
 
     Le garde `_looks_like_venue` corrige le motif d'erreur #1 (passe d'annotation) :
     des non-lieux (photographes, médias, agences) au long historique étaient
@@ -369,14 +428,39 @@ def guard_verdict(profile: Dict[str, Any], today: Optional[date] = None) -> Opti
     # Sinon -> None (le juge tranche : not_venue pour un prestataire/média).
     if not _looks_like_venue(profile):
         return None
-    if _count_addresses_in_bio(bio) >= 2 or _multi_city_in_bio(bio):
+    # Chaîne multi-adresses : bio (codes postaux / liste pin / multi-villes) OU
+    # ≥ 2 codes postaux FR distincts semés dans les CAPTIONS récentes (passe 3).
+    # Placé AVANT le garde volume et le veto travaux : une chaîne reste
+    # chain_multisite même à gros volume de posts et même en pleine rénovation.
+    if (_count_addresses_in_bio(bio) >= 2 or _multi_city_in_bio(bio)
+            or _multi_postal_in_bio_and_captions(profile)):
         return "chain_multisite"
+    # Gros VOLUME de posts (>150, ex. Le Palais=200) : établi de façon CERTAINE —
+    # un tel compte a un long historique d'exploitation SUR INSTAGRAM, pas une
+    # simple ancienneté déclarée. Ce garde reste PRIORITAIRE sur le veto travaux
+    # (il n'est PAS dans la liste énumérée par la passe 3 : ancienneté déclarée /
+    # _long_history / horaires-résa) : une réouverture saisonnière d'un lieu à
+    # long historique IG est opérationnelle, pas une fenêtre de rénovation. La
+    # cible du label renovation (shywawapub) est un compte NEUF (peu de posts) à
+    # ancienneté DÉCLARÉE — capté plus bas par le veto travaux, pas ici.
+    posts_count = profile.get("postsCount")
+    if isinstance(posts_count, int) and posts_count > POSTS_ESTABLISHED_HARD:
+        return "established"
+    # TRAVAUX / rénovation EN COURS sur un compte à l'apparence établie (ancienneté
+    # déclarée, historique, horaires, résa) SANS gros volume de posts : NE PAS
+    # l'enterrer en « established » déterministe. Il est peut-être en pleine
+    # fenêtre de rénovation (segment CHAUD, cf. label renovation) -> None : le juge
+    # tranche, il sait dater (travaux en cours / réouverture < 1 mois -> renovation ;
+    # réouverture plus ancienne / opère normalement -> established). Placé APRÈS
+    # chain_multisite (une chaîne au chantier reste chain_multisite) et le garde
+    # volume, AVANT les gardes established faibles. Cas ancré : shywawapub (bio
+    # « ouverts depuis 1995 », 15 posts, MAIS posts « réouverture »/travaux) ->
+    # None ici (plus « established » direct au garde).
+    if _has_works_cue(profile):
+        return None
     # Ancienneté déclarée (« ouverts depuis <année passée> ») : établi, même si le
     # COMPTE Insta est neuf (piège « nouveau compte, ouverts depuis 1995 »).
     if _declares_seniority(profile, today):
-        return "established"
-    posts_count = profile.get("postsCount")
-    if isinstance(posts_count, int) and posts_count > POSTS_ESTABLISHED_HARD:
         return "established"
     if _long_history(profile, today):
         return "established"

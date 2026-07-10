@@ -55,7 +55,7 @@ def confusion_matrix(pairs: List[Pair]) -> Dict[str, Dict[str, int]]:
 
 # Ordre d'affichage des labels de cycle de vie (funnel v2).
 LABEL_ORDER = [
-    "opening_soon", "just_opened", "unknown",
+    "opening_soon", "just_opened", "renovation", "unknown",
     "established", "chain_multisite", "not_venue", "noise",
 ]
 
@@ -68,10 +68,12 @@ def label_confusion(pairs: List[Pair]) -> Dict[str, Dict[str, int]]:
 
 
 # Segment « chaud » : prédictions à traiter en priorité (funnel v2bis).
-HOT_PRED = {"opening_soon", "just_opened"}
+# renovation (établi EN TRAVAUX) est un segment chaud au même titre qu'une
+# ouverture (fenêtre d'aménagement ouverte).
+HOT_PRED = {"opening_soon", "just_opened", "renovation"}
 # Vérités (déjà MAPPÉES : opening -> opening_soon) qui légitiment une prédiction
 # chaude. unknown n'y est pas (une prédiction chaude sur un unknown vrai = FP).
-HOT_TRUTH = {"opening_soon", "just_opened"}
+HOT_TRUTH = {"opening_soon", "just_opened", "renovation"}
 
 
 def hot_precision(label_pairs: List[Pair]) -> Tuple[Optional[float], int, int]:

@@ -115,6 +115,35 @@ def test_hot_precision():
     assert hot_precision([("established", "established")]) == (None, 0, 0)
 
 
+def test_hot_precision_counts_renovation():
+    # Passe 3 : renovation est un segment CHAUD. Un renovation prédit sur un vrai
+    # renovation = vrai positif ; sur un vrai established = faux positif chaud.
+    from app.ingestion.eval.metrics import hot_precision, HOT_PRED, HOT_TRUTH
+    assert "renovation" in HOT_PRED and "renovation" in HOT_TRUTH
+    pairs = [
+        ("renovation", "renovation"),    # TP (vérité chaude renovation, prédit renovation)
+        ("established", "renovation"),    # FP (établi prédit renovation = faux chaud)
+        ("renovation", "established"),    # hors segment chaud (prédit froid)
+        ("opening_soon", "opening_soon"),  # TP
+    ]
+    prec, tp, n = hot_precision(pairs)
+    assert (tp, n) == (2, 3)
+    assert abs(prec - 2 / 3) < 1e-9
+
+
+def test_renovation_buckets_are_hot():
+    # renovation tombe dans a_contacter côté vérité ET côté prédiction (segment
+    # chaud), et n'introduit aucun désaccord contre une prédiction renovation vraie.
+    from app.ingestion.eval.run import TRUE_BUCKET, PRED_BUCKET, FRESH_LABELS, is_disagreement
+    assert TRUE_BUCKET["renovation"] == "a_contacter"
+    assert PRED_BUCKET["renovation"] == "a_contacter"
+    assert "renovation" in FRESH_LABELS
+    # Vérité established (en_base) vs prédiction renovation (a_contacter) -> désaccord.
+    assert is_disagreement("established", "renovation") is True
+    # Vérité renovation vs prédiction renovation -> accord.
+    assert is_disagreement("renovation", "renovation") is False
+
+
 def test_is_disagreement_v2bis_mapping():
     from app.ingestion.eval.run import is_disagreement
     # Vérité 'opening' (bucket a_contacter) vs prédiction 'established' (en_base) -> désaccord.

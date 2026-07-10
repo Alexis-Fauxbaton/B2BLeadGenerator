@@ -33,6 +33,7 @@ def test_revisit_after_windows():
     assert vc.revisit_after("unknown", t) == date(2026, 9, 6)          # +2 mois
     assert vc.revisit_after("opening_soon", t) is None                  # watchlist
     assert vc.revisit_after("just_opened", t) is None
+    assert vc.revisit_after("renovation", t) is None                    # segment chaud
 
 
 def test_should_rejudge_no_entry_is_true():
@@ -65,6 +66,16 @@ def test_opening_never_cached_always_rejudged():
         assert v.revisit_after is None
         # Le jour même : toujours re-jugé (watchlist active).
         assert vc.should_rejudge(s, "o", today=date(2026, 7, 6)) is True
+
+
+def test_renovation_never_cached_always_rejudged():
+    # Passe 3 : renovation (établi EN TRAVAUX) = segment chaud à re-suivre, JAMAIS
+    # mis en sommeil (comme opening_soon/just_opened).
+    assert "renovation" in vc.NEVER_CACHED
+    with _session() as s:
+        v = vc.upsert(s, "r", "renovation", "haute", PROF, today=date(2026, 7, 6))
+        assert v.revisit_after is None
+        assert vc.should_rejudge(s, "r", today=date(2026, 7, 6)) is True
 
 
 def test_upsert_updates_in_place():

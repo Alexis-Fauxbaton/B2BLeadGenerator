@@ -28,6 +28,7 @@ npm run dev                                           # http://localhost:3000
 `.env` backend : `OPENAI_API_KEY=`, `DATABASE_URL=sqlite:///./chr_signal_radar.db`,
 `INSEE_API_KEY=` (portail-api.insee.fr, gratuite — source `sirene`, fail-soft
 sans clé).
+`OPENAI_JUDGE_MODEL=` (défaut `gpt-4o`) : modèle DÉDIÉ au juge du funnel Insta (`judge_dossier`) — plus fort/déterministe que `OPENAI_MODEL` (gpt-4o-mini) qui reste pour le reste (arbitre matcher, messages).
 `.env.local` frontend : `NEXT_PUBLIC_API_URL=http://localhost:8000`.
 
 ## Ingestion de leads réels (ETL) — `app/ingestion/`
