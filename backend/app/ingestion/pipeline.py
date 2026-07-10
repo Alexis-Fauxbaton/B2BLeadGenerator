@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 
+from sqlalchemy import and_, or_
 from sqlmodel import Session, delete, select
 
 from ..database import engine, init_db
@@ -20,6 +21,7 @@ from ..services.contact_quality import (
     classify_email,
     decision_maker_confidence,
     establishment_confidence,
+    normalize_email,
 )
 from ..services.scoring import compute_score
 from ..services.segment import classify_segment
@@ -30,6 +32,7 @@ from .sirene_delta import SireneDeltaConnector
 from .enrichment.contact_enricher import ContactEnricher
 from .enrichment.naf_classifier import classify_naf
 from .enrichment.sirene import SireneEnricher
+from .enrichment import siret_matcher
 from .enrichment.siret_matcher import MatchResult, match as match_siret
 from .instagram import discover, scrape_hashtags, scrape_profiles, classify_profiles
 from . import verdict_cache
@@ -873,16 +876,48 @@ def _reenrich_one(opp: Opportunity, enricher: SireneEnricher, stats: ReenrichSta
     return "healed"
 
 
+# Segment CHAUD (fenêtre d'aménagement ouverte MAINTENANT) : la passe contact
+# doit y REVENIR. Un établissement trop récent pour Google Places aujourd'hui y
+# sera dans 3 semaines -> on re-tente les fiches chaudes anciennes de >14 j
+# auxquelles il manque encore email OU téléphone.
+HOT_LABELS = ("opening_soon", "just_opened", "renovation")
+CONTACT_RETRY_DAYS = 14
+
+
+def _contact_enrich_targets(
+    session: Session, source: str, limit: int, now: Optional[datetime] = None
+):
+    """Fiches à (ré)enrichir : jamais tentées (`contact_enriched_at IS NULL`) OU
+    segment CHAUD tenté il y a plus de 14 j et à qui il manque email OU tél.
+    Extrait pur (testable sans réseau) — la sélection est le cœur du Fix 4."""
+    now = now or datetime.utcnow()
+    stale_cutoff = now - timedelta(days=CONTACT_RETRY_DAYS)
+    return session.exec(
+        select(Opportunity).where(
+            Opportunity.source == source,
+            or_(
+                Opportunity.contact_enriched_at.is_(None),
+                and_(
+                    Opportunity.lifecycle_label.in_(HOT_LABELS),
+                    Opportunity.contact_enriched_at < stale_cutoff,
+                    or_(Opportunity.email.is_(None), Opportunity.phone.is_(None)),
+                ),
+            ),
+        )
+    ).all()[:limit]
+
+
 def run_contact_enrich(
     source: str = "bodacc",
     limit: int = 500,
     reset: bool = False,
     session: Optional[Session] = None,
 ) -> ContactStats:
-    """Passe contact — cible les leads dont l'enrichissement contact n'a pas
-    encore été tenté (`contact_enriched_at IS NULL`). Ne remplit que les champs
-    vides. Marque la tentative pour ne pas re-scanner indéfiniment.
-    reset=True : ré-initialise le contact de la source (pour re-mesurer)."""
+    """Passe contact — cible les leads jamais tentés (`contact_enriched_at IS
+    NULL`) ET les fiches du segment CHAUD dont la tentative date de plus de 14 j
+    s'il leur manque encore email OU téléphone (un opening trop récent pour
+    Places y sera dans 3 semaines : la passe doit revenir). Ne remplit que les
+    champs vides. reset=True : ré-initialise le contact de la source (re-mesure)."""
     init_db()
     own_session = session is None
     session = session or Session(engine)
@@ -902,12 +937,7 @@ def run_contact_enrich(
                 session.add(o)
             session.commit()
 
-        rows = session.exec(
-            select(Opportunity).where(
-                Opportunity.source == source,
-                Opportunity.contact_enriched_at.is_(None),
-            )
-        ).all()[:limit]
+        rows = _contact_enrich_targets(session, source, limit)
 
         for opp in rows:
             stats.scanned += 1
@@ -942,6 +972,15 @@ def _contact_enrich_one(
             if lat is not None:
                 opp.latitude, opp.longitude = lat, lon
 
+    # Fiches Instagram (lat/lon NULL, souvent sans SIREN) : géocode l'adresse via
+    # BAN pour DONNER SA CHANCE au verrou géo de Places (Fix 1). Fail-soft, on
+    # ne retient que les géocodages fiables (score BAN >= 0.6, cf. siret_matcher).
+    if (lat is None or lon is None) and opp.address:
+        coords = siret_matcher.geocode(opp.address, siret_matcher._http_get)
+        if coords:
+            lat, lon = coords
+            opp.latitude, opp.longitude = lat, lon
+
     postal = None
     m = re.search(r"\b\d{5}\b", opp.address or "")
     if m:
@@ -956,13 +995,15 @@ def _contact_enrich_one(
     opp.instagram = opp.instagram or info.instagram
     opp.facebook = opp.facebook or info.facebook
 
-    # Email : router selon le niveau (role-based -> établissement ; nominatif ou
-    # corroboré par le nom du dirigeant -> décideur).
-    if info.email:
-        if classify_email(info.email, opp.decision_maker) == "decideur":
-            opp.decision_maker_email = opp.decision_maker_email or info.email
+    # Email : VALIDER le format d'abord (Fix 3 — un champ vide vaut mieux qu'un
+    # domaine nu ou un numéro de téléphone), puis router selon le niveau
+    # (role-based -> établissement ; nominatif ou corroboré dirigeant -> décideur).
+    email = normalize_email(info.email)
+    if email:
+        if classify_email(email, opp.decision_maker) == "decideur":
+            opp.decision_maker_email = opp.decision_maker_email or email
         else:
-            opp.email = opp.email or info.email
+            opp.email = opp.email or email
 
     # Confiance (précision d'abord) : contact établissement fiable UNIQUEMENT si
     # match géo-confirmé ; sinon "à trouver". Une seule règle (pas de tambouille).
