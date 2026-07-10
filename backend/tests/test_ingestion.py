@@ -966,10 +966,61 @@ def test_enrich_geo_requires_identity_soka_bolkiri(monkeypatch):
     assert info.review_count == 12
 
 
+def test_fresh_conflict_only_applies_to_weak_identity(monkeypatch):
+    """Décision produit — la contradiction d'avis ne s'applique qu'à identité
+    FAIBLE. (a) géo + nom FORT + 111 avis + création récente -> REMPLI (cas
+    Giorgina réel : 111 avis, ouvert mi-juin, just_opened confirmé par le
+    propriétaire — un resto parisien hype prend 100 avis en un mois) ;
+    (b) géo + overlap mono-token partiel + 300 avis + création récente ->
+    rejeté (zone grise, voisin probable) ; (c) SOKA/Bolkiri inchangé."""
+    from app.ingestion.enrichment import contact_enricher as ce
+
+    # (a) Identité FORTE (géo + nom fort) : le détecteur s'efface.
+    def fake_giorgina(name, **k):
+        return {"matched": True, "phone": "0184161110",
+                "website": "https://www.restaurant-giorgina.com/",
+                "review_count": 111, "match_basis": "geo", "display_name": "Giorgina"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_giorgina)
+    info = ce.ContactEnricher().enrich(
+        "\U0001d43a\U0001d456\U0001d45c\U0001d45f\U0001d454\U0001d456\U0001d45b\U0001d44e \U0001f499",
+        48.838178, 2.491215, city="Nogent-sur-Marne", main_signal="création récente",
+    )
+    assert info.phone == "0184161110"
+    assert info.website == "https://www.restaurant-giorgina.com/"
+    assert info.review_count == 111
+
+    # (b) Zone grise : overlap partiel (marco seul, aucun sous-ensemble) + 300
+    # avis + création récente -> le détecteur rejette.
+    def fake_grey(name, **k):
+        return {"matched": True, "phone": "0102030405", "website": "https://marcopolo.fr",
+                "review_count": 300, "match_basis": "geo", "display_name": "Marco Polo"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_grey)
+    info = ce.ContactEnricher().enrich(
+        "Marco Del Caffé", None, None, city="Paris", main_signal="création récente",
+    )
+    assert info.phone is None and info.website is None
+    assert info.review_count is None and info.match_basis is None
+
+    # (c) SOKA/Bolkiri : zéro overlap -> toujours rejeté par le verrou d'identité.
+    def fake_bolkiri(name, **k):
+        return {"matched": True, "phone": "0183846538",
+                "website": "https://restaurants.bolkiri.fr", "review_count": 218,
+                "match_basis": "geo", "display_name": "Bolkiri Saint-Gratien"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_bolkiri)
+    info = ce.ContactEnricher().enrich(
+        "SOKA FOOD", None, None, city="Saint-Gratien", main_signal="création récente",
+    )
+    assert info.phone is None and info.website is None and info.review_count is None
+
+
 def test_fresh_review_conflict_detector():
     """Fix 2 (unité) — le détecteur rejette avis anciens vs création récente,
     par signal OU par date de début d'activité récente, et n'oppose rien aux
-    faibles volumes / fiches établies."""
+    faibles volumes / fiches établies. NB : l'appelant (enrich) ne le consulte
+    qu'à identité FAIBLE (géo + nom fort -> exempté, cf. test ci-dessus)."""
     from app.ingestion.enrichment.contact_enricher import _fresh_review_conflict
     from datetime import date as _date, timedelta
 

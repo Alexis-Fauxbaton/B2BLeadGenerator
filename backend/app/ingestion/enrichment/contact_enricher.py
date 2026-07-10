@@ -36,9 +36,18 @@ def _fresh_review_conflict(
     95210). Une enseigne qui vient d'être créée (signal « création récente » /
     « ouverture prochaine », ou activité démarrée il y a < ~90 j) NE PEUT PAS
     afficher des centaines d'avis anciens : si le candidat Places en porte
-    beaucoup (>= seuil), c'est le voisin qui a été capté (SOKA FOOD n'existe pas
-    encore sur Places -> searchText renvoie Bolkiri et ses 218 avis). On rejette
-    le match, MÊME si un token de nom concorde par ailleurs."""
+    beaucoup (>= seuil), c'est probablement le voisin qui a été capté (SOKA FOOD
+    n'existe pas encore sur Places -> searchText renvoie Bolkiri et ses 218 avis).
+
+    PORTÉE (décision produit) : ce détecteur ne s'applique QU'À IDENTITÉ FAIBLE
+    (zone grise : overlap partiel / mono-token). À identité FORTEMENT confirmée
+    (géo + concordance de nom FORTE), l'appelant ne le consulte pas : un resto
+    parisien hype prend 100 avis en un mois (cas Giorgina réel : 111 avis,
+    ouvert mi-juin, just_opened confirmé par le propriétaire). Deux cas types :
+      - SOKA FOOD vs « Bolkiri Saint-Gratien » (zéro overlap : déjà rejeté par
+        le verrou d'identité ; un overlap mono-token accidentel + 218 avis
+        serait rejeté ICI) -> vide ;
+      - Giorgina vs « Giorgina » (géo + nom fort) -> rempli malgré 111 avis."""
     if review_count is None or review_count < REVIEW_FRESHNESS_CONFLICT:
         return False
     if main_signal in _FRESH_SIGNALS:
@@ -111,18 +120,27 @@ class ContactEnricher:
         #        données de Bolkiri, même rue à Saint-Gratien) ;
         #      - OU nom concordant FORTEMENT (homonyme du repli texte rejeté :
         #        Peace Museum->Café de la Paix, Marco Del Caffé->Café Marco Polo).
-        #    ET, dans tous les cas, PAS de contradiction de fraîcheur (une
-        #    création récente n'a pas des centaines d'avis anciens).
+        #    ET, hors identité FORTE, pas de contradiction de fraîcheur :
+        #      - identité FORTE (géo + nom fort) -> on remplit même avec >= 100
+        #        avis (cas Giorgina : 111 avis, ouvert mi-juin, just_opened
+        #        confirmé — un resto hype prend 100 avis en un mois) ;
+        #      - zone grise (overlap partiel / mono-token) -> une création
+        #        récente n'a pas des centaines d'avis anciens : rejet (le voisin
+        #        a été capté, cas SOKA-Bolkiri si un token avait concordé).
         places = lookup_places(name, city=city, postal=postal, lat=latitude, lon=longitude)
         display = places.get("display_name")
-        identity_ok = (
-            places.get("match_basis") == "geo" and _name_overlap(name, display or "")
-        ) or _strong_name_match(name, display)
+        geo_confirmed = places.get("match_basis") == "geo"
+        strong_name = _strong_name_match(name, display)
+        identity_ok = (geo_confirmed and _name_overlap(name, display or "")) or strong_name
+        identity_strong = geo_confirmed and strong_name
         if (
             places.get("matched")
             and identity_ok
-            and not _fresh_review_conflict(
-                main_signal, activity_start_date, places.get("review_count")
+            and (
+                identity_strong
+                or not _fresh_review_conflict(
+                    main_signal, activity_start_date, places.get("review_count")
+                )
             )
         ):
             info.phone = info.phone or places.get("phone")
