@@ -71,6 +71,29 @@ def test_foreign_domain_is_hors_cible():
     assert guard_prescripteur(prof, TODAY) == "hors_cible"
 
 
+def test_foreign_domain_in_externalUrls_list_is_hors_cible():
+    # Le ccTLD peut arriver via la liste externalUrls (pas juste externalUrl).
+    prof = {"biography": "Architecte d'intérieur à Genève", "externalUrl": "",
+            "externalUrls": [{"url": "http://atelier.ch:8080/portfolio"}],
+            "postsCount": 50, "followersCount": 300}
+    assert guard_prescripteur(prof, TODAY) == "hors_cible"
+
+
+def test_french_studio_with_cctld_substring_in_host_passes_to_judge():
+    # Régression : substring naïf écartait « caroline-studio.fr » (.ca),
+    # « benjamin….fr » (.be), « behance.net » (.be), « canva.com » (.ca).
+    # Le ccTLD réel étant .fr/.net/.com, ces studios FR doivent aller au juge.
+    for url in ("https://www.caroline-studio.fr/",
+                "https://www.benjamin-archi.fr",
+                "https://www.chloe-interieur.fr",
+                "https://www.lucie-design.fr",
+                "https://www.behance.net/monstudio",
+                "https://www.canva.com/monbook"):
+        prof = {"fullName": "Studio archi FR", "biography": "Architecte d'intérieur à Paris",
+                "externalUrl": url, "postsCount": 120, "followersCount": 900}
+        assert guard_prescripteur(prof, TODAY) is None, url
+
+
 def test_dead_account_is_noise():
     prof = {"biography": "", "postsCount": 1, "followersCount": 3}
     assert _is_dead_account(prof)

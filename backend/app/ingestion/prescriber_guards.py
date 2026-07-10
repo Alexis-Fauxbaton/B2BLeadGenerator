@@ -19,6 +19,7 @@ import re
 import unicodedata
 from datetime import date
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 # Formation / coaching VERS d'autres pros (B2B2B) : le compte vend du savoir, pas
 # des projets clients. Grounded : endora (« cours privés »), habiteretgrandir
@@ -45,7 +46,10 @@ _NON_PRESCRIBER_KW = ("graphiste", "webdesign", "web design", "ux/ui", "ux ui",
                       "motion design", "illustrateur")
 
 # Domaines étrangers (piège CHR connu ; garde léger, aucun cas dans l'échantillon).
-_FOREIGN_TLD = (".be", ".ch", ".ca", ".lu")
+# On compare le VRAI ccTLD (dernier label de l'hôte), jamais une sous-chaîne : sinon
+# « caroline-studio.fr » (.ca), « benjamin….fr » (.be), « behance.net » (.be) seraient
+# faussement écartés — trahison directe de l'objectif VOLUME MAX national.
+_FOREIGN_TLD = frozenset({"be", "ch", "ca", "lu"})
 
 
 def _norm(text: Optional[str]) -> str:
@@ -83,11 +87,24 @@ def _is_non_prescriber(profile: Dict[str, Any]) -> bool:
     return _kw_present(_haystack(profile), _NON_PRESCRIBER_KW)
 
 
+def _url_cctld(url: str) -> Optional[str]:
+    """Dernier label de l'hôte d'une URL (ex. « https://studio.be/x » -> « be »).
+    Renvoie None si l'hôte est absent. Tolère l'absence de schéma et un port."""
+    url = (url or "").strip().lower()
+    if not url:
+        return None
+    if "//" not in url:
+        url = "//" + url  # urlsplit exige un « // » pour peupler netloc.
+    host = urlsplit(url).netloc.split("@")[-1].split(":")[0].rstrip(".")
+    if not host or "." not in host:
+        return None
+    return host.rsplit(".", 1)[-1]
+
+
 def _is_foreign(profile: Dict[str, Any]) -> bool:
     urls = [profile.get("externalUrl") or ""]
     urls += [(e.get("url") or "") for e in (profile.get("externalUrls") or [])]
-    hay = " ".join(urls).lower()
-    return any(tld in hay for tld in _FOREIGN_TLD)
+    return any(_url_cctld(u) in _FOREIGN_TLD for u in urls)
 
 
 def _is_dead_account(profile: Dict[str, Any]) -> bool:
