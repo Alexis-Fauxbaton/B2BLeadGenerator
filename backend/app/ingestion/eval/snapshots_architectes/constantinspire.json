@@ -1,0 +1,31 @@
+{
+  "inputUrl": "https://www.instagram.com/constantinspire",
+  "username": "constantinspire",
+  "url": "https://www.instagram.com/constantinspire",
+  "fullName": "CONSTANTInspire | Architecture intérieure Vaucluse",
+  "biography": "Architecte d'intérieur \nJe révèle le potentiel des lieux atypiques\nEntre ombre & lumière, Vision & Cohérence \nEspaces sensibles, justes & incarnés",
+  "followersCount": 197,
+  "followsCount": 234,
+  "postsCount": 294,
+  "isBusinessAccount": null,
+  "businessCategoryName": null,
+  "businessAddress": {},
+  "externalUrl": "",
+  "externalUrls": [],
+  "private": false,
+  "verified": false,
+  "latestPosts": [
+    {
+      "id": "browser_verif_1",
+      "type": "Sidecar",
+      "shortCode": "",
+      "caption": "Il existe un moment où l'on réalise que ce n'est pas la maison qui est trop petite...\nL'architecture d'intérieur ne consiste pas seulement à embellir un lieu.\n\n#ArchitectureInterieure #ArchitecteInterieur #Maison #Renovation #Transformation #AmenagementInterieur #Volumes #DesignInterieur #Provence #Vaucluse #Habitat #Constantinspire",
+      "hashtags": [],
+      "mentions": [],
+      "timestamp": "2026-07-10T12:00:00.000Z",
+      "likesCount": null,
+      "commentsCount": null
+    }
+  ],
+  "_snapshot_provenance": "browser_meta_2026-07-10 (Apify APIFY_TOKEN quota exceeded: 403 platform-feature-disabled/Monthly usage hard limit -- champs lus sur meta og:description de la page publique, pas de scrape_profiles)"
+}

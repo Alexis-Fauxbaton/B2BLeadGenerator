@@ -1,0 +1,31 @@
+{
+  "inputUrl": "https://www.instagram.com/rekto_agencement",
+  "username": "rekto_agencement",
+  "url": "https://www.instagram.com/rekto_agencement",
+  "fullName": "Rekto",
+  "biography": "👉 | Expert en agencement d'intérieur\nCuisine - Salle de bain - Dressing\n📍 | Dans toute la France 🇫🇷\n⬇️ | Rdv sur notre site internet",
+  "followersCount": 498,
+  "followsCount": 222,
+  "postsCount": 101,
+  "isBusinessAccount": null,
+  "businessCategoryName": null,
+  "businessAddress": {},
+  "externalUrl": "",
+  "externalUrls": [],
+  "private": false,
+  "verified": false,
+  "latestPosts": [
+    {
+      "id": "browser_verif_1",
+      "type": "Sidecar",
+      "shortCode": "",
+      "caption": "Derrière chaque grand projet, il y a une grande équipe.\n\nnos équipes ont relevé un défi de taille : installer les cuisines dans des délais exigeants...\n\n#Rekto #NosEquipes #SavoirFaire #Agencement #Installation #Excellence #TopChef #IKEA #20AnsRekto",
+      "hashtags": [],
+      "mentions": [],
+      "timestamp": "2026-07-10T12:00:00.000Z",
+      "likesCount": null,
+      "commentsCount": null
+    }
+  ],
+  "_snapshot_provenance": "browser_meta_2026-07-10 (Apify APIFY_TOKEN quota exceeded: 403 platform-feature-disabled/Monthly usage hard limit -- champs lus sur meta og:description de la page publique, pas de scrape_profiles)"
+}

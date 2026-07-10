@@ -1,0 +1,31 @@
+{
+  "inputUrl": "https://www.instagram.com/lys_brocque_archi_immo",
+  "username": "lys_brocque_archi_immo",
+  "url": "https://www.instagram.com/lys_brocque_archi_immo",
+  "fullName": "Lys Brocque|ARCHI & IMMO",
+  "biography": "Lys Brocque | Archi & Immo\nArchitecture intérieur• Immobilier\n\"Choisir aujourd'hui. Construire demain.\"\n📍Houilles|alentours\n ⬇️ Explorer mon univers@",
+  "followersCount": 265,
+  "followsCount": 673,
+  "postsCount": 100,
+  "isBusinessAccount": null,
+  "businessCategoryName": null,
+  "businessAddress": {},
+  "externalUrl": "",
+  "externalUrls": [],
+  "private": false,
+  "verified": false,
+  "latestPosts": [
+    {
+      "id": "browser_verif_1",
+      "type": "Sidecar",
+      "shortCode": "",
+      "caption": "",
+      "hashtags": [],
+      "mentions": [],
+      "timestamp": "2026-07-10T12:00:00.000Z",
+      "likesCount": null,
+      "commentsCount": null
+    }
+  ],
+  "_snapshot_provenance": "browser_meta_2026-07-10 (Apify APIFY_TOKEN quota exceeded: 403 platform-feature-disabled/Monthly usage hard limit -- champs lus sur meta og:description de la page publique, pas de scrape_profiles)"
+}

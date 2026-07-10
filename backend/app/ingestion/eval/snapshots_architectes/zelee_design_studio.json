@@ -1,0 +1,31 @@
+{
+  "inputUrl": "https://www.instagram.com/zelee_design_studio",
+  "username": "zelee_design_studio",
+  "url": "https://www.instagram.com/zelee_design_studio",
+  "fullName": "Zélée | Boutique Concept Store & Architecte d'Intérieur",
+  "biography": "💛 Décoration, Art de la table, Objets créateurs \n📐 Conception de projet d'architecture sur-mesure \nDécouvrez notre boutique en ligne 👇🏼",
+  "followersCount": 4448,
+  "followsCount": 2068,
+  "postsCount": 581,
+  "isBusinessAccount": null,
+  "businessCategoryName": null,
+  "businessAddress": {},
+  "externalUrl": "",
+  "externalUrls": [],
+  "private": false,
+  "verified": false,
+  "latestPosts": [
+    {
+      "id": "browser_verif_1",
+      "type": "Sidecar",
+      "shortCode": "",
+      "caption": "Projet terminé ☀️\n\nAgencement sur-mesure imaginé par Zélée, fabriqué et posé par l'Atelier Franchini.\n\n#cuisinedete #cuisine #amenagement #agencement #surmesures",
+      "hashtags": [],
+      "mentions": [],
+      "timestamp": "2026-07-10T12:00:00.000Z",
+      "likesCount": null,
+      "commentsCount": null
+    }
+  ],
+  "_snapshot_provenance": "browser_meta_2026-07-10 (Apify APIFY_TOKEN quota exceeded: 403 platform-feature-disabled/Monthly usage hard limit -- champs lus sur meta og:description de la page publique, pas de scrape_profiles)"
+}

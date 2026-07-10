@@ -1,0 +1,31 @@
+{
+  "inputUrl": "https://www.instagram.com/agenceurmenuisier.fr",
+  "username": "agenceurmenuisier.fr",
+  "url": "https://www.instagram.com/agenceurmenuisier.fr",
+  "fullName": "Architecture | GHILAIN Nicolas",
+  "biography": "✨ Architecte d'Intérieur | Ameublement sur Mesure\n🏡 Création d'espaces uniques\n🌿 Transformons vos idées en réalité \n📩 Contactez-moi !",
+  "followersCount": 200,
+  "followsCount": 202,
+  "postsCount": 126,
+  "isBusinessAccount": null,
+  "businessCategoryName": null,
+  "businessAddress": {},
+  "externalUrl": "",
+  "externalUrls": [],
+  "private": false,
+  "verified": false,
+  "latestPosts": [
+    {
+      "id": "browser_verif_1",
+      "type": "Sidecar",
+      "shortCode": "",
+      "caption": "Chez NG Menuisier Agenceur, chaque projet d'aménagement prend vie en 3 étapes clés.\n\nÉTAPE 3 • SUIVI & LIVRAISON\n\nDe la fabrication à la pose, nous assurons un suivi attentif à chaque étape du chantier.\n\n#AgencementSurMesure #Menuiserie #MenuiserieSurMesure #AgencementIntérieur #MobilierSurMesure",
+      "hashtags": [],
+      "mentions": [],
+      "timestamp": "2026-07-01T12:00:00.000Z",
+      "likesCount": null,
+      "commentsCount": null
+    }
+  ],
+  "_snapshot_provenance": "browser_meta_2026-07-10 (Apify APIFY_TOKEN quota exceeded: 403 platform-feature-disabled/Monthly usage hard limit -- champs lus sur meta og:description de la page publique, pas de scrape_profiles)"
+}

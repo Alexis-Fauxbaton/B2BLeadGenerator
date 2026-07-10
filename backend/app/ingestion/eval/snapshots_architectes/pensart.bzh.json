@@ -1,0 +1,31 @@
+{
+  "inputUrl": "https://www.instagram.com/pensart.bzh",
+  "username": "pensart.bzh",
+  "url": "https://www.instagram.com/pensart.bzh",
+  "fullName": "PENSART",
+  "biography": "CARRELAGE - SALLE DE BAIN - BETON CIRÉ\nClohars-Fouesnant\nContact@pensart.bzh\n02.98.97.18.74",
+  "followersCount": 681,
+  "followsCount": 468,
+  "postsCount": 33,
+  "isBusinessAccount": null,
+  "businessCategoryName": null,
+  "businessAddress": {},
+  "externalUrl": "",
+  "externalUrls": [],
+  "private": false,
+  "verified": false,
+  "latestPosts": [
+    {
+      "id": "browser_verif_1",
+      "type": "Sidecar",
+      "shortCode": "",
+      "caption": "Chantier Cuisine KJ\n\nConception et pose d'une cuisine @morel_1932 par le biais de la @copabcooperative\nLes façades sont en plaqué chêne...\n\n#cuisine #boisetpierre #agencement",
+      "hashtags": [],
+      "mentions": [],
+      "timestamp": "2026-07-10T12:00:00.000Z",
+      "likesCount": null,
+      "commentsCount": null
+    }
+  ],
+  "_snapshot_provenance": "browser_meta_2026-07-10 (Apify APIFY_TOKEN quota exceeded: 403 platform-feature-disabled/Monthly usage hard limit -- champs lus sur meta og:description de la page publique, pas de scrape_profiles)"
+}

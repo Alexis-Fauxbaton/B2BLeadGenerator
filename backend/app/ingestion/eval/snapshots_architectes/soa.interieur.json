@@ -1,0 +1,31 @@
+{
+  "inputUrl": "https://www.instagram.com/soa.interieur",
+  "username": "soa.interieur",
+  "url": "https://www.instagram.com/soa.interieur",
+  "fullName": "SOA Intérieur",
+  "biography": "Architecte d'intérieur - Nantes\nRénovation - Aménagement-sur-mesure- décoration",
+  "followersCount": 824,
+  "followsCount": 218,
+  "postsCount": 111,
+  "isBusinessAccount": null,
+  "businessCategoryName": null,
+  "businessAddress": {},
+  "externalUrl": "",
+  "externalUrls": [],
+  "private": false,
+  "verified": false,
+  "latestPosts": [
+    {
+      "id": "browser_verif_1",
+      "type": "Sidecar",
+      "shortCode": "",
+      "caption": "Ici, l'extension est désormais livrée. La maison a retrouvé sa lumière, ses volumes et son rythme...\n\n#ArchitectureInterieure #Extensionmaison #Amenagementsurmesure #Renovation #maisondefamille #DesignInterieur #ProjetEnCours #SurMesure #ArchitecteInterieur #Chantier",
+      "hashtags": [],
+      "mentions": [],
+      "timestamp": "2026-07-10T12:00:00.000Z",
+      "likesCount": null,
+      "commentsCount": null
+    }
+  ],
+  "_snapshot_provenance": "browser_meta_2026-07-10 (Apify APIFY_TOKEN quota exceeded: 403 platform-feature-disabled/Monthly usage hard limit -- champs lus sur meta og:description de la page publique, pas de scrape_profiles)"
+}

@@ -1,0 +1,31 @@
+{
+  "inputUrl": "https://www.instagram.com/relionconception",
+  "username": "relionconception",
+  "url": "https://www.instagram.com/relionconception",
+  "fullName": "RELION CONCEPTION",
+  "biography": "🏡 Architecte d'intérieur & Maître d'œuvre\n📐 Particuliers | Professionnels \n✨  Accompagnement de A à Z | Conception sur mesure \n📍 Vosges & Grand Est",
+  "followersCount": 8,
+  "followsCount": 8,
+  "postsCount": 12,
+  "isBusinessAccount": null,
+  "businessCategoryName": null,
+  "businessAddress": {},
+  "externalUrl": "",
+  "externalUrls": [],
+  "private": false,
+  "verified": false,
+  "latestPosts": [
+    {
+      "id": "browser_verif_1",
+      "type": "Sidecar",
+      "shortCode": "",
+      "caption": "Salle de bains 2026 : les codes changent... place aux espaces pensés pour durer !\n\n#ArchitectureInterieure #SalleDeBainsDesign #RenovationInterieure #DesignInterieur #AmenagementInterieur #MaisonSurMesure #ProjetRenovation #MaitriseDoeuvre #ArchitecteInterieur #Vosges #Lorraine #RelionConception",
+      "hashtags": [],
+      "mentions": [],
+      "timestamp": "2026-07-10T12:00:00.000Z",
+      "likesCount": null,
+      "commentsCount": null
+    }
+  ],
+  "_snapshot_provenance": "browser_meta_2026-07-10 (Apify APIFY_TOKEN quota exceeded: 403 platform-feature-disabled/Monthly usage hard limit -- champs lus sur meta og:description de la page publique, pas de scrape_profiles)"
+}

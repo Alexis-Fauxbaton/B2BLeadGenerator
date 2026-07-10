@@ -1,0 +1,31 @@
+{
+  "inputUrl": "https://www.instagram.com/addiction_design_decoration",
+  "username": "addiction_design_decoration",
+  "url": "https://www.instagram.com/addiction_design_decoration",
+  "fullName": "Nathalie Poirier",
+  "biography": "Le design est un plan pour organiser les éléments en vue de mieux accomplir un but particulier #Charles Eames",
+  "followersCount": 96,
+  "followsCount": 224,
+  "postsCount": 104,
+  "isBusinessAccount": null,
+  "businessCategoryName": null,
+  "businessAddress": {},
+  "externalUrl": "",
+  "externalUrls": [],
+  "private": false,
+  "verified": false,
+  "latestPosts": [
+    {
+      "id": "browser_verif_1",
+      "type": "Sidecar",
+      "shortCode": "",
+      "caption": "\"Mais... c'est l'architecte d'interieur qui fait la peinture ?!\"\n\nChez ADDICTION DESIGN & DECORATION, je ne me contente pas d'imaginer vos futurs interieurs...\nPeinture, enduits, tapisserie, pose de revetements de sol...\n\n#ArchitecteInterieur #Renovation #Peinture #Decoration #Travaux #AvantApres #SuiviDeChantier #Artisan #AddictionDesignDecoration #HomeDesign #RenovationMaison #PassionMetier",
+      "hashtags": [],
+      "mentions": [],
+      "timestamp": "2026-07-10T12:00:00.000Z",
+      "likesCount": null,
+      "commentsCount": null
+    }
+  ],
+  "_snapshot_provenance": "browser_meta_2026-07-10 (Apify APIFY_TOKEN quota exceeded: 403 platform-feature-disabled/Monthly usage hard limit -- champs lus sur meta og:description de la page publique, pas de scrape_profiles)"
+}

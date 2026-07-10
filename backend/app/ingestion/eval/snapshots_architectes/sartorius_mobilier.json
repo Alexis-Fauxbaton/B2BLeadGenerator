@@ -1,0 +1,31 @@
+{
+  "inputUrl": "https://www.instagram.com/sartorius_mobilier",
+  "username": "sartorius_mobilier",
+  "url": "https://www.instagram.com/sartorius_mobilier",
+  "fullName": "Sartorius mobilier",
+  "biography": "Sartorius mobilier\nConception de Mobiliers et agencements 🇫🇷\nUnique et sur mesure 💡",
+  "followersCount": 954,
+  "followsCount": 474,
+  "postsCount": 93,
+  "isBusinessAccount": null,
+  "businessCategoryName": null,
+  "businessAddress": {},
+  "externalUrl": "",
+  "externalUrls": [],
+  "private": false,
+  "verified": false,
+  "latestPosts": [
+    {
+      "id": "browser_verif_1",
+      "type": "Sidecar",
+      "shortCode": "",
+      "caption": "Dressing sur mesure en noyer, parfaitement intégré.\n#surmesure #noyer #dressing #agencement #villeneuvedascq",
+      "hashtags": [],
+      "mentions": [],
+      "timestamp": "2026-07-10T12:00:00.000Z",
+      "likesCount": null,
+      "commentsCount": null
+    }
+  ],
+  "_snapshot_provenance": "browser_meta_2026-07-10 (Apify APIFY_TOKEN quota exceeded: 403 platform-feature-disabled/Monthly usage hard limit -- champs lus sur meta og:description de la page publique, pas de scrape_profiles)"
+}
