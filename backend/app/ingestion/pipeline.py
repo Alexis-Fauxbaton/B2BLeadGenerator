@@ -715,11 +715,19 @@ def _process_candidate(
         segment=classify_segment(etype, cand.naf, cand.establishment_name),
     )
 
-    # 4. Upsert (dédup persistante sur source + source_ref)
+    # 4. Upsert (dédup persistante sur source + source_ref + population)
+    # ÉTANCHÉITÉ CROSS-POPULATION [revue finale] : la population fait partie de
+    # la clé de dédup. Sans elle, un même handle Instagram surfacé par les DEUX
+    # funnels (run_instagram -> population='chr' ; run_prescripteurs ->
+    # 'architecte', tous deux source='instagram' / source_ref=handle) partagerait
+    # une seule ligne : le second run écraserait tous les champs et RECLASSERAIT
+    # la population selon l'ordre d'exécution. En discriminant sur la population,
+    # les deux funnels occupent des lignes distinctes et ne se contaminent jamais.
     existing = session.exec(
         select(Opportunity).where(
             Opportunity.source == cand.source,
             Opportunity.source_ref == cand.source_ref,
+            Opportunity.population == cand.population,
         )
     ).first()
 
@@ -823,9 +831,9 @@ def _process_candidate(
         # Rafraîchir le label de cycle de vie (un opening peut devenir established
         # à un run ultérieur, ou l'inverse) — ne pas écraser par None (BODACC).
         existing.lifecycle_label = cand.lifecycle_label or existing.lifecycle_label
-        # La population ne change pas d'un run à l'autre pour un même handle ;
-        # on la (re)pose défensivement (une ancienne fiche pré-A1 est 'chr').
-        existing.population = cand.population or existing.population
+        # La population n'est PLUS réécrite ici : elle fait partie de la clé de
+        # dédup (existing.population == cand.population par construction), donc ce
+        # champ est déjà correct. La réécrire masquerait un éventuel bug de clé.
         existing.activity_start_date = cand.activity_start_date
         existing.venue_origin_date = cand.venue_origin_date
         existing.estimated_timing = timing

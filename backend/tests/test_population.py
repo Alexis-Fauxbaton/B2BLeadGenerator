@@ -119,6 +119,65 @@ def test_dashboard_stats_default_excludes_architectes():
         assert get_stats(session=s, population="").total_opportunities == 3  # toutes
 
 
+def test_same_handle_two_populations_yields_two_rows():
+    # ÉTANCHÉITÉ CROSS-POPULATION [revue finale] : le même handle Instagram
+    # surfacé par les DEUX funnels (source='instagram', source_ref=handle, mais
+    # population 'chr' vs 'architecte') doit produire DEUX lignes distinctes —
+    # aucun run ne doit écraser/reclasser l'autre, quel que soit l'ordre.
+    with Session(_engine()) as s:
+        chr_cand = LeadCandidate(
+            source="instagram", source_ref="studio_bar", establishment_name="Le Bar",
+            city="Paris", address="", main_signal="ouverture prochaine",
+            detection_date=date(2026, 7, 10), establishment_type="bar",
+            population="chr",
+        )
+        arc_cand = LeadCandidate(
+            source="instagram", source_ref="studio_bar", establishment_name="Studio Déco",
+            city="Paris", address="", main_signal="prescripteur actif",
+            detection_date=date(2026, 7, 10), establishment_type="architecte d'intérieur",
+            lifecycle_label="studio_actif", population="architecte",
+        )
+        # Ordre : CHR d'abord, puis architecte (le second ne doit PAS muter le premier).
+        _process_candidate(s, chr_cand, IngestStats(source="instagram"), set(), enricher=None)
+        _process_candidate(s, arc_cand, IngestStats(source="instagram"), set(), enricher=None)
+        s.commit()
+        rows = s.exec(select(Opportunity).where(
+            Opportunity.source_ref == "studio_bar")).all()
+        pops = sorted(o.population for o in rows)
+        assert pops == ["architecte", "chr"], f"attendu 2 lignes distinctes, obtenu {pops}"
+        by_pop = {o.population: o for o in rows}
+        assert by_pop["chr"].establishment_type == "bar"
+        assert by_pop["architecte"].establishment_type == "architecte d'intérieur"
+
+
+def test_same_handle_reverse_order_no_reclassification():
+    # Ordre inverse (architecte d'abord) : mêmes garanties d'étanchéité.
+    with Session(_engine()) as s:
+        arc_cand = LeadCandidate(
+            source="instagram", source_ref="h1", establishment_name="Studio",
+            city="Paris", address="", main_signal="prescripteur actif",
+            detection_date=date(2026, 7, 10), establishment_type="architecte d'intérieur",
+            population="architecte",
+        )
+        chr_cand = LeadCandidate(
+            source="instagram", source_ref="h1", establishment_name="Resto",
+            city="Paris", address="", main_signal="ouverture prochaine",
+            detection_date=date(2026, 7, 10), establishment_type="restaurant",
+            population="chr",
+        )
+        _process_candidate(s, arc_cand, IngestStats(source="instagram"), set(), enricher=None)
+        _process_candidate(s, chr_cand, IngestStats(source="instagram"), set(), enricher=None)
+        s.commit()
+        rows = s.exec(select(Opportunity).where(Opportunity.source_ref == "h1")).all()
+        assert sorted(o.population for o in rows) == ["architecte", "chr"]
+        # Re-ingérer l'architecte (même population) doit METTRE À JOUR sa ligne,
+        # pas en créer une nouvelle (dédup intra-population préservée).
+        _process_candidate(s, arc_cand, IngestStats(source="instagram"), set(), enricher=None)
+        s.commit()
+        rows = s.exec(select(Opportunity).where(Opportunity.source_ref == "h1")).all()
+        assert len(rows) == 2
+
+
 def test_migration_adds_population_column(tmp_path):
     from sqlalchemy import create_engine as ce, inspect, text
     import app.database as db
