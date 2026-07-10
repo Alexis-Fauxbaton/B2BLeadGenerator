@@ -59,7 +59,8 @@ def lookup_osm(
     Clés : phone, website, instagram, email, facebook. Valeurs None si absentes.
     Tolérant aux pannes : renvoie un dict vide-ish en cas d'erreur.
     """
-    empty = {"phone": None, "website": None, "instagram": None, "email": None, "facebook": None}
+    empty = {"phone": None, "website": None, "instagram": None, "email": None,
+             "facebook": None, "name": None}
     if lat is None or lon is None:
         return empty
 
@@ -97,4 +98,5 @@ out tags 60;
         "instagram": _extract_instagram(best.get("contact:instagram", "")),
         "email": best.get("email") or best.get("contact:email"),
         "facebook": best.get("contact:facebook"),
+        "name": best.get("name"),  # -> verrou d'identité côté enricher
     }

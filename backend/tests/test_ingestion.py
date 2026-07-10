@@ -848,3 +848,153 @@ def test_bodacc_vente_maps_to_reprise():
     assert len(candidates) == 1
     assert candidates[0].main_signal == "reprise"
     assert "changement propriétaire" in candidates[0].secondary_signals
+
+
+# =========================================================================
+# Fixes passe contact (branche feature/contact-quality) — audit-enrichissement
+# =========================================================================
+
+
+def test_strong_name_match_rejects_homonym():
+    """Fix 1 — concordance de nom FORTE : « Marco Del Caffé » NE concorde PAS
+    avec « Café Marco Polo » (un seul token commun, aucun sous-ensemble) ->
+    aucun contact écrit ; un nom réellement concordant passe."""
+    from app.ingestion.enrichment.contact_enricher import _strong_name_match
+
+    assert _strong_name_match("Marco Del Caffé", "Café Marco Polo") is False
+    assert _strong_name_match("Peace Museum Paris & Cafe", "Café de la Paix") is False
+    assert _strong_name_match("Giorgina", "Giorgina Ristorante Nogent") is True
+    assert _strong_name_match("Le Petit Marseille", "Le Petit Marseille") is True
+    assert _strong_name_match("Giorgina", None) is False
+    assert _strong_name_match("", "Café Marco Polo") is False
+
+
+def test_enrich_identity_lock_blocks_text_homonym(monkeypatch):
+    """Fix 1 — un match Places par TEXTE au nom discordant (homonyme) n'écrit
+    RIEN ; le même match par géo, ou par nom concordant, remplit."""
+    from app.ingestion.enrichment import contact_enricher as ce
+
+    def fake_places_homonym(name, **k):
+        return {"matched": True, "phone": "0140073636", "website": "https://cafedelapaix.fr",
+                "review_count": 900, "match_basis": "text", "display_name": "Café de la Paix"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_places_homonym)
+    info = ce.ContactEnricher().enrich("Peace Museum Paris & Cafe", None, None, city="Paris")
+    assert info.phone is None and info.website is None   # homonyme -> rien
+    assert info.match_basis is None
+
+    def fake_places_geo(name, **k):
+        return {"matched": True, "phone": "0148772136", "website": "https://sushicharlesvii.fr",
+                "review_count": 12, "match_basis": "geo", "display_name": "Autre Nom"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_places_geo)
+    info = ce.ContactEnricher().enrich("Sushi Charles VII", None, None, city="Nogent")
+    assert info.phone == "0148772136"                    # géo-confirmé -> rempli
+    assert info.website == "https://sushicharlesvii.fr"
+
+    def fake_places_name(name, **k):
+        return {"matched": True, "phone": "0102030405", "website": "https://giorgina.fr",
+                "review_count": 3, "match_basis": "text", "display_name": "Giorgina Ristorante"}
+
+    monkeypatch.setattr(ce, "lookup_places", fake_places_name)
+    info = ce.ContactEnricher().enrich("Giorgina", None, None, city="Nogent-sur-Marne")
+    assert info.phone == "0102030405"                    # nom concordant fort -> rempli
+
+
+def test_external_url_excludes_non_sites():
+    """Fix 2 — _external_url exclut PARTOUT les non-sites (bug de l'ancien
+    `return url or None`) avec les URLs réelles citées par l'audit."""
+    from app.ingestion.instagram import _external_url
+    from app.ingestion.enrichment.url_filter import is_real_website, clean_website
+
+    assert _external_url({"externalUrl": "https://linktr.ee/babelmontigny.restaurant"}) is None
+    assert _external_url({"externalUrl": "https://maps.app.goo.gl/WTw4abc"}) is None
+    assert _external_url({"externalUrl": "https://facebook.com/share/1CNRDUEGu2/"}) is None
+    assert _external_url({"externalUrl": "https://instagram.com/foo"}) is None
+    assert _external_url({"externalUrl": "https://bit.ly/xyz"}) is None
+    assert _external_url({"externalUrl": "https://vietphe.fr"}) == "https://vietphe.fr"
+    # Repli externalUrls : ignore l'agrégateur, retient le vrai site.
+    assert _external_url({"externalUrl": "https://linktr.ee/x",
+                          "externalUrls": [{"url": "https://linktr.ee/x"},
+                                           {"url": "https://laperouse.com"}]}) == "https://laperouse.com"
+    assert is_real_website("https://laperouse.com") is True
+    assert is_real_website("https://linktr.ee/x") is False
+    assert clean_website("  https://goo.gl/maps/x ") is None
+
+
+def test_normalize_email_validates_format():
+    """Fix 3 — un email n'est retenu que si le format est valide (minuscule) ;
+    les 3 cas de l'audit (domaine nu id 319, numéros id 404/424) sont rejetés."""
+    from app.services.contact_quality import normalize_email
+
+    assert normalize_email("restaurant-giorgina.com") is None      # id 319 (sans @)
+    assert normalize_email("01.43.54.10.12") is None               # id 404 (tél)
+    assert normalize_email("01 43 06 83 35") is None               # id 424 (tél)
+    assert normalize_email("Contact@Resto.FR") == "contact@resto.fr"
+    assert normalize_email("marie.dupont@resto.fr") == "marie.dupont@resto.fr"
+    assert normalize_email(None) is None
+    assert normalize_email("") is None
+
+
+def test_contact_enrich_one_rejects_malformed_email():
+    """Fix 3 — la cascade contact ne stocke pas un email malformé (domaine nu /
+    numéro de téléphone) : opp.email reste vide."""
+    from app.models import Opportunity
+    from app.ingestion.pipeline import _contact_enrich_one, ContactStats
+    from app.ingestion.enrichment.contact_enricher import ContactInfo
+
+    opp = Opportunity(
+        establishment_name="Giorgina", establishment_type="restaurant", city="Nogent",
+        address="1 Rue X, 94130 Nogent-sur-Marne", main_signal="création récente",
+        secondary_signals=[], detection_date=date(2026, 6, 1), recommended_channel="email",
+        source="instagram", source_ref="I1",
+    )
+
+    class Enr:
+        def enrich(self, *a, **k):
+            return ContactInfo(email="restaurant-giorgina.com")  # domaine nu
+
+    class NoSirene:
+        def lookup(self, siren): return None
+
+    _contact_enrich_one(opp, Enr(), NoSirene(), ContactStats())
+    assert opp.email is None
+    assert opp.decision_maker_email is None
+
+
+def test_contact_enrich_targets_retries_hot_segment():
+    """Fix 4 — la sélection reprend les jamais-tentés ET les fiches CHAUDES
+    tentées il y a >14 j auxquelles il manque email OU tél ; elle ignore les
+    froides déjà tentées et les chaudes récentes ou déjà complètes."""
+    from datetime import datetime, timedelta
+    from sqlmodel import SQLModel, Session, create_engine
+    from app.models import Opportunity
+    from app.ingestion.pipeline import _contact_enrich_targets
+
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    old = now - timedelta(days=20)
+    recent = now - timedelta(days=3)
+
+    def mk(ref, label, enriched_at, email=None, phone=None):
+        return Opportunity(
+            establishment_name=ref, establishment_type="restaurant", city="Paris",
+            address="1 Rue X, 75011 Paris", estimated_timing="J-30",
+            probable_needs=["luminaires"],
+            main_signal="ouverture prochaine", secondary_signals=[],
+            detection_date=date(2026, 6, 1), recommended_channel="email",
+            source="instagram", source_ref=ref, lifecycle_label=label,
+            contact_enriched_at=enriched_at, email=email, phone=phone,
+        )
+
+    with Session(engine) as s:
+        s.add(mk("never", "opening_soon", None))                       # jamais tenté -> OUI
+        s.add(mk("hot_stale", "opening_soon", old))                    # chaud, vieux, vide -> OUI
+        s.add(mk("hot_recent", "just_opened", recent))                 # chaud mais récent -> NON
+        s.add(mk("hot_complete", "renovation", old, email="a@b.fr", phone="0102030405"))  # complet -> NON
+        s.add(mk("cold_stale", "established", old, phone="0102030405"))  # froid déjà tenté -> NON
+        s.commit()
+
+        refs = {o.source_ref for o in _contact_enrich_targets(s, "instagram", 100, now=now)}
+        assert refs == {"never", "hot_stale"}

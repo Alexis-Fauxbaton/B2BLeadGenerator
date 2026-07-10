@@ -20,6 +20,8 @@ import requests
 
 from . import profile_guards
 from .enrichment.siret_matcher import _age_label
+from .enrichment.url_filter import is_real_website
+from ..services.contact_quality import normalize_email
 
 # Sentinel : "résous le client OpenAI depuis l'env". Passer None = SANS juge
 # (déterministe, aucun appel LLM — indispensable pour les tests / fail-soft).
@@ -178,15 +180,21 @@ def _struct_address(profile: Dict[str, Any]) -> Optional[str]:
 
 
 def _external_url(profile: Dict[str, Any]) -> Optional[str]:
-    """URL de site (hors linktr.ee/agrégateurs) si disponible."""
+    """URL de VRAI site (hors agrégateurs/social/carte) si disponible, sinon None.
+
+    Bug corrigé (audit cause n°1) : l'ancien `return url or None` final re-laissait
+    passer le lien EXCLU (linktr.ee, maps.app.goo.gl, facebook/share…) que la
+    boucle venait d'écarter. On délègue le filtre à `is_real_website` (linktr.ee/
+    linktree, maps.app.goo.gl/goo.gl, facebook.com, instagram.com, bit.ly) et on
+    renvoie None si aucun candidat n'est un vrai site (vide > faux site)."""
     url = (profile.get("externalUrl") or "").strip()
-    if url and "linktr.ee" not in url and "linktree" not in url:
+    if is_real_website(url):
         return url
     for e in profile.get("externalUrls") or []:
         u = (e.get("url") or "").strip()
-        if u and "linktr.ee" not in u and "linktree" not in u:
+        if is_real_website(u):
             return u
-    return url or None
+    return None
 
 
 def classify_profiles(
@@ -248,8 +256,12 @@ def classify_profiles(
 
         # 5. Post-enrichissement (utile aux leads gardés).
         llm_addrs = [a for a in (verdict.get("addresses") or []) if a]
-        llm_emails = [e for e in (verdict.get("emails") or []) if e]
-        biz_email = (prof.get("businessEmail") or prof.get("public_email") or "").strip()
+        # VALIDATION EMAIL (audit cause n°3) : n'accepter qu'un format valide,
+        # normalisé en minuscule. Rejette un domaine nu (id 319 'restaurant-
+        # giorgina.com') ou un numéro de téléphone collé dans le champ (id 404/
+        # 424). Appliqué AUX DEUX sources : verdict LLM et businessEmail/public.
+        llm_emails = [e for e in (normalize_email(e) for e in (verdict.get("emails") or [])) if e]
+        biz_email = normalize_email(prof.get("businessEmail") or prof.get("public_email"))
         addresses = ([struct_addr] if struct_addr else []) + [a for a in llm_addrs if a != struct_addr]
         emails = ([biz_email] if biz_email else []) + [e for e in llm_emails if e != biz_email]
         if addresses:

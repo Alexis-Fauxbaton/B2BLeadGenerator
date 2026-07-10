@@ -25,6 +25,21 @@ ROLE_LOCALPARTS = {
 }
 
 
+# Format email raisonnable (local@domaine.tld). Ancré (^…$) : rejette un domaine
+# nu sans '@' (id 319) ou un numéro de téléphone dans le champ email (id 404/424).
+EMAIL_RE = re.compile(r"^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$")
+
+
+def normalize_email(value: Optional[str]) -> Optional[str]:
+    """Email minuscule s'il a un format VALIDE, sinon None. Précision d'abord :
+    un champ vide vaut mieux qu'un faux (domaine sans '@', numéro de téléphone
+    collé dans l'email…). Point d'entrée unique de validation avant stockage."""
+    if not value:
+        return None
+    v = value.strip().lower()
+    return v if EMAIL_RE.match(v) else None
+
+
 def _norm(text: Optional[str]) -> str:
     text = (text or "").lower()
     return "".join(
