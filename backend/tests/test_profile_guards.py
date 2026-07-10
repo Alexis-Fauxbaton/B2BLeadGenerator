@@ -15,6 +15,7 @@ from app.ingestion.profile_guards import (
     _multi_city_in_bio,
     _is_dead_account,
     _looks_like_venue,
+    _declares_seniority,
 )
 
 SNAP = Path(__file__).resolve().parents[1] / "app" / "ingestion" / "eval" / "snapshots"
@@ -290,6 +291,56 @@ def test_looks_like_venue_category_beats_food_keyword_in_bio():
     # « Création de contenu pour restaurants » = prestataire, pas un lieu.
     assert _looks_like_venue(
         {"biography": "Création de contenu pour restaurants et pâtisseries"}) is False
+
+
+# --- Piège « nouveau compte, ouverts depuis <année> » (ancienneté déclarée) ----
+# Un COMPTE Insta neuf ne fait PAS un établissement neuf : une bio qui déclare une
+# année d'ouverture PASSÉE = established, même si le compte vient d'être créé.
+# Régression de prod : shywawapub (bio « Nouveau compte / Ouverts depuis 1995 »)
+# était sorti opening_soon confiance haute le 2026-07-09.
+def test_shywawapub_declared_seniority_established_by_guard():
+    snap = json.loads((SNAP / "shywawapub.json").read_text(encoding="utf-8"))
+    assert "1995" in (snap.get("biography") or "")
+    assert _declares_seniority(snap, TODAY) is True
+    assert guard_verdict(snap, TODAY) == "established"
+
+
+def test_declares_seniority_exact_bio():
+    prof = {"biography": "Nouveau compte 👋🏽\nOuverts depuis 1995 🍺\n"
+                         "📍7 rue du petit pont 75005 Paris"}
+    assert _declares_seniority(prof, TODAY) is True
+    assert guard_verdict(prof, TODAY) == "established"
+
+
+def test_declares_seniority_variants_past_year():
+    assert _declares_seniority({"biography": "Bistrot depuis 2003"}, TODAY) is True
+    assert _declares_seniority({"biography": "Etablis depuis 1998"}, TODAY) is True
+    assert _declares_seniority({"biography": "Brasserie est. 1974"}, TODAY) is True
+
+
+def test_declares_seniority_never_a_future_opening_date():
+    # « Ouverture Juillet 2026 » : PAS une ancienneté déclarée -> jamais established.
+    assert _declares_seniority({"biography": "Ouverture Juillet 2026"}, TODAY) is False
+    assert guard_verdict({"biography": "Restaurant — Ouverture Juillet 2026"}, TODAY) is None
+    # « depuis 2026 » (année courante) : date d'ouverture future, pas une ancienneté.
+    assert _declares_seniority({"biography": "depuis 2026"}, TODAY) is False
+    # Indice d'ouverture + ANNÉE FUTURE en bio = pré-ouverture datée -> veto (le
+    # « depuis 2019 » parasite ne fige pas established).
+    assert _declares_seniority(
+        {"biography": "Depuis 2019 on en rêvait — ouverture 2027 !"}, TODAY) is False
+
+
+# Les 5 openings de la vérité terrain ne doivent JAMAIS être capturés par la garde
+# d'ancienneté (ni par une autre) : ils descendent au juge (garde-fou rappel opening).
+GT_OPENING_SNAPS = ["loumasrestaurant", "chezgratien_hotelbistrospa",
+                    "villa.henriette_cabourg", "chickntikka94", "marcodelcaffe91"]
+
+
+def test_gt_openings_not_caught_by_seniority_guard():
+    for h in GT_OPENING_SNAPS:
+        snap = json.loads((SNAP / f"{h}.json").read_text(encoding="utf-8"))
+        assert _declares_seniority(snap, TODAY) is False, f"{h} pris pour un etabli ancien"
+        assert guard_verdict(snap, TODAY) is None, f"{h} tranche a tort par un garde"
 
 
 def test_just_opened_monica_survives_guards():

@@ -113,6 +113,20 @@ _MONTHS = ("janvier", "fevrier", "mars", "avril", "mai", "juin", "juillet",
 _SEASONS = ("printemps", "ete", "automne", "hiver")
 _YEAR_RE = re.compile(r"\b20\d\d\b")
 
+# Ancienneté DÉCLARÉE en bio (« Ouverts depuis 1995 », « depuis 2003 »,
+# « établis depuis 1998 », « est. 1974 ») : un établissement qui affiche son année
+# d'ouverture EST established, quel que soit l'âge du COMPTE Instagram (piège
+# documenté : « Nouveau compte, ouverts depuis 1995 » = pub de 30 ans au compte
+# neuf, sorti à tort opening_soon en prod). La regex ancre la mention d'ancienneté
+# (ouvert…/depuis/établi depuis/est.) IMMÉDIATEMENT devant l'année ; le filtre
+# « année < année courante » exclut toute date d'OUVERTURE FUTURE (« depuis 2026 »,
+# « Ouverture Juillet 2026 »). Texte normalisé (sans accent) attendu en entrée.
+_SENIORITY_RE = re.compile(
+    r"(?:ouvert(?:e?s?)|depuis|etabli(?:e?s?)\s+depuis|est\.?)"
+    r"\s*(?:depuis\s*)?"
+    r"((?:19|20)\d{2})"
+)
+
 
 def _norm(text: Optional[str]) -> str:
     text = (text or "").lower()
@@ -205,6 +219,30 @@ def _has_reservation_in_posts(profile: Dict[str, Any]) -> bool:
     for x in (profile.get("latestPosts") or [])[:12]:
         cap = x.get("caption") or ""
         if _RESA_KW in _norm(cap) and _URL_RE.search(cap):
+            return True
+    return False
+
+
+def _declares_seniority(profile: Dict[str, Any], today: date) -> bool:
+    """True si la BIO déclare une année d'ouverture PASSÉE (« Ouverts depuis 1995 »,
+    « depuis 2003 », « est. 1998 ») -> établissement établi, quel que soit l'âge du
+    COMPTE. Deux garde-fous contre une date d'OUVERTURE FUTURE prise à tort :
+      - l'année capturée doit être STRICTEMENT antérieure à l'année courante
+        (« depuis 2026 », l'année du jour, ne compte pas) ;
+      - VETO « pré-ouverture datée » : si la BIO combine un indice de (pré-)ouverture
+        (`_OPENING_CUES`) ET une année ≥ année courante, on retombe au juge — c'est
+        une ouverture FUTURE (« depuis 2019 on en rêvait, ouverture 2026 »), pas une
+        ancienneté. Le veto est SCOPÉ À LA BIO et exige une DATE future : on n'utilise
+        PAS `_has_opening_cue` (qui scanne les légendes) car « réouverture » saisonnière
+        y matche « ouverture » — or une réouverture est justement un signal d'ÉTABLI
+        (cas ancré shywawapub : posts « réouverture », mais bio « ouverts depuis 1995 »).
+    Cas ancré : shywawapub (« Nouveau compte / Ouverts depuis 1995 ») -> established."""
+    bio_norm = _norm(profile.get("biography"))
+    has_future_year = any(int(y) >= today.year for y in _YEAR_RE.findall(bio_norm))
+    if has_future_year and any(cue in bio_norm for cue in _OPENING_CUES):
+        return False
+    for m in _SENIORITY_RE.finditer(bio_norm):
+        if int(m.group(1)) < today.year:
             return True
     return False
 
@@ -333,6 +371,10 @@ def guard_verdict(profile: Dict[str, Any], today: Optional[date] = None) -> Opti
         return None
     if _count_addresses_in_bio(bio) >= 2 or _multi_city_in_bio(bio):
         return "chain_multisite"
+    # Ancienneté déclarée (« ouverts depuis <année passée> ») : établi, même si le
+    # COMPTE Insta est neuf (piège « nouveau compte, ouverts depuis 1995 »).
+    if _declares_seniority(profile, today):
+        return "established"
     posts_count = profile.get("postsCount")
     if isinstance(posts_count, int) and posts_count > POSTS_ESTABLISHED_HARD:
         return "established"

@@ -76,6 +76,18 @@ def test_judge_prompt_mentions_second_address_chain():
     assert "adresse" in t and ("2e adresse" in t or "nouvelle adresse" in t or "2e établissement" in t)
 
 
+def test_judge_prompt_covers_new_account_not_new_venue():
+    """Règle restaurée (piège compte-neuf) : un compte RÉCENT ne fait pas un
+    établissement récent — 'ouverts depuis <année>' = established quel que soit
+    l'âge du compte (perdu dans une réécriture, cause du faux opening_soon prod)."""
+    from app.ingestion.instagram import _DOSSIER_SYSTEM
+    t = _DOSSIER_SYSTEM.lower()
+    assert "compte récent" in t
+    assert "ouverts depuis" in t
+    assert "depuis 19xx/20xx" in t
+    assert "established" in t
+
+
 def test_judge_prompt_has_three_hardening_rules():
     """Remédiation 3bis : le juge sur-prédisait opening_soon. Trois règles ajoutées
     au system prompt doivent être présentes (garde le juge honnête)."""
