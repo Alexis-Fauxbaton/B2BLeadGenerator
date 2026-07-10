@@ -69,18 +69,27 @@ function ContactIcons({ o }: { o: OpportunityList }) {
   );
 }
 
+// Défaut produit (pivot 2026-07-10) : la prospection Ambient Home cible les
+// architectes — le CHR reste accessible via le sélecteur de population.
+const DEFAULT_FILTERS: OpportunityFilters = {
+  sort_by: "score",
+  order: "desc",
+  population: "architecte",
+};
+
+// Clé versionnée : l'ancienne clé "opp_filters" pouvait avoir été enregistrée
+// avant l'introduction de "population" (donc sans ce champ, ou avec un funnel
+// pré-pivot). On repart sur une clé neuve pour que ces vieux navigateurs
+// reçoivent bien le nouveau défaut "architecte" plutôt que de le restaurer
+// comme "toutes populations" (= CHR visibles).
+const OPP_FILTERS_STORAGE_KEY = "opp_filters-v2";
+
 export default function OpportunitiesPage() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [rows, setRows] = useState<OpportunityList[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [filters, setFilters] = useState<OpportunityFilters>({
-    sort_by: "score",
-    order: "desc",
-    // Défaut produit (pivot 2026-07-10) : la prospection Ambient Home cible les
-    // architectes — le CHR reste accessible via le sélecteur de population.
-    population: "architecte",
-  });
+  const [filters, setFilters] = useState<OpportunityFilters>(DEFAULT_FILTERS);
   // Persiste les filtres entre navigations (retour depuis une fiche).
   const [ready, setReady] = useState(false);
 
@@ -102,8 +111,13 @@ export default function OpportunitiesPage() {
   // Restaure les filtres sauvegardés au montage.
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem("opp_filters");
-      if (saved) setFilters(JSON.parse(saved));
+      const saved = window.localStorage.getItem(OPP_FILTERS_STORAGE_KEY);
+      if (saved) {
+        // Merge défensif : un état sauvegardé qui n'a pas (encore) de clé
+        // "population" (ex. sauvegardé juste après une migration) retombe sur
+        // le défaut produit plutôt que sur "toutes populations" (= CHR visibles).
+        setFilters({ ...DEFAULT_FILTERS, ...JSON.parse(saved) });
+      }
     } catch {}
     setReady(true);
   }, []);
@@ -112,7 +126,7 @@ export default function OpportunitiesPage() {
   useEffect(() => {
     if (!ready) return;
     try {
-      window.localStorage.setItem("opp_filters", JSON.stringify(filters));
+      window.localStorage.setItem(OPP_FILTERS_STORAGE_KEY, JSON.stringify(filters));
     } catch {}
     loadRows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
