@@ -986,7 +986,8 @@ def _contact_enrich_one(
     if m:
         postal = m.group(0)
     info = enricher.enrich(
-        opp.establishment_name, lat, lon, website=opp.website, city=opp.city, postal=postal
+        opp.establishment_name, lat, lon, website=opp.website, city=opp.city, postal=postal,
+        main_signal=opp.main_signal, activity_start_date=opp.activity_start_date,
     )
 
     # Contacts ÉTABLISSEMENT (ligne publique du lieu) — ne remplit que si vide.
