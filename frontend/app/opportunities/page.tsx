@@ -255,6 +255,8 @@ export default function OpportunitiesPage() {
               <option value="demo">Démo</option>
               <option value="bodacc">BODACC (réel)</option>
               <option value="instagram">Instagram</option>
+              <option value="annuaire">Annuaire</option>
+              <option value="jeunes_studios">Jeunes studios</option>
             </select>
 
             <select className={SELECT_CLS} value={filters.population ?? ""} onChange={(e) => set({ population: e.target.value })}>

@@ -56,3 +56,13 @@ def classify_naf(naf: Optional[str], text: str = "") -> Optional[str]:
         return refined
 
     return base
+
+
+# Codes NAF PRESCRIPTEUR (archi d'intérieur / design) — gate du matcher architecte
+# (A2). SÉPARÉ de classify_naf (CHR) : le matcher CHR reste bit-à-bit intact.
+NAF_PRESCRIPTEUR = {"71.11Z", "74.10Z"}
+
+
+def classify_naf_prescripteur(naf: Optional[str]) -> bool:
+    """True si le NAF est un code d'architecture d'intérieur / design (A2)."""
+    return _normalize_naf(naf) in NAF_PRESCRIPTEUR

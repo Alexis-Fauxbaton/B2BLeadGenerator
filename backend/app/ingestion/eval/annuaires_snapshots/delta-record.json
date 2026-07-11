@@ -1,0 +1,24 @@
+{
+  "_comment": "Fixture A2/T5 — record INSEE de délta jeunes studios (EA DESIGN, SIRET/NAF réels de sonde-a2/delta-studios-raw.json). Structure INSEE complète (periodesEtablissement/uniteLegale/adresse) pour exercer map_jeune_studio offline : dénomination qualifiante (design), NAF 71.11Z -> candidat 'jeunes_studios' lifecycle unknown, SIREN natif.",
+  "siret": "10739551900013",
+  "siren": "107395519",
+  "etablissementSiege": true,
+  "dateCreationEtablissement": "2026-07-09",
+  "uniteLegale": {
+    "denominationUniteLegale": "EA DESIGN",
+    "categorieJuridiqueUniteLegale": "1000"
+  },
+  "periodesEtablissement": [
+    {
+      "etatAdministratifEtablissement": "A",
+      "activitePrincipaleEtablissement": "71.11Z"
+    }
+  ],
+  "adresseEtablissement": {
+    "numeroVoieEtablissement": "10",
+    "typeVoieEtablissement": "RUE",
+    "libelleVoieEtablissement": "OBERKAMPF",
+    "codePostalEtablissement": "75011",
+    "libelleCommuneEtablissement": "PARIS"
+  }
+}

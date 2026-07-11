@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
-from .naf_classifier import classify_naf
+from .naf_classifier import classify_naf, classify_naf_prescripteur
 
 # Mots génériques ignorés pour la concordance de nom (repris de backfill).
 _GENERIC = {
@@ -348,6 +348,96 @@ def match(name: str, city: Optional[str] = None, postal: Optional[str] = None,
                 pool += chosen
 
     # 3. Arbitre LLM sur le pool résiduel (dédupliqué par SIREN).
+    if pool:
+        uniq = list({c["siren"]: c for c in pool}.values())
+        client = _openai_client() if llm_client is _USE_ENV else llm_client
+        siren = arbitrate(name, context, uniq, client)
+        if siren:
+            cand = next(c for c in uniq if c["siren"] == siren)
+            return _result(cand, "moyenne", "arbitre")
+    return None
+
+
+# --- Matcher ARCHITECTE (A2) — chemin PARALLÈLE au match() CHR ci-dessus ------
+# Le match() CHR n'est JAMAIS modifié (match_eval reste 8/9) : tout ce qui suit
+# est strictement additif. Gate NAF archi (71.11Z/74.10Z), nom+ville+domaine du
+# site, PAS d'étage adresse (studios = bureaux à domicile, faible valeur ; évite
+# aussi le filtre section « I » de /near_point réservé à l'hébergement-restauration).
+
+
+# Hôtes MUTUALISÉS où l'identité vit dans le CHEMIN, pas le domaine : deux
+# studios distincts partagent le même premier label (facebook.com/StudioA vs
+# facebook.com/StudioB -> tous deux 'facebook'). Un domaine mutualisé ne prouve
+# donc AUCUNE identité commune -> exclu de la corroboration site (sinon faux
+# merge nom+ville+même-réseau, cf. A2 lentille VIDE>FAUX). NB : les plateformes à
+# SOUS-DOMAINE distinctif (xxx.wixsite.com, xxx.wordpress.com) ne sont PAS ici —
+# leur premier label est déjà l'identifiant unique, capturé tel quel.
+_SHARED_HOSTS = {
+    "facebook", "fb", "instagram", "linktr", "linktree", "linkedin",
+    "youtube", "youtu", "tiktok", "twitter", "pinterest", "google", "goo",
+    "sites", "bit", "beacons", "campsite", "about",
+}
+
+
+def _domain(url: Optional[str]) -> str:
+    """URL -> nom de domaine nu (sans www ni TLD), pour la corroboration site.
+    Renvoie '' pour un hôte mutualisé (réseau social/raccourcisseur) : son
+    premier label est partagé par tous les comptes -> non corroborant."""
+    if not url:
+        return ""
+    m = re.search(r"https?://(?:www\.)?([^/]+)", url)
+    host = (m.group(1) if m else url).split("/")[0]
+    core = host.split(".")[0]  # 'cecilekokocinski' de 'cecilekokocinski.fr'
+    core = re.sub(r"[^a-z0-9]", "", core.lower())
+    return "" if core in _SHARED_HOSTS else core
+
+
+def _pick_archi_by_name(cands: List[Dict[str, Any]], name: str,
+                        city: Optional[str], postal: Optional[str],
+                        website: Optional[str]) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Sélection archi PURE : NAF archi + token distinctif commun. Auto-accept si
+    géo cohérente (method 'nom') OU domaine du site présent dans le nom/enseignes
+    (method 'site'). -> (candidat|None, method)."""
+    dom = _domain(website)
+    for cand in cands:
+        if not classify_naf_prescripteur(cand["naf"]):
+            continue
+        legal = f'{cand["nom"]} {cand["enseignes"]}'
+        if not _name_overlap(name, legal):
+            continue
+        if _geo_consistent(cand, city, postal):
+            return cand, "nom"
+        if dom and dom in re.sub(r"[^a-z0-9]", "", legal.lower()):
+            return cand, "site"
+    return None, ""
+
+
+def dirigeant_from_result(data: Dict[str, Any]) -> Optional[str]:
+    """Premier dirigeant nommé de la charge utile recherche-entreprises. PURE."""
+    for d in (data.get("dirigeants") or []):
+        prenom = (d.get("prenoms") or d.get("prenom") or "").strip()
+        nom = (d.get("nom") or "").strip()
+        full = " ".join(p for p in (prenom, nom) if p).strip()
+        if full:
+            return full
+    return None
+
+
+def match_architecte(name: str, city: Optional[str] = None, postal: Optional[str] = None,
+                     website: Optional[str] = None, context: Optional[str] = None,
+                     fetch: Fetch = _http_get, llm_client=_USE_ENV) -> Optional[MatchResult]:
+    """Matching SIREN d'un studio d'archi d'intérieur (A2). Chemin PARALLÈLE au
+    match() CHR : gate NAF 71.11Z/74.10Z, nom+ville+domaine, PAS d'étage adresse
+    (studios = bureaux à domicile). Fail-soft None (le lead vit sans SIREN)."""
+    if not name:
+        return None
+    cands = search_by_name(name, city, postal, fetch)
+    got, method = _pick_archi_by_name(cands, name, city, postal, website)
+    if got:
+        return _result(got, "haute" if method == "nom" else "moyenne", method)
+    pool = [c for c in cands
+            if classify_naf_prescripteur(c["naf"])
+            and _name_overlap(name, f'{c["nom"]} {c["enseignes"]}')]
     if pool:
         uniq = list({c["siren"]: c for c in pool}.values())
         client = _openai_client() if llm_client is _USE_ENV else llm_client

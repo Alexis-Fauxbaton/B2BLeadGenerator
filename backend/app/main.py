@@ -190,6 +190,16 @@ def run_prescripteurs_endpoint(limit: int = 40):
         raise HTTPException(status_code=502, detail=f"Ingestion prescripteurs échouée : {exc}")
 
 
+@dev_router.post("/run-annuaires")
+def run_annuaires_endpoint(annuaire: str = "cfai", limit: int = 400):
+    from .ingestion.pipeline import run_annuaires, stats_to_dict
+
+    try:
+        return stats_to_dict(run_annuaires(annuaire=annuaire, limit=limit))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ingestion annuaires échouée : {exc}")
+
+
 app.include_router(dev_router)
 
 

@@ -30,6 +30,18 @@ def hors_cible_in_tiers(rows: List[dict]) -> List[str]:
             if r.get("true_label") == "hors_cible" and r.get("tier") in ("T1", "T2")]
 
 
+def false_merges_annuaire_insta(pairs, truth_same_studio) -> List[Pair]:
+    """Paires (ref_annuaire, ref_insta) EFFECTIVEMENT fusionnées par le pipeline
+    (`stats.soft_merges`) -> celles NON justifiées par la vérité (studios différents)
+    = FAUX MERGES. `truth_same_studio` : ensemble des paires annotées comme le MÊME
+    studio. DOIT être vide (gate dur A2 : 0 faux merge annuaire×insta). PURE.
+
+    N.B. : ne mesure QUE les fusions réellement émises (les non-fusions ne peuvent
+    pas être un faux merge). Le rappel (studios identiques NON fusionnés) est laissé
+    à la doctrine VIDE > FAUX : rater une fusion est acceptable, en inventer une non."""
+    return [p for p in pairs if tuple(p) not in truth_same_studio]
+
+
 def label_confusion(pairs: List[Pair]) -> Dict[str, Dict[str, int]]:
     matrix: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for truth, pred in pairs:

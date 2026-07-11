@@ -7,7 +7,7 @@ Renvoie des statistiques exploitables par la CLI, l'endpoint et l'UI.
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from typing import List, Optional, Set, Tuple
 
@@ -29,11 +29,16 @@ from .base import Connector, LeadCandidate
 from .bodacc import BodaccConnector
 from .chr_classifier import classify
 from .sirene_delta import SireneDeltaConnector
+from .jeunes_studios import JeunesStudiosConnector
+from .annuaires.cfai import CfaiConnector
+from .annuaires.ufdi import UfdiConnector
 from .enrichment.contact_enricher import ContactEnricher
 from .enrichment.naf_classifier import classify_naf
 from .enrichment.sirene import SireneEnricher
 from .enrichment import siret_matcher
-from .enrichment.siret_matcher import MatchResult, match as match_siret
+from .enrichment.siret_matcher import (
+    MatchResult, dirigeant_from_result, match as match_siret, match_architecte,
+)
 from .instagram import (
     discover, scrape_hashtags, scrape_profiles, classify_profiles,
     discover_prescripteurs, classify_prescripteurs, extract_tagged_studios,
@@ -105,6 +110,9 @@ PRESCRIBER_ROUTING = {
 CONNECTORS = {
     "bodacc": BodaccConnector,
     "sirene": SireneDeltaConnector,
+    "jeunes_studios": JeunesStudiosConnector,
+    "cfai": CfaiConnector,
+    "ufdi": UfdiConnector,
 }
 
 
@@ -123,6 +131,9 @@ class IngestStats:
     skipped_dupes: int = 0
     skipped_closed: int = 0
     errors: int = 0
+    # Paires (ref_annuaire, ref_insta) fusionnées par la voie douce nom+ville [A2].
+    # Exposées pour que l'éval T5 mesure le gate 0 faux merge sur des fusions RÉELLES.
+    soft_merges: List[Tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -565,12 +576,142 @@ def _archi_hashtags() -> List[str]:
     return ARCHI_HASHTAGS
 
 
+ANNUAIRE_CONNECTORS = {"cfai": CfaiConnector, "ufdi": UfdiConnector}
+
+
+def run_annuaires(
+    annuaire: str = "cfai",
+    limit: int = 800,
+    max_pages: int = 60,
+    session: Optional[Session] = None,
+    http_fetch=None,
+    matcher=match_architecte,
+    sirene: Optional[SireneEnricher] = None,
+) -> IngestStats:
+    """Source STOCK ANNUAIRE (A2) : CFAI/UFDI -> enrichissement SIREN archi
+    (dirigeant + ancienneté) -> fusion douce nom+ville -> pipeline existant
+    (branche population='architecte' de A1). Upsert source='annuaire', dédup par
+    source_ref (cfai:<id> / ufdi:<slug>). MIROIR de run_prescripteurs. Fail-soft ;
+    commit par candidat (isolation). `http_fetch`/`matcher`/`sirene` injectables."""
+    init_db()
+    if annuaire not in ANNUAIRE_CONNECTORS:
+        raise ValueError(f"Annuaire inconnu : {annuaire}. Choix : {list(ANNUAIRE_CONNECTORS)}")
+    own_session = session is None
+    session = session or Session(engine)
+    stats = IngestStats(source="annuaire", mode="annuaires")
+    sirene = sirene or SireneEnricher()
+
+    try:
+        connector = (ANNUAIRE_CONNECTORS[annuaire](http_fetch=http_fetch)
+                     if http_fetch is not None else ANNUAIRE_CONNECTORS[annuaire]())
+        records = connector.fetch(limit=limit, max_pages=max_pages)
+        stats.fetched = len(records)
+        stats.total_available = getattr(connector, "last_total_count", 0) or 0
+        stats.truncated = stats.total_available > stats.fetched
+        candidates = connector.to_candidates(records)
+        seen_refs: set = set()
+
+        for cand in candidates:
+            try:
+                # Enrichissement SIREN archi (dirigeant + ancienneté) — fail-soft.
+                postal = None
+                m = re.search(r"\b(\d{5})\b", cand.address or "")
+                if m:
+                    postal = m.group(1)
+                mr = matcher(name=cand.establishment_name, city=cand.city,
+                             postal=postal, website=cand.website)
+                if mr and mr.siren:
+                    cand.siren = mr.siren
+                    cand.siret = cand.siret or mr.siret
+                    cand.naf = cand.naf or mr.naf
+                    cand.siren_match_method = mr.method
+                    cand.siren_match_confidence = mr.confidence
+                    data = sirene.lookup(mr.siren)
+                    if data:
+                        # Le dirigeant du REGISTRE fait autorité (casse propre
+                        # « Prénom Nom », source officielle) et prime sur le nom
+                        # scrapé de l'annuaire (« Prénom NOM » tout capitales).
+                        dm = dirigeant_from_result(data)
+                        if dm:
+                            cand.decision_maker = dm
+                        created = _ymd((data.get("siege") or {}).get("date_creation")
+                                       or data.get("date_creation")
+                                       or mr.date_creation)
+                        cand.activity_start_date = cand.activity_start_date or created
+                _process_candidate(session, cand, stats, seen_refs, enricher=None)
+                session.commit()
+            except Exception:
+                stats.errors += 1
+                session.rollback()
+        session.commit()
+    finally:
+        if own_session:
+            session.close()
+
+    return stats
+
+
 def _source_cursor(session: Session, source: str) -> Optional[date]:
     """Date de détection la plus récente déjà ingérée pour cette source."""
     rows = session.exec(
         select(Opportunity.detection_date).where(Opportunity.source == source)
     ).all()
     return max(rows) if rows else None
+
+
+def _corroborates(cand: LeadCandidate, opp: Opportunity) -> bool:
+    """Au moins UN signal secondaire commun entre le lead annuaire et la fiche
+    existante : même domaine PROPRE de site (hôtes mutualisés exclus par _domain),
+    même NUMÉRO DE VOIE, ou même dirigeant normalisé. Garde-fou anti-homonyme
+    fortuit de la fusion douce (A2). PURE-ish.
+
+    NB géo : on exige le numéro de voie, PAS le seul code postal. _soft_dedup_
+    architecte impose déjà des tokens de ville identiques ; or dans une commune à
+    CP unique, même-ville ⟹ même-CP mécaniquement — le CP n'apporte alors aucune
+    information indépendante (deux studios distincts, même nom, même commune,
+    rues différentes fusionneraient à tort). Le numéro de voie discrimine ces
+    adresses. VIDE > FAUX."""
+    from .enrichment.siret_matcher import _domain, street_number
+    dc, do = _domain(cand.website), _domain(opp.website)
+    if dc and dc == do:
+        return True
+    nc, no = street_number(cand.address), street_number(opp.address)
+    if nc and nc == no:
+        return True
+
+    def _dm(x: Optional[str]) -> str:
+        return re.sub(r"[^a-z0-9]", "", (x or "").lower())
+
+    if cand.decision_maker and opp.decision_maker and _dm(cand.decision_maker) == _dm(opp.decision_maker):
+        return True
+    return False
+
+
+def _soft_dedup_architecte(session: Session, cand: LeadCandidate) -> Optional[Opportunity]:
+    """Fusion douce nom+ville pour la population architecte (A2). Cherche une
+    Opportunity architecte d'une AUTRE source, même nom normalisé ET même ville
+    normalisée. Le nom+ville est NÉCESSAIRE mais PAS SUFFISANT : il faut AUSSI une
+    corroboration (`_corroborates`) pour écarter l'homonyme fortuit (deux studios
+    distincts au même nom+ville). Exactement 1 candidat corroboré -> la renvoie ;
+    0, >=2, ou aucune corroboration -> None (jamais de faux merge : vide/2 fiches >
+    mauvaise fusion). DB seule, aucun réseau."""
+    from .enrichment.siret_matcher import _tokens, _city_tokens
+    want_name = _tokens(cand.establishment_name)
+    want_city = _city_tokens(cand.city)
+    if not want_name or not want_city:
+        return None
+    rows = session.exec(
+        select(Opportunity).where(
+            Opportunity.population == "architecte",
+            Opportunity.source != cand.source,
+        )
+    ).all()
+    hits = [o for o in rows
+            if _tokens(o.establishment_name) == want_name
+            and _city_tokens(o.city) == want_city]
+    if len(hits) != 1:
+        return None
+    return hits[0] if _corroborates(cand, hits[0]) else None
 
 
 def _reset_source(session: Session, source: str) -> None:
@@ -589,7 +730,11 @@ CORROBORATION_TAG = "corroboré registre × instagram"
 
 # Libellé Signal par source — réutilisé par la fusion cross-source et par le
 # garde-fou anti-duplication (Signal déjà posé pour cette provenance).
-SOURCE_LABELS = {"bodacc": "BODACC", "instagram": "Instagram", "sirene": "Sirene (délta)"}
+SOURCE_LABELS = {
+    "bodacc": "BODACC", "instagram": "Instagram", "sirene": "Sirene (délta)",
+    "annuaire": "Annuaire", "jeunes_studios": "Sirene (jeunes studios)",
+    "cfai": "CFAI", "ufdi": "UFDI",
+}
 
 
 def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate) -> None:
@@ -619,7 +764,13 @@ def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate
     # l'une des deux sources ; une fusion BODACC×Sirene (deux registres) n'est
     # pas une corroboration "registre × instagram" — et ce libellé est
     # score-bearing (famille de signal inconnue = +1 en scoring).
-    if "instagram" in (opp.source, cand.source) and CORROBORATION_TAG not in sigs:
+    # Exclusion source 'annuaire' [A2] : un annuaire n'est pas un registre ; le
+    # libellé « corroboré registre × instagram » y serait sémantiquement faux ET
+    # fausserait le score archi (famille +1). CHR/A1 (jamais de source annuaire)
+    # sont bit-à-bit inchangés.
+    if ("instagram" in (opp.source, cand.source)
+            and "annuaire" not in (opp.source, cand.source)
+            and CORROBORATION_TAG not in sigs):
         sigs.append(CORROBORATION_TAG)
     opp.secondary_signals = sigs
     channel = recommend_channel(
@@ -794,6 +945,34 @@ def _process_candidate(
         stats.updated += 1
         return
 
+    # FUSION DOUCE NOM+VILLE [A2] : un lead ANNUAIRE entrant qui désigne le même
+    # studio qu'une fiche Instagram/délta existante (dont les studios Insta n'ont
+    # PAS de SIREN -> pas de fusion SIREN possible) est réconcilié par nom+ville.
+    # Asymétrique (seul l'annuaire entrant déclenche) -> run_prescripteurs (A1)
+    # bit-à-bit identique. Conservateur : exactement 1 fiche corroborée sinon rien.
+    if existing is None and corroborated is None and cand.source == "annuaire":
+        soft = _soft_dedup_architecte(session, cand)
+        if soft is not None:
+            label = SOURCE_LABELS.get(cand.source, cand.source)
+            already = session.exec(
+                select(Signal).where(
+                    Signal.opportunity_id == soft.id,
+                    Signal.source == label,
+                    Signal.signal_type == cand.main_signal,
+                )
+            ).first()
+            if already is not None:
+                return
+            # Téléphone UFDI (data-numero) : sans ceci, il serait perdu dans le
+            # cas fusion (_merge_corroboration ne touche pas au phone).
+            if cand.raw.get("phone"):
+                soft.phone = soft.phone or cand.raw["phone"]
+            _merge_corroboration(session, soft, cand)
+            # Trace de la fusion réelle -> alimente le gate 0 faux merge (T5).
+            stats.soft_merges.append((cand.source_ref, soft.source_ref))
+            stats.updated += 1
+            return
+
     if existing:
         sigs = list(cand.secondary_signals or [])
         if CORROBORATION_TAG in (existing.secondary_signals or []) and CORROBORATION_TAG not in sigs:
@@ -845,6 +1024,10 @@ def _process_candidate(
             existing.extra_emails = cand.extra_emails
         if cand.source == "instagram" and (cand.email or cand.website or cand.address):
             existing.contact_confidence = "haute"
+        # Téléphone exposé en clair par l'annuaire (UFDI data-numero) — ne comble
+        # que si vide, ne l'écrase jamais.
+        if cand.source == "annuaire" and cand.raw.get("phone"):
+            existing.phone = existing.phone or cand.raw["phone"]
         # Rafraîchir le label de cycle de vie (un opening peut devenir established
         # à un run ultérieur, ou l'inverse) — ne pas écraser par None (BODACC).
         existing.lifecycle_label = cand.lifecycle_label or existing.lifecycle_label
@@ -905,9 +1088,16 @@ def _process_candidate(
         website=cand.website,
         extra_addresses=cand.extra_addresses,
         extra_emails=cand.extra_emails,
-        # Contact issu du profil Insta (adresse business / email déclarés) = fiable.
+        # Contact fiable = affiché sans "à trouver". Deux sources autoritatives :
+        #  - profil Insta (adresse business / email déclarés) ;
+        #  - annuaire pro (téléphone UFDI `data-numero` / email CFAI `mailto:` publiés
+        #    par le membre lui-même dans son propre annuaire → natif, pas d'inférence).
         contact_confidence=(
-            "haute" if cand.source == "instagram" and (cand.email or cand.website or cand.address)
+            "haute" if (
+                (cand.source == "instagram" and (cand.email or cand.website or cand.address))
+                or (cand.source == "annuaire"
+                    and (cand.email or cand.website or cand.raw.get("phone")))
+            )
             else None
         ),
         latitude=cand.latitude,
@@ -916,6 +1106,9 @@ def _process_candidate(
         created_at=now,
         updated_at=now,
     )
+    # Téléphone exposé en clair par l'annuaire (UFDI data-numero) -> Opportunity.phone.
+    if cand.source == "annuaire" and cand.raw.get("phone"):
+        opp.phone = cand.raw["phone"]
     session.add(opp)
     session.flush()  # pour récupérer opp.id
 

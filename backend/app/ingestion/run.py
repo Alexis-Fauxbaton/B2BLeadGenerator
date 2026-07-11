@@ -6,6 +6,7 @@ Modes :
   backfill       filet de sécurité : large fenêtre, comble les annonces manquées
   reenrich       passe B : guérit les leads sans NAF via Sirene (sans retaper BODACC)
   prescripteurs  population architectes d'intérieur (A1) : hashtags archi -> juge prescripteur
+  annuaires      population architectes (A2) : stock CFAI/UFDI (--annuaire cfai|ufdi)
 
 Exemples :
     python -m app.ingestion.run --mode window --since 60 --limit 200
@@ -13,10 +14,13 @@ Exemples :
     python -m app.ingestion.run --mode backfill --since 120
     python -m app.ingestion.run --mode reenrich
     python -m app.ingestion.run --mode prescripteurs --limit 40
+    python -m app.ingestion.run --mode annuaires --annuaire cfai --limit 200
+    python -m app.ingestion.run --mode window --source jeunes_studios --since 30 --limit 500
 """
 import argparse
 
 from .pipeline import (
+    run_annuaires,
     run_backfill,
     run_contact_enrich,
     run_incremental,
@@ -43,9 +47,12 @@ def main() -> None:
             "refresh",
             "instagram",
             "prescripteurs",
+            "annuaires",
         ],
     )
     parser.add_argument("--source", default="bodacc", help="Connecteur à utiliser.")
+    parser.add_argument("--annuaire", default="cfai", choices=["cfai", "ufdi"],
+                        help="Annuaire à crawler (mode annuaires).")
     parser.add_argument("--since", type=int, default=90, help="Fenêtre en jours (window/backfill).")
     parser.add_argument("--limit", type=int, default=100, help="Nombre max d'annonces.")
     parser.add_argument(
@@ -76,6 +83,8 @@ def main() -> None:
         stats = run_instagram(limit=args.limit)
     elif args.mode == "prescripteurs":
         stats = run_prescripteurs(limit=args.limit)
+    elif args.mode == "annuaires":
+        stats = run_annuaires(annuaire=args.annuaire, limit=args.limit)
     elif args.mode == "contact":
         stats = run_contact_enrich(source=args.source)
     elif args.mode == "incremental":

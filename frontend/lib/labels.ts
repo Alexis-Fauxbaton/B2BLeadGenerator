@@ -103,6 +103,9 @@ export const SOURCE_LABELS: Record<string, string> = {
   demo: "Démo",
   bodacc: "BODACC",
   instagram: "Instagram",
+  // Population architectes (A2).
+  annuaire: "Annuaire",
+  jeunes_studios: "Jeune studio",
 };
 
 // Libellés FR des labels d'éval (jeu de vérité + prédictions du pipeline).
