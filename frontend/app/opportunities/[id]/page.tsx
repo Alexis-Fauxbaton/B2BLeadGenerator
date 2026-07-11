@@ -29,6 +29,7 @@ import {
   STATUS_LABELS,
   STATUS_ORDER,
   formatDate,
+  formatFollowers,
 } from "@/lib/labels";
 import {
   ChannelBadge,
@@ -418,6 +419,10 @@ function ContactBlock({ opp }: { opp: OpportunityRead }) {
   // trouvé) -> toujours affiché, même sans match Places.
   const instaFromSource = Boolean(instaUrl && opp.source === "instagram");
   const fresh = reviewFreshness(opp.review_count);
+  // "les petits comptes répondent plus souvent" — repère à vue d'œil à côté du
+  // handle, format compact fr (335, 1,2k, 16k).
+  const followers = formatFollowers(opp.followers_count);
+  const followersBadge = followers ? `${followers} abonnés` : undefined;
   // Décideur : email affiché seulement si confiance haute.
   const decideurEmailShown = opp.decision_maker_confidence === "haute" && Boolean(opp.decision_maker_email);
 
@@ -444,7 +449,7 @@ function ContactBlock({ opp }: { opp: OpportunityRead }) {
               <ContactRow icon={Mail} href={`mailto:${opp.email}`} text={opp.email} action="Écrire" />
             )}
             {instaUrl && (
-              <ContactRow icon={Instagram} href={instaUrl} text={`@${opp.instagram!.replace(/^@/, "")}`} action="Ouvrir" external />
+              <ContactRow icon={Instagram} href={instaUrl} text={`@${opp.instagram!.replace(/^@/, "")}`} action="Ouvrir" external badge={followersBadge} />
             )}
             {opp.website && (
               <ContactRow icon={Globe} href={opp.website} text={opp.website.replace(/^https?:\/\//, "")} action="Visiter" external />
@@ -508,12 +513,14 @@ function ContactRow({
   text,
   action,
   external,
+  badge,
 }: {
   icon: typeof Phone;
   href: string;
   text: string;
   action: string;
   external?: boolean;
+  badge?: string;
 }) {
   return (
     <a
@@ -526,6 +533,11 @@ function ContactRow({
       <span className="min-w-0 flex-1 truncate text-sm text-slate-700" title={text}>
         {text}
       </span>
+      {badge && (
+        <span className="shrink-0 text-xs tabular-nums text-slate-400" title={badge}>
+          {badge}
+        </span>
+      )}
       <span className="text-xs font-medium text-slate-400 group-hover:text-brand-600">{action}</span>
     </a>
   );

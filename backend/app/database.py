@@ -51,6 +51,7 @@ def _run_lightweight_migrations() -> None:
         "email": "ALTER TABLE opportunities ADD COLUMN email VARCHAR",
         "website": "ALTER TABLE opportunities ADD COLUMN website VARCHAR",
         "instagram": "ALTER TABLE opportunities ADD COLUMN instagram VARCHAR",
+        "followers_count": "ALTER TABLE opportunities ADD COLUMN followers_count INTEGER",
         "facebook": "ALTER TABLE opportunities ADD COLUMN facebook VARCHAR",
         "latitude": "ALTER TABLE opportunities ADD COLUMN latitude REAL",
         "longitude": "ALTER TABLE opportunities ADD COLUMN longitude REAL",

@@ -24,6 +24,7 @@ import {
   LIFECYCLE_LABEL_ORDER_CHR,
   STATUS_LABELS,
   formatDate,
+  formatFollowers,
 } from "@/lib/labels";
 import PageHeader from "@/components/PageHeader";
 import {
@@ -45,18 +46,30 @@ function ContactIcons({ o }: { o: OpportunityList }) {
   // Précision d'abord : un canal n'est "allumé" que si le match est géo-confirmé
   // (haute) — sinon il reste gris ("à trouver").
   const estabTrusted = o.contact_confidence === "haute";
+  const instaOn = Boolean(o.instagram) && (estabTrusted || o.source === "instagram");
   const items: [boolean, typeof Phone, string][] = [
     [Boolean(o.phone) && estabTrusted, Phone, "Téléphone"],
     [Boolean(o.email) && estabTrusted, Mail, "Email"],
-    // Le handle d'un lead source Instagram est fiable (c'est la source).
-    [Boolean(o.instagram) && (estabTrusted || o.source === "instagram"), Instagram, "Instagram"],
     [Boolean(o.website) && estabTrusted, Globe, "Site web"],
     [o.decision_maker_confidence === "haute", User, "Décideur"],
   ];
-  if (!items.some(([on]) => on))
+  const followers = formatFollowers(o.followers_count);
+  if (!instaOn && !items.some(([on]) => on))
     return <span className="text-xs text-slate-300">à trouver</span>;
   return (
     <div className="flex items-center gap-1.5">
+      <Instagram
+        size={15}
+        className={instaOn ? "text-emerald-600" : "text-slate-200"}
+        aria-label={instaOn ? "Instagram" : "Instagram absent"}
+      />
+      {/* Abonnés Instagram : "les petits comptes répondent plus souvent" —
+          repère à vue d'œil, affiché seulement quand le canal est actif. */}
+      {instaOn && followers && (
+        <span className="text-xs tabular-nums text-slate-400" title={`${o.followers_count} abonnés Instagram`}>
+          {followers}
+        </span>
+      )}
       {items.map(([on, Icon, label]) => (
         <Icon
           key={label}

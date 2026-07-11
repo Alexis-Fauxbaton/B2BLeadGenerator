@@ -308,6 +308,7 @@ def classify_profiles(
     for c in candidates:
         prof = profiles.get(c["handle"].lower()) or {}
         has_data = bool(prof.get("latestPosts") or prof.get("postsCount") is not None)
+        c["followers_count"] = prof.get("followersCount")
 
         # 1. Garde-fous déterministes (gratuits, avant tout LLM).
         guard = profile_guards.guard_verdict(prof, today) if has_data else None
@@ -715,6 +716,7 @@ def classify_prescripteurs(
     for c in candidates:
         prof = profiles.get(c["handle"].lower()) or {}
         has_data = bool(prof.get("latestPosts") or prof.get("postsCount") is not None)
+        c["followers_count"] = prof.get("followersCount")
 
         # 1. Gardes déterministes (hors_cible / noise), gratuits.
         guard = prescriber_guards.guard_prescripteur(prof, today) if has_data else None

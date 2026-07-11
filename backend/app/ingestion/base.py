@@ -49,6 +49,7 @@ class LeadCandidate:
     dirigeants: List[str] = field(default_factory=list)
     establishment_type: Optional[str] = None
     instagram: Optional[str] = None  # handle (source Instagram-first)
+    followers_count: Optional[int] = None  # abonnés Instagram (profil Apify)
     classification_text: str = ""
     # Identifiants / enrichissement
     siren: Optional[str] = None

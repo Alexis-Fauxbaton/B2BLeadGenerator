@@ -30,6 +30,7 @@ export interface OpportunityList {
   email: string | null;
   website: string | null;
   instagram: string | null;
+  followers_count: number | null;
   facebook: string | null;
   latitude: number | null;
   longitude: number | null;

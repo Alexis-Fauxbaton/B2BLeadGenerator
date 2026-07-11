@@ -43,7 +43,7 @@ export default function DashboardPage() {
     <>
       <PageHeader
         title="Dashboard"
-        subtitle="Vue d'ensemble de vos opportunités CHR"
+        subtitle="Vue d'ensemble de vos opportunités"
       />
 
       <div className="space-y-6 p-8">

@@ -77,6 +77,20 @@ export function formatDate(value: string | null | undefined): string {
   }
 }
 
+// Format compact fr des abonnés Instagram : 335, 1,2k, 16k, 1,1M.
+// "les petits comptes répondent plus souvent" -> affiché à côté du handle
+// pour un repérage à vue d'œil dans la liste comme sur la fiche détail.
+export function formatFollowers(n: number | null | undefined): string | null {
+  if (n === null || n === undefined) return null;
+  if (n < 1000) return `${n}`;
+  if (n < 1_000_000) {
+    const k = n / 1000;
+    return `${k < 10 ? k.toFixed(1).replace(".", ",").replace(",0", "") : Math.round(k)}k`;
+  }
+  const m = n / 1_000_000;
+  return `${m < 10 ? m.toFixed(1).replace(".", ",").replace(",0", "") : Math.round(m)}M`;
+}
+
 export const ACTION_LABELS: Record<string, string> = {
   message_genere: "Messages générés",
   statut_change: "Changement de statut",

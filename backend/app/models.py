@@ -122,6 +122,10 @@ class Opportunity(SQLModel, table=True):
     email: Optional[str] = None
     website: Optional[str] = None
     instagram: Optional[str] = None
+    # Nb d'abonnés Instagram au moment du scrape (profil Apify) : proxy de
+    # taille de compte ("les petits comptes répondent plus souvent"). NULL =
+    # inconnu (pas de profil Insta / pas encore scrapé).
+    followers_count: Optional[int] = None
     facebook: Optional[str] = None
     # Contacts multiples (ex. profil Insta d'un groupe : plusieurs adresses/emails).
     # Le principal est dans address/email ; ceci = les autres.

@@ -405,6 +405,7 @@ def run_instagram(
                         classification_text=c["name"],
                         establishment_type=c["type"],  # pré-classé CHR à la découverte
                         instagram=c["handle"],
+                        followers_count=c.get("followers_count"),
                         siren=(m.siren if m else None),
                         naf=(m.naf if m else None),
                         siret=(m.siret if m else None),
@@ -535,6 +536,7 @@ def run_prescripteurs(
                         classification_text=c["name"],
                         establishment_type="architecte d'intérieur",
                         instagram=c["handle"],
+                        followers_count=c.get("followers_count"),
                         proof_text=proof_text or "",
                         proof_url=proof_url,
                     )
@@ -599,6 +601,7 @@ def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate
     opp.email = opp.email or cand.email
     opp.website = opp.website or cand.website
     opp.instagram = opp.instagram or cand.instagram
+    opp.followers_count = opp.followers_count or cand.followers_count
     opp.naf = opp.naf or cand.naf
     opp.lifecycle_label = opp.lifecycle_label or cand.lifecycle_label
     # Fusion cross-source : ne jamais reclasser la population par une valeur
@@ -830,6 +833,7 @@ def _process_candidate(
         existing.dirigeants = cand.dirigeants
         if cand.instagram:
             existing.instagram = cand.instagram
+        existing.followers_count = cand.followers_count or existing.followers_count
         # Contact enrichi à la source (profil Insta) : email/site/adresses multiples.
         if cand.email:
             existing.email = cand.email
@@ -894,6 +898,7 @@ def _process_candidate(
         siren_match_method=cand.siren_match_method,
         siren_match_confidence=cand.siren_match_confidence,
         instagram=cand.instagram,
+        followers_count=cand.followers_count,
         lifecycle_label=cand.lifecycle_label,
         population=cand.population,
         email=cand.email,

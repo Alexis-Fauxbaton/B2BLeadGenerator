@@ -83,6 +83,7 @@ class OpportunityList(OpportunityBase):
     email: Optional[str] = None
     website: Optional[str] = None
     instagram: Optional[str] = None
+    followers_count: Optional[int] = None
     facebook: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
