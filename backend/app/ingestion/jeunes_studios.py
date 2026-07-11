@@ -9,6 +9,7 @@ anti-bruit 74.10Z (design graphique). Flux faible priorité -> lifecycle 'unknow
 PAS de tier. SIREN/dirigeant/ancienneté NATIFS (aucun matcher requis)."""
 from __future__ import annotations
 
+import re
 import unicodedata
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
@@ -19,12 +20,42 @@ from .sirene_delta import IDF_CP_PREFIXES, _address, _best_name, _nd, _ymd
 
 ARCHI_NAF_CODES = ["71.11Z", "74.10Z"]
 
-# Mots-clés de qualification sur la dénomination (sonde #9, rendement 28 % visible).
-QUALIF_KEYWORDS = ("interieur", "design", "studio", "agencement", "deco",
-                   "archi", "atelier", "concept", "home", "espace")
-# Garde négatif : le NAF 74.10Z couvre le design graphique/produit (bruit adjacent).
-NEG_KEYWORDS = ("graphique", "graphic", "graphisme", "web", "ux", "ui",
-                "packaging", "motion")
+# --- Filtre de qualification RESSERRÉ (calibré sur le GT stock, doctrine
+#     VIDE > FAUX ; gate GT initial échoué : précision_sûrs 68,9 % < 70 %). ---
+#
+# MARQUEURS INTÉRIEUR : signalent la conception d'ESPACES DE VIE (par opposition
+# au design produit / graphique / industriel, à l'événementiel, au jeu vidéo…).
+# SEUL un marqueur autorise la qualification -- un token FAIBLE présent seul
+# (design, studio, atelier, deco…) est indiscernable d'un faux-ami AU NOM SEUL
+# (« GARRIGOS DESIGN » [packaging] ~= « MATHILDE DESIGN » [archi]) -> rejeté.
+INTERIOR_MARKERS = ("interieur", "home", "espace", "archi")
+
+# Tokens FAIBLES (mots métier ambivalents) : conservés pour documentation/tests.
+# Règle effective = « un MARQUEUR INTÉRIEUR doit co-occurrer », donc un token
+# faible SEUL ne qualifie jamais.
+WEAK_TOKENS = ("design", "studio", "atelier", "deco", "concept")
+
+# Gardes NÉGATIVES DURES (sous-chaîne) : métiers adjacents (souvent NAF 74.10Z
+# « design spécialisé ») qui NE SONT PAS de l'archi d'intérieur. Rejet même si
+# un marqueur est présent (VIDE > FAUX).
+HARD_NEG = (
+    "graphique", "graphisme", "graphic", "packaging", "motion",   # design graphique/produit
+    "branding",                                                   # identité de marque
+    "enseigne", "signaletique", "covering",                       # enseignes/signalétique
+    "evenement", "mariage", "fleur", "floral",                    # événementiel/floral
+    "maroquinerie",                                               # maroquinerie
+    "illustration", "communication",                             # illustration/agence com
+    "nautique", "yacht",                                         # nautisme/yachting
+    "gaming", "jeu video", "jeux video",                         # jeu vidéo
+)
+
+# Gardes négatives à FRONTIÈRE DE MOT (tokens courts ambigus en sous-chaîne :
+# « AUTOMNE » ne doit PAS matcher « auto », « MACOM » ne doit PAS matcher « com »).
+WORD_NEG = ("web", "ux", "ui", "com", "auto", "moto", "jeu", "game")
+
+# Rétro-compatibilité : anciens exports (mots-clés positifs = marqueurs + faibles).
+QUALIF_KEYWORDS = INTERIOR_MARKERS + WEAK_TOKENS
+NEG_KEYWORDS = HARD_NEG
 
 
 def _norm(text: Optional[str]) -> str:
@@ -33,14 +64,27 @@ def _norm(text: Optional[str]) -> str:
 
 
 def qualifies(name: Optional[str]) -> bool:
-    """True si la dénomination porte un mot-clé métier ET aucun mot-clé négatif.
-    Vide / [ND] -> False (injoignable ET inqualifiable). PURE."""
+    """True si la dénomination désigne de l'ARCHI/DÉCORATION D'INTÉRIEUR.
+
+    Filtre RESSERRÉ (calibré GT stock, doctrine VIDE > FAUX) :
+      1. vide / [ND] -> False (injoignable ET inqualifiable) ;
+      2. garde négative dure (design graphique/produit, enseignes, événementiel,
+         maroquinerie, jeu vidéo, com, nautisme, illustration…) -> False ;
+      3. « agencement » SANS « interieur » -> False (agenceur/menuiserie) ;
+      4. sinon True SEULEMENT si un MARQUEUR INTÉRIEUR co-occurre
+         (interieur / home / espace / archi) -- un token faible seul
+         (design, studio, atelier, deco…) NE qualifie PAS.
+    PURE."""
     n = _norm(name)
     if not n or n == "[nd]":
         return False
-    if any(neg in n for neg in NEG_KEYWORDS):
+    if any(neg in n for neg in HARD_NEG):
         return False
-    return any(kw in n for kw in QUALIF_KEYWORDS)
+    if any(re.search(r"\b" + w + r"\b", n) for w in WORD_NEG):
+        return False
+    if "agencement" in n and "interieur" not in n:
+        return False
+    return any(m in n for m in INTERIOR_MARKERS)
 
 
 def map_jeune_studio(etab: Dict[str, Any], today: date) -> Optional[LeadCandidate]:

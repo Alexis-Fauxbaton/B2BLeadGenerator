@@ -33,7 +33,7 @@ def test_run_places_creates_leads_phone_and_moyenne(monkeypatch, tmp_path):
         served["n"] += 1
         if served["n"] == 1:  # 1re requête ville -> 2 fiches archi-valides
             return {"places": [_place("aa", "Atelier Interieur Nord"),
-                               _place("bb", "Studio Deco Sud")],
+                               _place("bb", "Studio Deco Interieur Sud")],
                     "nextPageToken": None}
         return {"places": [], "nextPageToken": None}  # 2e requête ville -> vide
 
@@ -62,7 +62,7 @@ def test_run_places_merges_into_muted_insta_and_fills_phone(monkeypatch, tmp_pat
         # Studio Insta existant SANS téléphone, avec un site (support de corroboration).
         _process_candidate(s, LeadCandidate(
             source="instagram", source_ref="studio_lumen",
-            establishment_name="Studio Lumen", city="Paris", address="",
+            establishment_name="Studio Lumen Interieur", city="Paris", address="",
             website="https://studiolumen.fr",
             main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
             establishment_type="architecte d'intérieur", population="architecte"),
@@ -72,7 +72,7 @@ def test_run_places_merges_into_muted_insta_and_fills_phone(monkeypatch, tmp_pat
         def fake_post(url, headers, json):
             # Une fiche Places même studio : même nom+ville, MÊME domaine, téléphone.
             return {"places": [{
-                "id": "gp1", "displayName": {"text": "Studio Lumen"},
+                "id": "gp1", "displayName": {"text": "Studio Lumen Interieur"},
                 "formattedAddress": "3 rue de Paris 75001 Paris",
                 "nationalPhoneNumber": "01 44 55 66 77",
                 "websiteUri": "https://studiolumen.fr",

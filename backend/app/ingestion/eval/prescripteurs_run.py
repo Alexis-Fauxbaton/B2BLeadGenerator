@@ -248,7 +248,7 @@ def run_cross_source_gate() -> dict:
     # téléphone ni site (le stock INSEE n'en porte pas -> aucun signal fort).
     etab_meridien = {
         "siret": "33333333300033", "siren": "333333333",
-        "uniteLegale": {"denominationUniteLegale": "STUDIO MERIDIEN"},
+        "uniteLegale": {"denominationUniteLegale": "STUDIO MERIDIEN INTERIEUR"},
         "periodesEtablissement": [{"etatAdministratifEtablissement": "A",
                                    "activitePrincipaleEtablissement": "74.10Z"}],
         "dateCreationEtablissement": "2010-01-01",
@@ -274,12 +274,12 @@ def run_cross_source_gate() -> dict:
         # Balayage Places : 2 fiches (la ville de balayage VILLES_FR[0] = Paris ->
         # les candidats Places portent city='Paris', aligné sur les fixtures).
         return {"places": [
-            {"id": "lumen", "displayName": {"text": "Atelier Lumen"},
+            {"id": "lumen", "displayName": {"text": "Atelier Lumen Interieur"},
              "formattedAddress": "3 rue X 75001 Paris",
              "nationalPhoneNumber": "01 11 22 33 44",
              "websiteUri": "https://atelier-lumen.fr",  # MÊME domaine que l'Insta
              "userRatingCount": 5, "primaryType": "interior_designer"},
-            {"id": "meridien", "displayName": {"text": "Studio Meridien"},
+            {"id": "meridien", "displayName": {"text": "Studio Meridien Interieur"},
              "formattedAddress": "10 avenue Beta 75001 Paris",
              "nationalPhoneNumber": "01 55 66 77 88",  # tél différent du stock
              "websiteUri": "https://studio-meridien-place.fr",  # domaine différent
@@ -301,7 +301,7 @@ def run_cross_source_gate() -> dict:
             # (a) fiche Insta muette (sans téléphone) — corroborable par le domaine.
             _process_candidate(s, LeadCandidate(
                 source="instagram", source_ref="atelier_lumen_insta",
-                establishment_name="Atelier Lumen", city="Paris", address="",
+                establishment_name="Atelier Lumen Interieur", city="Paris", address="",
                 website="https://atelier-lumen.fr",
                 main_signal="prescripteur actif", detection_date=today,
                 establishment_type="architecte d'intérieur", population="architecte"),

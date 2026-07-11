@@ -31,9 +31,10 @@ def _etab(naf="71.11Z", enseigne=None, denom=None, prenom=None, nom=None,
 
 
 def test_qualifies_keyword_hit():
-    assert qualifies("STUDIO GHIRIBELLI")
-    assert qualifies("Le Gambit Architecture d'Interieur")
-    assert qualifies("ATELIER EL MANSOURY")
+    # Filtre RESSERRÉ : un MARQUEUR INTÉRIEUR (interieur/home/espace/archi) exigé.
+    assert qualifies("Le Gambit Architecture d'Interieur")  # archi + interieur
+    assert qualifies("STUDIO GHIRIBELLI INTERIEURS")        # studio + marqueur
+    assert qualifies("MAISON DUPONT HOME")                  # marqueur home
 
 
 def test_qualifies_rejects_empty_and_neg_keyword():
@@ -43,8 +44,37 @@ def test_qualifies_rejects_empty_and_neg_keyword():
     assert not qualifies("LEA LAXTON DESIGN GRAPHIQUE")  # 74.10Z graphisme (garde neg)
 
 
+def test_qualifies_weak_token_requires_interior_marker():
+    # Tokens faibles SEULS (design/studio/atelier/deco) -> rejetés (VIDE > FAUX,
+    # indiscernables d'un faux-ami design produit/graphique au nom seul).
+    assert not qualifies("STUDIO GHIRIBELLI")   # studio seul
+    assert not qualifies("ATELIER EL MANSOURY")  # atelier seul
+    assert not qualifies("MANOA DESIGN")         # design seul
+    assert not qualifies("MADAME DECO")          # deco seul
+
+
+def test_qualifies_rejects_gt_false_friends():
+    # Les 14 faux-amis réels du GT stock DOIVENT être rejetés (régression).
+    faux = ["EDDS DESIGN", "STUDIO PANGO", "L'ATELIER ENSEIGNES", "GARRIGOS DESIGN",
+            "MATIERES ET DECORATION", "KALI DESIGN", "MACOM STUDIO", "TUNG DESIGN",
+            "CROCQDESIGN", "FABIEN RONDET DESIGN STUDIO",
+            "BERNARD CANNAVACCIUOLO AGENCEMENTS", "DSF (DESIGN SALVAGGIO FREDERIC)",
+            "ARTYFISS STUDIO", "MAC LAU DESI DESIGN"]
+    for name in faux:
+        assert not qualifies(name), name
+
+
+def test_qualifies_accepts_gt_survivors():
+    # Panel de dénominations SÛRES (archi d'intérieur) du GT qui survivent.
+    surs = ["CECILE GOUGE - ARCHITECTE D INTERIEUR", "STUDIO BABA INTERIEURS",
+            "MARINE HILAIRE ARCHITECTURE D'INTERIEUR", "L'ARCHITECTE D'INTERIEUR",
+            "ELYTE HOME", "BACKHOME", "BL INTERIEUR", "DOROTHEE WALTER ARCHIDECO"]
+    for name in surs:
+        assert qualifies(name), name
+
+
 def test_map_qualified_studio():
-    etab = _etab(denom="MANOA DESIGN", siret="99988877700022", created="2026-06-25")
+    etab = _etab(denom="MANOA DESIGN INTERIEUR", siret="99988877700022", created="2026-06-25")
     c = map_jeune_studio(etab, TODAY)
     assert c is not None
     assert c.source == "jeunes_studios" and c.source_ref == "99988877700022"
@@ -62,7 +92,7 @@ def test_map_personne_physique_sets_decision_maker():
     # Personne physique nommée SANS mot-clé métier -> non qualifiée (sonde #9).
     assert map_jeune_studio(etab, TODAY) is None
     etab2 = _etab(denom=None, prenom="Camille", nom="Durand",
-                  enseigne="STUDIO CAMILLE DESIGN")
+                  enseigne="STUDIO CAMILLE INTERIEURS")
     c = map_jeune_studio(etab2, TODAY)
     assert c is not None and c.decision_maker == "Camille Durand"
 
@@ -86,7 +116,7 @@ def test_connector_fetch_uses_archi_naf_and_no_future(monkeypatch):
         captured["cp"] = cp_prefixes
         if meta is not None:
             meta["total"] = 1625
-        return [_etab(denom="MANOA DESIGN")]
+        return [_etab(denom="MANOA DESIGN INTERIEUR")]
 
     import app.ingestion.jeunes_studios as js
     monkeypatch.setattr(js, "fetch_new_etablissements", fake_fetch_new)
