@@ -225,3 +225,83 @@ def scrape_phone(url: str, max_pages: int = 3, timeout: int = 10) -> Optional[st
         fetched += 1
         collected.append({"is_contact": is_contact, **extract_phones_from_html(html)})
     return choose_phone(collected)
+
+
+# --------------------------------------------------------------------------- #
+# Email + Instagram + Facebook depuis le SITE PROPRE d'un lead (chantier       #
+# enrich_site_contacts). Réutilise les mêmes filtres que ``scrape_contacts``   #
+# (mailto prioritaire / EMAIL_JUNK, INSTA_IGNORE, FB_IGNORE) mais AJOUTE la    #
+# désambiguïsation multi-comptes Instagram : ``scrape_contacts`` ne garde que  #
+# le premier handle trouvé (suffisant pour Places, déjà verrouillé par la     #
+# géo) ; ici le site est la SEULE source, donc plusieurs handles distincts    #
+# sur le site -> VIDE (on ne devine pas lequel est le bon).                   #
+# --------------------------------------------------------------------------- #
+
+def extract_instagram_handles(html: str) -> List[str]:
+    """Handles Instagram distincts d'UNE page, filtrés (``INSTA_IGNORE``),
+    dédupliqués (insensible à la casse, ordre d'apparition conservé).
+    Extraction pure (testable sans réseau)."""
+    html = _NOISE_BLOCK_RE.sub(" ", html)
+    out: List[str] = []
+    seen_lower = set()
+    for m in INSTA_RE.findall(html):
+        low = m.lower()
+        if low in INSTA_IGNORE or low in seen_lower:
+            continue
+        seen_lower.add(low)
+        out.append(m)
+    return out
+
+
+def choose_instagram(pages_handles: List[List[str]]) -> Optional[str]:
+    """Choisit AU PLUS un handle Instagram sur l'ensemble du site (toutes pages
+    confondues), doctrine VIDE > FAUX : si plusieurs handles DISTINCTS
+    apparaissent, on ne sait pas lequel est celui du lead -> vide plutôt qu'un
+    choix arbitraire."""
+    distinct: List[str] = []
+    seen_lower = set()
+    for handles in pages_handles:
+        for h in handles:
+            low = h.lower()
+            if low not in seen_lower:
+                seen_lower.add(low)
+                distinct.append(h)
+    return distinct[0] if len(distinct) == 1 else None
+
+
+def scrape_site_contacts(url: str, max_pages: int = 3, timeout: int = 10) -> Dict[str, Optional[str]]:
+    """Email / Instagram / Facebook depuis le SITE PROPRE d'un lead (home + pages
+    contact/mentions légales). Ne renvoie PAS de téléphone (domaine exclusif de
+    :func:`scrape_phone` / la passe ``enrich_phones``). Fail-soft de bout en
+    bout ; renvoie des champs à None si rien de sûr n'est trouvé."""
+    result: Dict[str, Optional[str]] = {"email": None, "instagram": None, "facebook": None}
+    url = _normalize_url(url)
+    if not url:
+        return result
+
+    site_domain = urlparse(url).netloc.replace("www.", "")
+    pages = [url] + [urljoin(url + "/", p) for p in CONTACT_PATHS]
+
+    fetched = 0
+    insta_per_page: List[List[str]] = []
+    for page in pages:
+        if fetched >= max_pages:
+            break
+        try:
+            resp = requests.get(page, headers=HEADERS, timeout=timeout)
+            if resp.status_code != 200 or "text/html" not in resp.headers.get("content-type", ""):
+                continue
+            html = resp.text[:500_000]
+        except Exception:
+            continue
+        fetched += 1
+
+        clean_html = _NOISE_BLOCK_RE.sub(" ", html)
+        if not result["email"]:
+            result["email"] = _clean_emails(clean_html, site_domain)
+        if not result["facebook"]:
+            result["facebook"] = _first(FB_RE.findall(clean_html), FB_IGNORE)
+        insta_per_page.append(extract_instagram_handles(html))
+
+    result["instagram"] = choose_instagram(insta_per_page)
+    return result

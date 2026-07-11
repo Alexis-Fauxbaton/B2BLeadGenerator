@@ -38,18 +38,9 @@ from ..models import Opportunity
 from ..services.contact_quality import establishment_confidence
 from .enrichment import siret_matcher
 from .enrichment.contact_enricher import ContactEnricher
+from .enrichment.own_site import own_site as _own_site
 from .enrichment.sirene import SireneEnricher
-from .enrichment.url_filter import is_real_website
 from .enrichment.website_scraper import normalize_fr_phone, scrape_phone
-
-# Hôtes qui, EN PLUS de ceux déjà écartés par ``is_real_website``
-# (linktr.ee / facebook / instagram / goo.gl / bit.ly), ne sont PAS le site
-# propre d'un lead : y chercher un téléphone au regex donnerait le numéro de
-# n'importe qui. On n'y va pas (VIDE > FAUX).
-_NON_OWN_SITE = (
-    "tiktok.com", "linkedin.com", "houzz.", "youtube.com", "youtu.be",
-    "twitter.com", "x.com", "pinterest.", "wa.me",
-)
 
 
 @dataclass
@@ -62,18 +53,6 @@ class PhoneStats:
     low_conf: int = 0        # dont confiance « basse » (Places nom-fort non géo)
     none: int = 0            # aucun numéro sûr
     errors: int = 0
-
-
-def _own_site(url: Optional[str]) -> Optional[str]:
-    """URL seulement si c'est le SITE PROPRE du lead. Un profil social / portail
-    (TikTok, LinkedIn, Houzz…) n'est pas son site : on n'y scrape pas de numéro.
-    Réutilise ``is_real_website`` (linktree/FB/IG/raccourcisseurs) et complète."""
-    if not is_real_website(url):
-        return None
-    low = url.lower()
-    if any(host in low for host in _NON_OWN_SITE):
-        return None
-    return url.strip()
 
 
 def _confidence_for(basis: Optional[str]) -> str:
