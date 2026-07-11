@@ -36,6 +36,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Le pager frontend lit le total via cet en-tête : il doit être exposé au
+    # navigateur (sinon masqué par CORS).
+    expose_headers=["X-Total-Count"],
 )
 
 
@@ -198,6 +201,17 @@ def run_annuaires_endpoint(annuaire: str = "cfai", limit: int = 400):
         return stats_to_dict(run_annuaires(annuaire=annuaire, limit=limit))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Ingestion annuaires échouée : {exc}")
+
+
+@dev_router.post("/run-places")
+def run_places_endpoint(cities: int = 100, budget_eur: float = 10.0):
+    """Balayage Google Places (B2) — budget € DUR, reprise mensuelle (checkpoint)."""
+    from .ingestion.pipeline import run_places, stats_to_dict
+
+    try:
+        return stats_to_dict(run_places(cities=cities, budget_eur=budget_eur))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Balayage Places échoué : {exc}")
 
 
 app.include_router(dev_router)

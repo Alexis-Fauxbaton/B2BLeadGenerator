@@ -18,8 +18,8 @@ from typing import Dict, List, Optional
 
 from ..instagram import classify_prescripteurs
 from .prescripteurs_metrics import (
-    LABEL_ORDER, false_merges_annuaire_insta, hors_cible_in_tiers,
-    label_confusion, studio_actif_precision,
+    LABEL_ORDER, false_merges_annuaire_insta, false_merges_cross_source,
+    hors_cible_in_tiers, label_confusion, studio_actif_precision,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -81,8 +81,15 @@ def run_prescripteurs_eval(strict: bool = False, today: Optional[date] = None) -
     # Gate A2 (annuaires) : 0 faux merge annuaire×insta + membres annuaire ->
     # studio_actif. Tourne sur les fixtures LIVRÉES (autonome, offline), toujours.
     annuaire = run_annuaires_gate()
-    gate_false_merge = annuaire["gate_zero_false_merge"]
     gate_annuaire_sa = annuaire["gate_annuaire_studio_actif"]
+
+    # Gate B (cross-source) : 0 faux merge sur les fusions douces des sources de
+    # MASSE (sirene_stock/places), fixture adverse homonyme même CP incluse.
+    # Autonome, offline (api_post/connector factices). Le gate 0 faux merge est
+    # la CONJONCTION annuaire×insta (A2) ET cross-source de masse (B).
+    cross = run_cross_source_gate()
+    gate_false_merge = (annuaire["gate_zero_false_merge"]
+                        and cross["gate_zero_false_merge"])
 
     return {
         "n": len(snapshots), "missing": missing,
@@ -92,6 +99,7 @@ def run_prescripteurs_eval(strict: bool = False, today: Optional[date] = None) -
         "gate_studio_precision": gate_precision,
         "gate_zero_hors_cible_in_tiers": gate_tiers,
         "annuaire": annuaire,
+        "cross_source": cross,
         "gate_zero_false_merge": gate_false_merge,
         "gate_annuaire_studio_actif": gate_annuaire_sa,
         "gates_pass": (gate_precision and gate_tiers
@@ -203,6 +211,126 @@ def run_annuaires_gate() -> dict:
     }
 
 
+def run_cross_source_gate() -> dict:
+    """Gate 0 FAUX MERGE CROSS-SOURCE (B, T6), autonome et OFFLINE.
+
+    Exerce RÉELLEMENT `run_stock` et `run_places` de bout en bout (connecteur/
+    api_post factices, DB mémoire) et consomme les fusions douces RÉELLEMENT
+    émises (`stats.soft_merges`) — jamais court-circuité à True. Mini-jeu :
+      (a) fiche Instagram MUETTE (« Atelier Lumen », Paris, sans téléphone) + un
+          lead **Places** MÊME studio corroboré par le domaine de site -> fusion
+          ATTENDUE (le tél/domaine Places comble l'Insta), annotée « même studio »
+          -> NE DOIT PAS être flaggée ;
+      (b) FIXTURE ADVERSE inter-masse : un lead **sirene_stock** et un lead
+          **places** homonymes (« Studio Meridien », MÊME ville + MÊME CP 75001)
+          mais téléphones/domaines DIFFÉRENTS -> aucune corroboration forte entre
+          deux sources de masse -> NE DOIT PAS fusionner (le CP seul ne suffit
+          pas, décision #11).
+    `truth_same_studio` ne contient QUE le couple légitime (a). Un faux merge de
+    (b) apparaîtrait dans `soft_merges` sans être dans la vérité -> flaggé -> gate
+    ROUGE. Le run réel borné (T6, hors pytest) + l'annotation ÉTENDENT le GT ; ce
+    gate reste autonome."""
+    import os
+    import tempfile
+    from datetime import date as _date
+
+    from sqlmodel import Session, SQLModel, create_engine, select
+
+    from ..base import LeadCandidate
+    from ..pipeline import IngestStats, _process_candidate, run_places, run_stock
+    from ..places_sweep import CityCheckpoint
+    from ..sirene_stock import map_stock_etablissement
+    from ...models import Opportunity
+
+    today = _date(2026, 7, 11)
+
+    # Fixture stock (« Studio Meridien », Paris 75001) — SIREN/NAF natifs, sans
+    # téléphone ni site (le stock INSEE n'en porte pas -> aucun signal fort).
+    etab_meridien = {
+        "siret": "33333333300033", "siren": "333333333",
+        "uniteLegale": {"denominationUniteLegale": "STUDIO MERIDIEN"},
+        "periodesEtablissement": [{"etatAdministratifEtablissement": "A",
+                                   "activitePrincipaleEtablissement": "74.10Z"}],
+        "dateCreationEtablissement": "2010-01-01",
+        "adresseEtablissement": {"codePostalEtablissement": "75001",
+                                 "libelleCommuneEtablissement": "Paris",
+                                 "numeroVoieEtablissement": "10",
+                                 "typeVoieEtablissement": "RUE",
+                                 "libelleVoieEtablissement": "ALPHA"},
+    }
+
+    class _FakeStock:
+        """Connecteur stock factice : sert la seule fixture Meridien (aucun réseau)."""
+        last_total_count = 1
+
+        def fetch(self, **_):  # noqa: ANN003
+            return [etab_meridien]
+
+        def to_candidates(self, records):  # noqa: ANN001
+            return [c for c in (map_stock_etablissement(r, today) for r in records)
+                    if c is not None]
+
+    def _fake_post(url, headers, json):  # noqa: A002, ANN001
+        # Balayage Places : 2 fiches (la ville de balayage VILLES_FR[0] = Paris ->
+        # les candidats Places portent city='Paris', aligné sur les fixtures).
+        return {"places": [
+            {"id": "lumen", "displayName": {"text": "Atelier Lumen"},
+             "formattedAddress": "3 rue X 75001 Paris",
+             "nationalPhoneNumber": "01 11 22 33 44",
+             "websiteUri": "https://atelier-lumen.fr",  # MÊME domaine que l'Insta
+             "userRatingCount": 5, "primaryType": "interior_designer"},
+            {"id": "meridien", "displayName": {"text": "Studio Meridien"},
+             "formattedAddress": "10 avenue Beta 75001 Paris",
+             "nationalPhoneNumber": "01 55 66 77 88",  # tél différent du stock
+             "websiteUri": "https://studio-meridien-place.fr",  # domaine différent
+             "userRatingCount": 8, "primaryType": "interior_designer"},
+        ], "nextPageToken": None}
+
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+
+    truth_same_studio = {("places:lumen", "atelier_lumen_insta")}
+    cp_path = os.path.join(tempfile.mkdtemp(), "cp.json")
+
+    # api_post est injecté -> aucun réseau ; la clé sert juste au garde-fou
+    # `search_places_text` (billed). On restaure l'environnement ensuite.
+    prev_key = os.environ.get("GOOGLE_PLACES_API_KEY")
+    os.environ["GOOGLE_PLACES_API_KEY"] = prev_key or "offline-eval"
+    try:
+        with Session(engine) as s:
+            # (a) fiche Insta muette (sans téléphone) — corroborable par le domaine.
+            _process_candidate(s, LeadCandidate(
+                source="instagram", source_ref="atelier_lumen_insta",
+                establishment_name="Atelier Lumen", city="Paris", address="",
+                website="https://atelier-lumen.fr",
+                main_signal="prescripteur actif", detection_date=today,
+                establishment_type="architecte d'intérieur", population="architecte"),
+                IngestStats(source="instagram"), set(), None)
+            s.commit()
+
+            stock_stats = run_stock(session=s, connector=_FakeStock())
+            places_stats = run_places(
+                cities=1, budget_eur=0.05, max_pages=1, session=s,
+                api_post=_fake_post, checkpoint=CityCheckpoint(path=cp_path))
+
+            merges = list(stock_stats.soft_merges) + list(places_stats.soft_merges)
+            false_merges = false_merges_cross_source(merges, truth_same_studio)
+            rows = s.exec(select(Opportunity).where(
+                Opportunity.population == "architecte")).all()
+    finally:
+        if prev_key is None:
+            os.environ.pop("GOOGLE_PLACES_API_KEY", None)
+        else:
+            os.environ["GOOGLE_PLACES_API_KEY"] = prev_key
+
+    return {
+        "soft_merges": [list(p) for p in merges],
+        "false_merges": [list(p) for p in false_merges],
+        "gate_zero_false_merge": false_merges == [],
+        "architecte_rows_after": len(rows),
+    }
+
+
 def print_report(res: dict) -> None:
     print("=" * 60)
     print("ÉVAL — classification prescripteurs (architectes, A1)")
@@ -228,6 +356,12 @@ def print_report(res: dict) -> None:
         print(f"  FAUX merges (doit être vide) : {ann['false_merges']}")
         print(f"  membres annuaire -> studio_actif : {ann['annuaire_studio_actif']}"
               f"/{ann['annuaire_members']} ({ann['studio_actif_rate']*100:.0f}%)")
+    cross = res.get("cross_source")
+    if cross is not None:
+        print("-" * 60)
+        print("CROSS-SOURCE (B) — gate 0 faux merge sirene_stock/places (fixtures livrées)")
+        print(f"  fusions douces réelles : {cross['soft_merges']}")
+        print(f"  FAUX merges (doit être vide) : {cross['false_merges']}")
     ok = "OK" if res["gates_pass"] else "ÉCHEC"
     print(f"GATES : précision studio_actif>=70% = {res['gate_studio_precision']} | "
           f"0 hors_cible en T1/T2 = {res['gate_zero_hors_cible_in_tiers']} | "

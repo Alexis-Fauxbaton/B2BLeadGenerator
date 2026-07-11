@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import time
 from datetime import date
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
@@ -35,6 +35,23 @@ def build_query(date_from: date, date_to: date, naf_codes: Sequence[str],
     date_part = f"dateCreationEtablissement:[{date_from.isoformat()} TO {date_to.isoformat()}]"
     naf_part = " OR ".join(f"activitePrincipaleEtablissement:{c}" for c in naf_codes)
     parts = [date_part, f"periode({naf_part})"]
+    if cp_prefixes:
+        cp_part = " OR ".join(f"codePostalEtablissement:{p}*" for p in cp_prefixes)
+        parts.append(f"({cp_part})")
+    return " AND ".join(parts)
+
+
+def build_stock_query(naf_codes: Sequence[str],
+                       cp_prefixes: Optional[Sequence[str]] = None) -> str:
+    """Construit le parametre q du STOCK (pure, testable) — [BRIQUE B1].
+
+    Contrairement a `build_query` (delta), AUCUNE fenetre de date : on veut
+    l'integralite du stock actif, pas les creations recentes. Les champs
+    historises (NAF, etat administratif) restent sous `periode(...)` (syntaxe
+    INSEE validee), regroupes dans UN SEUL bloc `periode()`.
+    """
+    naf_part = " OR ".join(f"activitePrincipaleEtablissement:{c}" for c in naf_codes)
+    parts = [f"periode(({naf_part}) AND etatAdministratifEtablissement:A)"]
     if cp_prefixes:
         cp_part = " OR ".join(f"codePostalEtablissement:{p}*" for p in cp_prefixes)
         parts.append(f"({cp_part})")
@@ -92,3 +109,53 @@ def fetch_new_etablissements(
             break
         curseur = suivant
     return out[:limit]
+
+
+def fetch_stock_etablissements(
+    naf_codes: Sequence[str],
+    cp_prefixes: Optional[Sequence[str]] = None,
+    limit: int = 0,
+    cursor: str = "*",
+    fetch: Optional[InseeFetch] = None,
+    meta: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[Dict[str, Any]], str]:
+    """Stock complet (sans fenetre de date), pagination curseur — [BRIQUE B1].
+
+    `limit` borne les enregistrements BRUTS recuperes (pas les qualifies —
+    la qualification a lieu en aval). `limit=0` (defaut) = illimite : le
+    curseur pilote la pagination JUSQU'A EPUISEMENT (`curseurSuivant ==
+    curseur`), sans plafond impose cote client — l'endpoint SIRET INSEE n'a
+    lui-meme aucun plafond de pagination.
+
+    Renvoie `(records, next_cursor)` : `next_cursor` vaut `''` quand le
+    stock est epuise (rien a reprendre), ou le curseur courant si l'appel
+    s'est arrete avant epuisement (limite atteinte ou erreur reseau/API) —
+    permet une reprise multi-jours sur un departement geant.
+    """
+    key = os.getenv("INSEE_API_KEY")
+    if not key:
+        return [], ""
+    fetch = fetch or _http_get
+    headers = {"X-INSEE-Api-Key-Integration": key}
+    q = build_stock_query(naf_codes, cp_prefixes)
+    out: List[Dict[str, Any]] = []
+    curseur = cursor
+    first_page = True
+    while limit <= 0 or len(out) < limit:
+        nombre = _PAGE_SIZE if limit <= 0 else min(_PAGE_SIZE, limit - len(out))
+        data = fetch(SIRET_URL, {"q": q, "nombre": nombre, "curseur": curseur}, headers)
+        header = data.get("header") or {}
+        if header.get("statut") != 200:
+            return out, curseur  # fail-soft : reprise depuis le curseur courant
+        if first_page and meta is not None:
+            meta["total"] = header.get("total")
+            first_page = False
+        etablissements = data.get("etablissements") or []
+        if not etablissements:
+            return out, ""  # page vide : stock epuise
+        out.extend(etablissements)
+        suivant = header.get("curseurSuivant")
+        if not suivant or suivant == curseur:
+            return out, ""  # epuisement du curseur
+        curseur = suivant
+    return out[:limit], curseur  # limite atteinte avant epuisement -> reprise

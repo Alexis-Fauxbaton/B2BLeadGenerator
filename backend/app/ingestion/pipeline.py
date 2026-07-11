@@ -30,6 +30,8 @@ from .bodacc import BodaccConnector
 from .chr_classifier import classify
 from .sirene_delta import SireneDeltaConnector
 from .jeunes_studios import JeunesStudiosConnector
+from .sirene_stock import SireneStockConnector
+from .places_sweep import PlacesArchiConnector
 from .annuaires.cfai import CfaiConnector
 from .annuaires.ufdi import UfdiConnector
 from .enrichment.contact_enricher import ContactEnricher
@@ -111,9 +113,26 @@ CONNECTORS = {
     "bodacc": BodaccConnector,
     "sirene": SireneDeltaConnector,
     "jeunes_studios": JeunesStudiosConnector,
+    "sirene_stock": SireneStockConnector,
+    "places": PlacesArchiConnector,
     "cfai": CfaiConnector,
     "ufdi": UfdiConnector,
 }
+
+# Sources dont un lead ENTRANT déclenche la fusion douce nom+ville (généralisation
+# du soft-merge A2 aux briques de masse B1/B2). La fusion reste ASYMÉTRIQUE : un
+# lead instagram/bodacc/CHR entrant ne la déclenche jamais (A1/CHR bit-à-bit
+# intacts). Décision #11.
+SOFT_DEDUP_SOURCES = {"annuaire", "sirene_stock", "places"}
+
+# Sources de MASSE sans identité forte partagée (ni SIREN commun garanti, ni
+# ancrage annuaire/insta) : `sirene_stock` n'a ni téléphone ni site, `places` n'a
+# pas de SIREN. Un merge ENTRE DEUX de ces sources ne peut PAS reposer sur le géo
+# seul (numéro de voie / dirigeant) — dans un CP dense, deux studios homonymes
+# distincts fusionneraient à tort. On exige alors une corroboration FORTE
+# (téléphone OU domaine identique). Le géo reste toléré si un côté est
+# annuaire/insta/registre. Décision #11.
+MASS_SOURCES = {"sirene_stock", "places"}
 
 
 @dataclass
@@ -134,6 +153,8 @@ class IngestStats:
     # Paires (ref_annuaire, ref_insta) fusionnées par la voie douce nom+ville [A2].
     # Exposées pour que l'éval T5 mesure le gate 0 faux merge sur des fusions RÉELLES.
     soft_merges: List[Tuple[str, str]] = field(default_factory=list)
+    # Budget € dépensé (mode places uniquement — SKU Text Search Enterprise).
+    spend_eur: float = 0.0
 
 
 @dataclass
@@ -651,6 +672,104 @@ def run_annuaires(
     return stats
 
 
+def run_stock(
+    departments: Optional[List[str]] = None,
+    limit: int = 0,
+    cursor: str = "*",
+    session: Optional[Session] = None,
+    connector: Optional[SireneStockConnector] = None,
+) -> IngestStats:
+    """Source STOCK Sirene (B1) : `SireneStockConnector` (74.10Z qualifié +
+    71.11Z co-occurrence stricte) -> pipeline existant (branche
+    population='architecte'). MIROIR de `run_annuaires` : commit PAR candidat
+    (isolation — un record INSEE malformé n'annule JAMAIS les inserts précédents
+    du run, contrairement au single-commit de `run_ingestion` fatal à l'échelle
+    stock ~28k). `limit=0` = curseur INSEE jusqu'à épuisement (borne les BRUTS,
+    pas les qualifiés). Aucun enricher (SIREN/dirigeant NATIFS, is_architecte
+    court-circuite l'enrichisseur -> aucun coût réseau par candidat). Index de
+    dédup préchargé UNE fois (perf, décision #11). `connector` injectable (tests
+    sans réseau)."""
+    init_db()
+    own_session = session is None
+    session = session or Session(engine)
+    stats = IngestStats(source="sirene_stock", mode="stock")
+
+    try:
+        connector = connector or SireneStockConnector()
+        records = connector.fetch(departments=departments, limit=limit, cursor=cursor)
+        stats.fetched = len(records)
+        stats.total_available = getattr(connector, "last_total_count", 0) or 0
+        stats.truncated = stats.total_available > stats.fetched
+        candidates = connector.to_candidates(records)
+        seen_refs: set = set()
+        dedup_index = _build_dedup_index(session, "sirene_stock")
+
+        for cand in candidates:
+            try:
+                _process_candidate(session, cand, stats, seen_refs,
+                                   enricher=None, dedup_index=dedup_index)
+                session.commit()
+            except Exception:
+                stats.errors += 1
+                session.rollback()
+        session.commit()
+    finally:
+        if own_session:
+            session.close()
+
+    return stats
+
+
+def run_places(
+    cities: int = 100,
+    budget_eur: float = 10.0,
+    max_pages: int = 3,
+    session: Optional[Session] = None,
+    api_post=None,
+    checkpoint=None,
+    connector: Optional[PlacesArchiConnector] = None,
+) -> IngestStats:
+    """Source BALAYAGE Google Places (B2) : `PlacesArchiConnector` (Text Search
+    20/appel, budget € dur, reprise mensuelle) -> pipeline existant (branche
+    population='architecte'). MIROIR de `run_annuaires` : commit PAR candidat.
+    Aucun enricher (is_architecte). Index de dédup préchargé UNE fois (perf).
+    `contact_confidence='moyenne'` posé à la création (décision #9/#10). Le
+    téléphone Places (raw['phone']) comble les fiches Insta muettes (exigence 2)
+    via la fusion douce. Expose `stats.spend_eur` (budget consommé).
+    `api_post`/`checkpoint`/`connector` injectables (tests sans réseau)."""
+    init_db()
+    own_session = session is None
+    session = session or Session(engine)
+    stats = IngestStats(source="places", mode="places")
+
+    try:
+        connector = connector or PlacesArchiConnector()
+        records = connector.fetch(cities=cities, budget_eur=budget_eur,
+                                  max_pages=max_pages, api_post=api_post,
+                                  checkpoint=checkpoint)
+        stats.fetched = len(records)
+        stats.total_available = getattr(connector, "last_total_count", 0) or 0
+        stats.spend_eur = getattr(connector, "spend_eur", 0.0) or 0.0
+        candidates = connector.to_candidates(records)
+        seen_refs: set = set()
+        dedup_index = _build_dedup_index(session, "places")
+
+        for cand in candidates:
+            try:
+                _process_candidate(session, cand, stats, seen_refs,
+                                   enricher=None, dedup_index=dedup_index)
+                session.commit()
+            except Exception:
+                stats.errors += 1
+                session.rollback()
+        session.commit()
+    finally:
+        if own_session:
+            session.close()
+
+    return stats
+
+
 def _source_cursor(session: Session, source: str) -> Optional[date]:
     """Date de détection la plus récente déjà ingérée pour cette source."""
     rows = session.exec(
@@ -659,22 +778,45 @@ def _source_cursor(session: Session, source: str) -> Optional[date]:
     return max(rows) if rows else None
 
 
+def _norm_phone(phone: Optional[str]) -> str:
+    """Téléphone réduit à ses chiffres (comparaison robuste aux formats
+    « 01 02 03 04 05 » / « 01.02.03.04.05 » / « +331... »). '' si vide."""
+    return re.sub(r"\D", "", phone) if phone else ""
+
+
 def _corroborates(cand: LeadCandidate, opp: Opportunity) -> bool:
-    """Au moins UN signal secondaire commun entre le lead annuaire et la fiche
-    existante : même domaine PROPRE de site (hôtes mutualisés exclus par _domain),
-    même NUMÉRO DE VOIE, ou même dirigeant normalisé. Garde-fou anti-homonyme
-    fortuit de la fusion douce (A2). PURE-ish.
+    """Au moins UN signal FORT commun entre le lead entrant et la fiche existante.
+    Garde-fou anti-homonyme fortuit de la fusion douce. PURE-ish.
+
+    Signaux FORTS (toujours acceptés) :
+      - même TÉLÉPHONE normalisé (`cand.raw['phone']` — Places/UFDI le portent dans
+        raw ; le côté fiche = `opp.phone`) — exigence 2 (le tél Places comble l'Insta) ;
+      - même domaine PROPRE de site (hôtes mutualisés exclus par _domain).
+
+    Signaux GÉO (numéro de voie, dirigeant) : acceptés UNIQUEMENT si au moins un
+    des deux côtés est annuaire/insta/registre. CORROBORATION FORTE inter-masse
+    (décision #11) : quand NI `cand` NI `opp` n'est de ce type (cas
+    `sirene_stock`<->`places`), le géo seul ne suffit PAS (deux studios homonymes
+    d'un CP dense fusionneraient à tort) -> seul téléphone/domaine corrobore.
 
     NB géo : on exige le numéro de voie, PAS le seul code postal. _soft_dedup_
-    architecte impose déjà des tokens de ville identiques ; or dans une commune à
-    CP unique, même-ville ⟹ même-CP mécaniquement — le CP n'apporte alors aucune
-    information indépendante (deux studios distincts, même nom, même commune,
-    rues différentes fusionneraient à tort). Le numéro de voie discrimine ces
-    adresses. VIDE > FAUX."""
+    architecte impose déjà des tokens de ville identiques ; dans une commune à CP
+    unique, même-ville ⟹ même-CP — le CP n'apporte alors aucune information
+    indépendante. Le numéro de voie discrimine ces adresses. VIDE > FAUX."""
     from .enrichment.siret_matcher import _domain, street_number
+    # Signaux FORTS — valables même entre deux sources de masse.
+    pc, po = _norm_phone(cand.raw.get("phone")), _norm_phone(opp.phone)
+    if pc and pc == po:
+        return True
     dc, do = _domain(cand.website), _domain(opp.website)
     if dc and dc == do:
         return True
+
+    # Entre DEUX sources de masse (aucune annuaire/insta/registre), le géo ne
+    # corrobore pas : on s'arrête aux signaux forts ci-dessus (anti-homonyme CP).
+    if cand.source in MASS_SOURCES and opp.source in MASS_SOURCES:
+        return False
+
     nc, no = street_number(cand.address), street_number(opp.address)
     if nc and nc == no:
         return True
@@ -687,19 +829,69 @@ def _corroborates(cand: LeadCandidate, opp: Opportunity) -> bool:
     return False
 
 
-def _soft_dedup_architecte(session: Session, cand: LeadCandidate) -> Optional[Opportunity]:
-    """Fusion douce nom+ville pour la population architecte (A2). Cherche une
-    Opportunity architecte d'une AUTRE source, même nom normalisé ET même ville
-    normalisée. Le nom+ville est NÉCESSAIRE mais PAS SUFFISANT : il faut AUSSI une
-    corroboration (`_corroborates`) pour écarter l'homonyme fortuit (deux studios
-    distincts au même nom+ville). Exactement 1 candidat corroboré -> la renvoie ;
-    0, >=2, ou aucune corroboration -> None (jamais de faux merge : vide/2 fiches >
-    mauvaise fusion). DB seule, aucun réseau."""
+def _build_dedup_index(session: Session, exclude_source: str) -> dict:
+    """Index de dédup nom+ville préchargé UNE fois par run (perf, décision #11).
+    `{(frozenset(name_tokens), frozenset(city_tokens)) -> [lignes légères]}` des
+    fiches architecte d'une AUTRE source qu'`exclude_source`. Évite le
+    select(...).all() full-ORM + re-tokenisation PAR candidat de
+    `_soft_dedup_architecte` (O(N×M) à l'échelle stock ~28k / places ~4k).
+
+    SELECT LÉGER (colonnes de matching + corroboration seules, pas d'objets ORM
+    pleins) : la fiche ORM complète n'est chargée (session.get) que sur un hit
+    corroboré, rare. Snapshot valide pour un run mono-source (les candidats
+    `exclude_source` ne se dédupliquent jamais entre eux -> l'index des AUTRES
+    sources n'a pas à voir les insertions du run)."""
+    from types import SimpleNamespace
+    from .enrichment.siret_matcher import _tokens, _city_tokens
+    index: dict = {}
+    rows = session.exec(
+        select(
+            Opportunity.id, Opportunity.establishment_name, Opportunity.city,
+            Opportunity.website, Opportunity.address, Opportunity.phone,
+            Opportunity.decision_maker, Opportunity.source,
+        ).where(
+            Opportunity.population == "architecte",
+            Opportunity.source != exclude_source,
+        )
+    ).all()
+    for r in rows:
+        nt, ct = _tokens(r.establishment_name), _city_tokens(r.city)
+        if not nt or not ct:
+            continue
+        index.setdefault((frozenset(nt), frozenset(ct)), []).append(
+            SimpleNamespace(
+                id=r.id, establishment_name=r.establishment_name, city=r.city,
+                website=r.website, address=r.address, phone=r.phone,
+                decision_maker=r.decision_maker, source=r.source,
+            )
+        )
+    return index
+
+
+def _soft_dedup_architecte(
+    session: Session, cand: LeadCandidate, dedup_index: Optional[dict] = None,
+) -> Optional[Opportunity]:
+    """Fusion douce nom+ville pour la population architecte (A2, généralisée B).
+    Cherche une Opportunity architecte d'une AUTRE source, même nom normalisé ET
+    même ville normalisée. Le nom+ville est NÉCESSAIRE mais PAS SUFFISANT : il faut
+    AUSSI une corroboration (`_corroborates`) pour écarter l'homonyme fortuit.
+    Exactement 1 candidat corroboré -> la renvoie ; 0, >=2, ou aucune corroboration
+    -> None (jamais de faux merge : vide/2 fiches > mauvaise fusion). DB seule,
+    aucun réseau.
+
+    `dedup_index` (préchargé par `_build_dedup_index`) : lookup O(1) au lieu du
+    scan full-table par candidat (run_stock/run_places). Absent (A2, tests
+    directs) -> repli sur le SELECT historique (comportement bit-à-bit)."""
     from .enrichment.siret_matcher import _tokens, _city_tokens
     want_name = _tokens(cand.establishment_name)
     want_city = _city_tokens(cand.city)
     if not want_name or not want_city:
         return None
+    if dedup_index is not None:
+        hits = dedup_index.get((frozenset(want_name), frozenset(want_city)), [])
+        if len(hits) != 1 or not _corroborates(cand, hits[0]):
+            return None
+        return session.get(Opportunity, hits[0].id)  # ORM plein pour la fusion
     rows = session.exec(
         select(Opportunity).where(
             Opportunity.population == "architecte",
@@ -734,6 +926,7 @@ SOURCE_LABELS = {
     "bodacc": "BODACC", "instagram": "Instagram", "sirene": "Sirene (délta)",
     "annuaire": "Annuaire", "jeunes_studios": "Sirene (jeunes studios)",
     "cfai": "CFAI", "ufdi": "UFDI",
+    "sirene_stock": "Sirene (stock)", "places": "Google Places",
 }
 
 
@@ -813,6 +1006,7 @@ def _process_candidate(
     stats: IngestStats,
     seen_refs: set,
     enricher: Optional[SireneEnricher] = None,
+    dedup_index: Optional[dict] = None,
 ) -> None:
     # ARCHITECTES (A1) : population dédiée. Ils NE passent NI par l'enricher Sirene
     # (données/NAF CHR non pertinents ; pas de SIREN en A1, matcher CHR-gated) NI
@@ -945,13 +1139,15 @@ def _process_candidate(
         stats.updated += 1
         return
 
-    # FUSION DOUCE NOM+VILLE [A2] : un lead ANNUAIRE entrant qui désigne le même
+    # FUSION DOUCE NOM+VILLE [A2, généralisée B] : un lead de masse entrant
+    # (annuaire/sirene_stock/places ∈ SOFT_DEDUP_SOURCES) qui désigne le même
     # studio qu'une fiche Instagram/délta existante (dont les studios Insta n'ont
     # PAS de SIREN -> pas de fusion SIREN possible) est réconcilié par nom+ville.
-    # Asymétrique (seul l'annuaire entrant déclenche) -> run_prescripteurs (A1)
-    # bit-à-bit identique. Conservateur : exactement 1 fiche corroborée sinon rien.
-    if existing is None and corroborated is None and cand.source == "annuaire":
-        soft = _soft_dedup_architecte(session, cand)
+    # Asymétrique (seul un entrant ∈ SOFT_DEDUP_SOURCES déclenche ; jamais un lead
+    # instagram/bodacc/CHR entrant) -> run_prescripteurs/run_instagram bit-à-bit
+    # identiques. Conservateur : exactement 1 fiche corroborée sinon rien.
+    if existing is None and corroborated is None and cand.source in SOFT_DEDUP_SOURCES:
+        soft = _soft_dedup_architecte(session, cand, dedup_index)
         if soft is not None:
             label = SOURCE_LABELS.get(cand.source, cand.source)
             already = session.exec(
@@ -1024,9 +1220,10 @@ def _process_candidate(
             existing.extra_emails = cand.extra_emails
         if cand.source == "instagram" and (cand.email or cand.website or cand.address):
             existing.contact_confidence = "haute"
-        # Téléphone exposé en clair par l'annuaire (UFDI data-numero) — ne comble
-        # que si vide, ne l'écrase jamais.
-        if cand.source == "annuaire" and cand.raw.get("phone"):
+        # Téléphone exposé en clair dans raw (UFDI data-numero, Places
+        # nationalPhoneNumber) — recopie GÉNÉRALISÉE à toute source (CHR/Insta ne
+        # posent pas raw['phone'] -> inchangés). Ne comble que si vide, jamais écrasé.
+        if cand.raw.get("phone"):
             existing.phone = existing.phone or cand.raw["phone"]
         # Rafraîchir le label de cycle de vie (un opening peut devenir established
         # à un run ultérieur, ou l'inverse) — ne pas écraser par None (BODACC).
@@ -1092,13 +1289,16 @@ def _process_candidate(
         #  - profil Insta (adresse business / email déclarés) ;
         #  - annuaire pro (téléphone UFDI `data-numero` / email CFAI `mailto:` publiés
         #    par le membre lui-même dans son propre annuaire → natif, pas d'inférence).
+        # Places : match `text` (requête ville, pas d'ancrage Sirene) -> confiance
+        # 'moyenne' (jamais surclassée, décision #9/#10) ; contact natif (téléphone
+        # 96,7 %, site 100 % — sonde) mais non géo-confirmé.
         contact_confidence=(
             "haute" if (
                 (cand.source == "instagram" and (cand.email or cand.website or cand.address))
                 or (cand.source == "annuaire"
                     and (cand.email or cand.website or cand.raw.get("phone")))
             )
-            else None
+            else ("moyenne" if cand.source == "places" else None)
         ),
         latitude=cand.latitude,
         longitude=cand.longitude,
@@ -1106,8 +1306,10 @@ def _process_candidate(
         created_at=now,
         updated_at=now,
     )
-    # Téléphone exposé en clair par l'annuaire (UFDI data-numero) -> Opportunity.phone.
-    if cand.source == "annuaire" and cand.raw.get("phone"):
+    # Téléphone exposé en clair dans raw (UFDI data-numero, Places
+    # nationalPhoneNumber) -> Opportunity.phone. GÉNÉRALISÉ à toute source
+    # (CHR/Insta ne posent pas raw['phone']).
+    if cand.raw.get("phone"):
         opp.phone = cand.raw["phone"]
     session.add(opp)
     session.flush()  # pour récupérer opp.id

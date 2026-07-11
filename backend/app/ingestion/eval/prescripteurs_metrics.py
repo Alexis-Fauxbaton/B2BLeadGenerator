@@ -30,16 +30,27 @@ def hors_cible_in_tiers(rows: List[dict]) -> List[str]:
             if r.get("true_label") == "hors_cible" and r.get("tier") in ("T1", "T2")]
 
 
-def false_merges_annuaire_insta(pairs, truth_same_studio) -> List[Pair]:
-    """Paires (ref_annuaire, ref_insta) EFFECTIVEMENT fusionnées par le pipeline
-    (`stats.soft_merges`) -> celles NON justifiées par la vérité (studios différents)
-    = FAUX MERGES. `truth_same_studio` : ensemble des paires annotées comme le MÊME
-    studio. DOIT être vide (gate dur A2 : 0 faux merge annuaire×insta). PURE.
+def false_merges_cross_source(pairs, truth_same_studio) -> List[Pair]:
+    """Paires (ref_entrante, ref_existante) EFFECTIVEMENT fusionnées par le pipeline
+    (`stats.soft_merges`, source entrante ∈ SOFT_DEDUP_SOURCES = annuaire /
+    sirene_stock / places) -> celles NON justifiées par la vérité (studios
+    différents) = FAUX MERGES. `truth_same_studio` : ensemble des paires annotées
+    comme le MÊME studio. DOIT être vide (gate dur : 0 faux merge cross-source,
+    fixture adverse homonyme même CP incluse). PURE.
+
+    Généralise l'ancien gate A2 annuaire×insta (`false_merges_annuaire_insta`, dont
+    ce nom reste un alias) : la MÊME métrique couvre désormais les fusions douces
+    des sources de MASSE (sirene_stock↔places, ↔insta), toujours alimentée par les
+    fusions RÉELLEMENT émises — jamais court-circuitée.
 
     N.B. : ne mesure QUE les fusions réellement émises (les non-fusions ne peuvent
     pas être un faux merge). Le rappel (studios identiques NON fusionnés) est laissé
     à la doctrine VIDE > FAUX : rater une fusion est acceptable, en inventer une non."""
     return [p for p in pairs if tuple(p) not in truth_same_studio]
+
+
+# Rétro-compat : l'ancien nom (A2) pointe vers la métrique généralisée cross-source.
+false_merges_annuaire_insta = false_merges_cross_source
 
 
 def label_confusion(pairs: List[Pair]) -> Dict[str, Dict[str, int]]:

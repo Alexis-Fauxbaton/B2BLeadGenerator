@@ -38,6 +38,14 @@ export interface OpportunityFilters {
   population?: string;
   sort_by?: string;
   order?: string;
+  limit?: number;
+  offset?: number;
+}
+
+// Page d'opportunités : lignes + total (en-tête X-Total-Count) pour le pager.
+export interface OpportunityPage {
+  data: OpportunityList[];
+  total: number;
 }
 
 export const api = {
@@ -45,7 +53,9 @@ export const api = {
 
   getMeta: () => request<Meta>("/api/meta"),
 
-  getOpportunities: (filters: OpportunityFilters = {}) => {
+  getOpportunities: async (
+    filters: OpportunityFilters = {}
+  ): Promise<OpportunityPage> => {
     const params = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => {
       if (value !== undefined && value !== "" && value !== null) {
@@ -53,7 +63,20 @@ export const api = {
       }
     });
     const qs = params.toString();
-    return request<OpportunityList[]>(`/api/opportunities${qs ? `?${qs}` : ""}`);
+    const res = await fetch(
+      `${API_URL}/api/opportunities${qs ? `?${qs}` : ""}`,
+      { cache: "no-store", headers: { "Content-Type": "application/json" } }
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`API ${res.status} /api/opportunities: ${text}`);
+    }
+    const data = (await res.json()) as OpportunityList[];
+    // Total exposé par l'en-tête ; repli sur la taille de page si absent
+    // (backend antérieur / en-tête non exposé par un proxy).
+    const header = res.headers.get("X-Total-Count");
+    const total = header !== null ? Number(header) : data.length;
+    return { data, total };
   },
 
   getOpportunity: (id: number) =>

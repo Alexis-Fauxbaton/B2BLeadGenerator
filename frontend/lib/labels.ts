@@ -106,6 +106,9 @@ export const SOURCE_LABELS: Record<string, string> = {
   // Population architectes (A2).
   annuaire: "Annuaire",
   jeunes_studios: "Jeune studio",
+  // Population architectes (B — volume max).
+  sirene_stock: "Sirene (stock)",
+  places: "Google Places",
 };
 
 // Libellés FR des labels d'éval (jeu de vérité + prédictions du pipeline).

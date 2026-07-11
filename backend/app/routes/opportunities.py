@@ -2,7 +2,8 @@
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from ..database import get_session
@@ -26,6 +27,7 @@ SORT_FIELDS = {
 
 @router.get("", response_model=List[OpportunityList])
 def list_opportunities(
+    response: Response = None,
     session: Session = Depends(get_session),
     search: Optional[str] = None,
     city: Optional[str] = None,
@@ -39,7 +41,13 @@ def list_opportunities(
     population: Optional[str] = None,
     sort_by: str = "score",
     order: str = "desc",
+    limit: int = 100,
+    offset: int = 0,
 ):
+    # Bornes défensives (les appels directs — tests A1 — passent des ints bruts,
+    # sans la validation FastAPI Query ; on clampe donc ici).
+    limit = max(1, min(500, limit))
+    offset = max(0, offset)
     query = select(Opportunity)
 
     if search:
@@ -63,9 +71,27 @@ def list_opportunities(
     if population:
         query = query.where(Opportunity.population == population)
 
-    sort_col = SORT_FIELDS.get(sort_by, Opportunity.opportunity_score)
-    query = query.order_by(sort_col.desc() if order == "desc" else sort_col.asc())
+    # Total AVANT pagination (en-tête X-Total-Count) : indispensable au pager
+    # côté frontend à l'échelle du stock (~30k lignes, ~300 pages).
+    total = session.exec(select(func.count()).select_from(query.subquery())).one()
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
 
+    if sort_by == "score":
+        # Tri composite (volume max) : score décroissant, puis à score égal les
+        # fiches CONTACTABLES (téléphone présent) avant les muettes, puis les plus
+        # récentes. Sépare le hot subset (score haut) du volume sans reposer sur
+        # un seuil de score brut.
+        query = query.order_by(
+            Opportunity.opportunity_score.desc(),
+            Opportunity.phone.is_(None).asc(),
+            Opportunity.detection_date.desc(),
+        )
+    else:
+        sort_col = SORT_FIELDS.get(sort_by, Opportunity.opportunity_score)
+        query = query.order_by(sort_col.desc() if order == "desc" else sort_col.asc())
+
+    query = query.offset(offset).limit(limit)
     return session.exec(query).all()
 
 

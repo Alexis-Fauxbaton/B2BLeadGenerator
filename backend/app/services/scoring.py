@@ -27,6 +27,17 @@ INVENTORY_SIGNALS = {"établissement en activité", "extension multi-sites"}
 PRESCRIBER_NEUTRAL = {"prescripteur actif", "studio en sommeil"}
 PRESCRIBER_HOT = {"projet CHR détecté"}
 PRESCRIBER_WARM = {"portfolio hospitality/CHR"}
+# Labels d'INVENTAIRE de masse (B — stock Sirene + balayage Places) : purement
+# NEUTRES (aucun moment d'achat). Ils DOIVENT partager la famille neutre
+# 'prescripteur' : sinon, libellés inconnus, chacun compterait comme une famille
+# distincte et déclencherait à tort le bonus 'signaux croisés' (+1) sur un simple
+# lead de volume (cf. plan volume max, Priorisation).
+PRESCRIBER_VOLUME = {"stock sirene", "annuaire places"}
+# Booster MOMENT (B, T5) : studio créé récemment (< 18 mois). SCORE-BEARING +1,
+# jamais émis par un lead CHR -> scores CHR bit-à-bit inchangés. Rangé dans la
+# famille neutre 'prescripteur' pour que le +1 explicite ci-dessous soit le SEUL
+# delta (pas de bonus 'signaux croisés' additionnel qui gonflerait la récence).
+PRESCRIBER_FRESH = {"jeune studio (création récente)"}
 
 # Famille de chaque libellé de signal. Le bonus "signaux croisés" compte les
 # FAMILLES distinctes, pas les libellés : "reprise" + "changement propriétaire"
@@ -38,6 +49,10 @@ SIGNAL_FAMILY = {
     **{s: "recruitment" for s in RECRUITMENT_SIGNALS},
     **{s: "inventaire" for s in INVENTORY_SIGNALS},
     **{s: "prescripteur" for s in PRESCRIBER_NEUTRAL},
+    # Labels de volume ET booster de récence rangés dans la MÊME famille neutre
+    # 'prescripteur' -> aucun bonus 'signaux croisés' parasite (cf. commentaires).
+    **{s: "prescripteur" for s in PRESCRIBER_VOLUME},
+    **{s: "prescripteur" for s in PRESCRIBER_FRESH},
     **{s: "prescripteur_hot" for s in PRESCRIBER_HOT},
     **{s: "prescripteur_warm" for s in PRESCRIBER_WARM},
 }
@@ -114,6 +129,11 @@ def compute_score(
     if all_signals & PRESCRIBER_WARM:
         points += 2
         reasons.append("portfolio hospitality/CHR")
+    # Booster MOMENT (B, T5) : studio créé récemment (< 18 mois). +1 additif,
+    # jamais émis par un lead CHR -> ordre hospitality (+2) > récence (+1) > neutre.
+    if all_signals & PRESCRIBER_FRESH:
+        points += 1
+        reasons.append("studio créé récemment (< 18 mois)")
 
     # Signaux croisés (gradient : 2 familles = +1, 3+ = +2). On compte les
     # FAMILLES distinctes pour ne pas récompenser un même événement décrit par

@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import math
 import os
+import time
 import unicodedata
-from typing import Dict, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import requests
 
@@ -208,3 +209,102 @@ def lookup_places(
         "match_basis": basis,
         "display_name": (p.get("displayName") or {}).get("text"),
     }
+
+
+# --- Balayage volume (B2, T3) -------------------------------------------
+#
+# `search_places_text` est un AJOUT PUR : il ne touche ni `lookup_places`, ni
+# `_match_ok`/`_match_basis`, ni `CHR_PLACE_TYPES` (le gate CHR reste
+# exclusivement sur le chemin d'enrichissement `contact_enricher`). Destiné
+# au balayage archi (`places_sweep.PlacesArchiConnector`) : field mask
+# Contact UNIQUEMENT (pas d'Atmosphere/reviews, décision #7) et
+# `maxResultCount` jusqu'à 20 -> jusqu'à 20 fiches pleinement enrichies par
+# appel FACTURÉ (SKU Text Search Enterprise), contre 1 pour `lookup_places`.
+
+ARCHI_FIELD_MASK = ",".join([
+    "places.id",
+    "places.displayName",
+    "places.formattedAddress",
+    "places.location",
+    "places.nationalPhoneNumber",
+    "places.websiteUri",
+    "places.userRatingCount",
+    "places.primaryType",
+])
+
+# Throttle "poli" entre appels du balayage (Google n'impose rien -> le
+# budget € dur reste le régulateur principal, cf. places_sweep.py).
+_ARCHI_THROTTLE_S = 0.2
+
+
+def _archi_post(url: str, headers: Dict[str, str], json: Dict[str, object],
+                 timeout: int = 15) -> Dict[str, object]:
+    """Poster réseau par défaut (throttlé), injecté en test via `api_post`."""
+    time.sleep(_ARCHI_THROTTLE_S)
+    resp = requests.post(url, headers=headers, json=json, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def search_places_text(
+    query: str,
+    api_post: Optional[Callable[..., Dict[str, object]]] = None,
+    page_token: Optional[str] = None,
+    max_results: int = 20,
+) -> Tuple[List[Dict[str, object]], Optional[str], bool]:
+    """Text Search (New), field mask Contact SEULEMENT, `maxResultCount`
+    jusqu'à 20 (décision #7). AUCUN gate CHR (contrairement à
+    `lookup_places` -- `_is_chr_type` rejetterait tout studio d'archi) :
+    c'est à l'appelant (`places_sweep._archi_ok`) de filtrer.
+
+    Renvoie `(places, next_page_token, billed)`. `billed` est True SSI un
+    appel réseau a réellement été tenté ET a abouti (réponse reçue de
+    `poster`) -- c'est le SEUL signal fiable pour décider si l'appel doit
+    compter dans un budget € dur (`places_sweep.PlacesArchiConnector`) :
+    sans lui, une clé manquante/vide ou une exception réseau avalée
+    ressemble en surface à une recherche réussie sans résultat (`[], None`),
+    ce qui épuiserait le budget mensuel pour zéro coût Google réel.
+    `billed=False` dans les deux cas fail-soft :
+    - pas de clé Google / requête vide -> `([], None, False)` (aucun appel
+      réseau tenté) ;
+    - exception levée par `poster` (réseau, timeout, HTTP...) -> `([],
+      None, False)` (appel tenté mais pas confirmé abouti -- on ne facture
+      jamais un appel dont on ignore s'il a réellement été traité par
+      Google).
+    `api_post=None` -> poster réseau par défaut (throttlé) ; injecté en
+    test (aucun réseau)."""
+    key = os.getenv("GOOGLE_PLACES_API_KEY")
+    if not key or not query:
+        return [], None, False
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": ARCHI_FIELD_MASK,
+    }
+    body: Dict[str, object] = {
+        "textQuery": query,
+        "regionCode": "FR",
+        "maxResultCount": max_results,
+    }
+    if page_token:
+        body["pageToken"] = page_token
+
+    poster = api_post or _archi_post
+    try:
+        data = poster(SEARCH_URL, headers=headers, json=body) or {}
+    except Exception:
+        return [], None, False
+
+    places: List[Dict[str, object]] = []
+    for p in data.get("places", []) or []:
+        places.append({
+            "id": p.get("id"),
+            "name": (p.get("displayName") or {}).get("text"),
+            "address": p.get("formattedAddress"),
+            "phone": p.get("nationalPhoneNumber"),
+            "website": p.get("websiteUri"),
+            "rating_count": p.get("userRatingCount"),
+            "primary_type": p.get("primaryType"),
+        })
+    return places, data.get("nextPageToken"), True

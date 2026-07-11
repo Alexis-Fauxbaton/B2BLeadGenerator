@@ -7,6 +7,11 @@ Modes :
   reenrich       passe B : guérit les leads sans NAF via Sirene (sans retaper BODACC)
   prescripteurs  population architectes d'intérieur (A1) : hashtags archi -> juge prescripteur
   annuaires      population architectes (A2) : stock CFAI/UFDI (--annuaire cfai|ufdi)
+  places         population architectes (B2) : balayage Google Places (--cities N --budget-eur E)
+
+Note : le STOCK Sirene (B1) passe par `--mode window --source sirene_stock` (routé
+vers run_stock, commit par candidat) — PAS run_ingestion (single-commit, fatal à
+l'échelle stock). `--limit 0` = curseur INSEE jusqu'à épuisement (borne les BRUTS).
 
 Exemples :
     python -m app.ingestion.run --mode window --since 60 --limit 200
@@ -16,6 +21,8 @@ Exemples :
     python -m app.ingestion.run --mode prescripteurs --limit 40
     python -m app.ingestion.run --mode annuaires --annuaire cfai --limit 200
     python -m app.ingestion.run --mode window --source jeunes_studios --since 30 --limit 500
+    python -m app.ingestion.run --mode window --source sirene_stock --departments 69 --limit 0
+    python -m app.ingestion.run --mode places --budget-eur 10 --cities 100
 """
 import argparse
 
@@ -26,9 +33,11 @@ from .pipeline import (
     run_incremental,
     run_ingestion,
     run_instagram,
+    run_places,
     run_prescripteurs,
     run_reenrich,
     run_refresh,
+    run_stock,
     stats_to_dict,
 )
 
@@ -48,6 +57,7 @@ def main() -> None:
             "instagram",
             "prescripteurs",
             "annuaires",
+            "places",
         ],
     )
     parser.add_argument("--source", default="bodacc", help="Connecteur à utiliser.")
@@ -60,6 +70,10 @@ def main() -> None:
         default=None,
         help="Départements séparés par des virgules (ex: 75,92,93). Défaut : IdF.",
     )
+    parser.add_argument("--cities", type=int, default=100,
+                        help="Nombre de villes à balayer (mode places).")
+    parser.add_argument("--budget-eur", type=float, default=10.0,
+                        help="Budget € DUR par run (mode places).")
     parser.add_argument("--reset", action="store_true", help="Supprime d'abord la source.")
     parser.add_argument(
         "--no-enrich",
@@ -85,6 +99,8 @@ def main() -> None:
         stats = run_prescripteurs(limit=args.limit)
     elif args.mode == "annuaires":
         stats = run_annuaires(annuaire=args.annuaire, limit=args.limit)
+    elif args.mode == "places":
+        stats = run_places(cities=args.cities, budget_eur=args.budget_eur)
     elif args.mode == "contact":
         stats = run_contact_enrich(source=args.source)
     elif args.mode == "incremental":
@@ -93,6 +109,10 @@ def main() -> None:
         stats = run_backfill(
             source=args.source, since_days=args.since, departments=departments, enrich=enrich
         )
+    elif args.mode == "window" and args.source == "sirene_stock":
+        # STOCK Sirene (B1) : commit par candidat (isolation), curseur INSEE
+        # (--limit 0 = épuisement). PAS run_ingestion (single-commit fatal à 28k).
+        stats = run_stock(departments=departments, limit=args.limit)
     else:  # window
         stats = run_ingestion(
             source=args.source,

@@ -97,9 +97,15 @@ const DEFAULT_FILTERS: OpportunityFilters = {
 // comme "toutes populations" (= CHR visibles).
 const OPP_FILTERS_STORAGE_KEY = "opp_filters-v2";
 
+// Pagination backend : la liste peut compter ~30 000 leads (stock Sirene) —
+// on charge une page à la fois. 100 lignes/page = ~300 pages au pire.
+const PAGE_SIZE = 100;
+
 export default function OpportunitiesPage() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [rows, setRows] = useState<OpportunityList[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0); // 0-based
   const [error, setError] = useState<string | null>(null);
 
   const [filters, setFilters] = useState<OpportunityFilters>(DEFAULT_FILTERS);
@@ -114,7 +120,13 @@ export default function OpportunitiesPage() {
 
   const loadRows = () => {
     setRows(null);
-    api.getOpportunities(filters).then(setRows).catch((e) => setError(e.message));
+    api
+      .getOpportunities({ ...filters, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
+      .then(({ data, total }) => {
+        setRows(data);
+        setTotal(total);
+      })
+      .catch((e) => setError(e.message));
   };
 
   useEffect(() => {
@@ -135,7 +147,7 @@ export default function OpportunitiesPage() {
     setReady(true);
   }, []);
 
-  // Recharge + persiste quand les filtres changent (après restauration).
+  // Recharge + persiste quand les filtres OU la page changent (après restauration).
   useEffect(() => {
     if (!ready) return;
     try {
@@ -143,7 +155,7 @@ export default function OpportunitiesPage() {
     } catch {}
     loadRows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters, ready]);
+  }, [filters, ready, page]);
 
   const runImport = async () => {
     setImporting(true);
@@ -160,8 +172,12 @@ export default function OpportunitiesPage() {
     }
   };
 
-  const set = (patch: Partial<OpportunityFilters>) =>
+  // Tout changement de filtre/tri ramène à la première page (sinon un offset
+  // au-delà du nouveau total renverrait une page vide).
+  const set = (patch: Partial<OpportunityFilters>) => {
+    setPage(0);
     setFilters((f) => ({ ...f, ...patch }));
+  };
 
   const sortLabel = useMemo(
     () =>
@@ -180,7 +196,7 @@ export default function OpportunitiesPage() {
     <>
       <PageHeader
         title="Opportunités"
-        subtitle={rows ? `${rows.length} établissement(s)` : "Chargement…"}
+        subtitle={rows ? `${total} établissement(s)` : "Chargement…"}
       >
         <button
           onClick={runImport}
@@ -369,6 +385,31 @@ export default function OpportunitiesPage() {
             </div>
           )}
         </div>
+
+        {/* Pager sobre : Préc./Suiv. + total. Masqué tant qu'une seule page. */}
+        {rows && total > PAGE_SIZE && (
+          <div className="flex items-center justify-between text-sm text-slate-600">
+            <span className="tabular-nums">
+              {total} lead(s) · page {page + 1} / {Math.max(1, Math.ceil(total / PAGE_SIZE))}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+              >
+                Précédent
+              </button>
+              <button
+                onClick={() => setPage((p) => p + 1)}
+                disabled={(page + 1) * PAGE_SIZE >= total}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+              >
+                Suivant
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
