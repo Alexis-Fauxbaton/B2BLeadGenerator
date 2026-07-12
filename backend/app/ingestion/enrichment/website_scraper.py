@@ -27,8 +27,10 @@ FR_PHONE_RE = re.compile(r"(?:(?:\+33|0)\s?[1-9])(?:[\s.-]?\d{2}){4}")
 # timing-function CSS, jamais affiché nulle part sur la page).
 _NOISE_BLOCK_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.I | re.S)
 
-# Sous-pages utiles à tenter.
+# Sous-pages utiles à tenter (repli si aucun lien contact découvert sur la home).
 CONTACT_PATHS = ["contact", "nous-contacter", "mentions-legales", "mentions-legales/", "legal"]
+# Liens de la home menant vraisemblablement à une page contact / mentions légales.
+_CONTACT_LINK_RE = re.compile(r"contact|mention|legal", re.I)
 
 # Emails à ignorer (artefacts, libs, exemples, placeholders de formulaire).
 EMAIL_JUNK = (
@@ -188,42 +190,100 @@ def choose_phone(pages: List[Dict]) -> Optional[str]:
     le mauvais commerce) — sans redescendre à un palier moins sûr.
 
     Paliers :
+      0. lien ``tel:`` UNIQUE déclaré sur la HOME : le numéro cliquable que
+         l'établissement affiche sur sa page d'accueil est son numéro canonique.
+         La home étant une source unique et autoritaire, un seul ``tel:`` home
+         n'est PAS ambigu, même si des numéros secondaires (agence, fixe d'un
+         second point de vente) apparaissent EN PLUS sur les pages contact /
+         mentions — ne les laissant plus diluer le signal (cas m2-scene) ;
       1. liens ``tel:`` de toutes les pages (déclaration explicite du site) ;
       2. numéros regex des pages CONTACT / mentions légales ;
       3. numéros regex de la home.
 
     ``pages`` : liste de ``{'is_contact': bool, 'tel': [...], 'text': [...]}``."""
+    tier0 = _distinct([p for pg in pages if not pg.get("is_contact") for p in pg.get("tel", [])])
     tier1 = _distinct([p for pg in pages for p in pg.get("tel", [])])
     tier2 = _distinct([p for pg in pages if pg.get("is_contact") for p in pg.get("text", [])])
     tier3 = _distinct([p for pg in pages if not pg.get("is_contact") for p in pg.get("text", [])])
-    for tier in (tier1, tier2, tier3):
+    for tier in (tier0, tier1, tier2, tier3):
         if tier:
             return tier[0] if len(tier) == 1 else None
     return None
 
 
+def _fetch_html(url: str, timeout: int) -> Optional[str]:
+    """Récupère le HTML d'une page (fail-soft : réseau, statut, type MIME).
+    Renvoie None si la page n'est pas un ``text/html`` en 200."""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=timeout)
+        if resp.status_code != 200 or "text/html" not in resp.headers.get("content-type", ""):
+            return None
+        return resp.text[:500_000]
+    except Exception:
+        return None
+
+
+def contact_page_urls(home_html: str, base_url: str) -> List[str]:
+    """Découverte ROBUSTE des pages contact/mentions à sonder pour un site.
+
+    Combine deux sources, dédupliquées (URL absolue, slash final normalisé, home
+    exclue), liens de la home d'abord :
+
+      1. les liens ``<a href>`` de la HOME dont l'URL évoque contact / mentions /
+         légal — résout relatif ↔ absolu, tolère www ↔ sans-www et /contact ↔
+         /contact/ (les redirections HTTP font le reste), et trouve les chemins
+         NON standards qu'une liste figée manquerait ;
+      2. repli sur les chemins statiques connus (:data:`CONTACT_PATHS`).
+
+    Restreint au domaine du site (jamais un « contactez-nous sur Facebook »).
+    Extraction pure (testable sans réseau)."""
+    base_host = urlparse(base_url).netloc.replace("www.", "").lower()
+    base_key = base_url.rstrip("/")
+    urls: List[str] = []
+    seen = set()
+
+    def _add(candidate: str) -> None:
+        key = candidate.split("#")[0].rstrip("/")
+        if not key or key == base_key or key in seen:
+            return
+        if urlparse(candidate).netloc.replace("www.", "").lower() != base_host:
+            return
+        seen.add(key)
+        urls.append(candidate)
+
+    for href in re.findall(r'<a\b[^>]*?\bhref\s*=\s*["\']([^"\'>]+)["\']', home_html, re.I):
+        href = href.strip()
+        if href and _CONTACT_LINK_RE.search(href):
+            _add(urljoin(base_url + "/", href))
+    for path in CONTACT_PATHS:
+        _add(urljoin(base_url + "/", path))
+    return urls
+
+
 def scrape_phone(url: str, max_pages: int = 3, timeout: int = 10) -> Optional[str]:
     """Téléphone extrait du SITE d'un lead (home + pages contact/mentions), avec
+    découverte robuste des pages contact (cf. :func:`contact_page_urls`) et
     désambiguïsation par palier (cf. :func:`choose_phone`). Fail-soft de bout en
     bout (réseau, statut, type MIME) ; renvoie None si rien de sûr."""
     url = _normalize_url(url)
     if not url:
         return None
-    pages_spec = [(url, False)] + [(urljoin(url + "/", p), True) for p in CONTACT_PATHS]
     collected: List[Dict] = []
     fetched = 0
-    for page, is_contact in pages_spec:
+
+    home_html = _fetch_html(url, timeout)
+    if home_html is not None:
+        fetched += 1
+        collected.append({"is_contact": False, **extract_phones_from_html(home_html)})
+
+    for page in contact_page_urls(home_html or "", url):
         if fetched >= max_pages:
             break
-        try:
-            resp = requests.get(page, headers=HEADERS, timeout=timeout)
-            if resp.status_code != 200 or "text/html" not in resp.headers.get("content-type", ""):
-                continue
-            html = resp.text[:500_000]
-        except Exception:
+        html = _fetch_html(page, timeout)
+        if html is None:
             continue
         fetched += 1
-        collected.append({"is_contact": is_contact, **extract_phones_from_html(html)})
+        collected.append({"is_contact": True, **extract_phones_from_html(html)})
     return choose_phone(collected)
 
 

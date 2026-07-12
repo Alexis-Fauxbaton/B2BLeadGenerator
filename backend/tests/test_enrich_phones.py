@@ -20,6 +20,7 @@ from app.ingestion.enrich_phones import (
 from app.ingestion.enrichment.contact_enricher import ContactInfo
 from app.ingestion.enrichment.website_scraper import (
     choose_phone,
+    contact_page_urls,
     extract_phones_from_html,
     normalize_fr_phone,
 )
@@ -151,6 +152,86 @@ def test_choose_same_tel_repeated_across_pages_not_ambiguous():
 
 def test_choose_nothing_returns_none():
     assert choose_phone([{"is_contact": False, "tel": [], "text": []}]) is None
+
+
+def test_choose_home_tel_wins_over_secondary_contact_tel():
+    # Cas réel m2-scene : la home ne déclare qu'UN tel: (le mobile canonique) ;
+    # les pages contact/mentions ajoutent un fixe secondaire. Le tel: UNIQUE de
+    # la home décide et ne se laisse plus diluer en « multi-numéros -> vide ».
+    pages = [
+        {"is_contact": False, "tel": ["06 09 32 24 28"],
+         "text": ["06 86 50 80 01", "06 09 32 24 28"]},
+        {"is_contact": True, "tel": ["01 86 26 03 39", "06 09 32 24 28"],
+         "text": ["06 00 00 00 00", "01 86 26 03 39", "06 09 32 24 28"]},
+        {"is_contact": True, "tel": ["01 86 26 03 39", "06 09 32 24 28"],
+         "text": ["01 86 26 03 39", "06 09 32 24 28"]},
+    ]
+    assert choose_phone(pages) == "06 09 32 24 28"
+
+
+def test_choose_ambiguous_home_tel_stays_empty():
+    # Deux tel: distincts SUR LA HOME = source autoritaire ambiguë -> vide
+    # (on ne redescend pas piocher un numéro d'une page moins sûre).
+    pages = [
+        {"is_contact": False, "tel": ["01 23 45 67 89", "06 11 22 33 44"], "text": []},
+        {"is_contact": True, "tel": ["01 23 45 67 89"], "text": []},
+    ]
+    assert choose_phone(pages) is None
+
+
+def test_choose_single_text_on_contact_retained_when_no_tel():
+    # Numéro FR UNIQUE en texte sur la page contact du site propre (aucun tel:)
+    # = fiable -> retenu (doctrine : ambiguïté multi-numéros -> vide inchangée).
+    pages = [
+        {"is_contact": False, "tel": [], "text": []},
+        {"is_contact": True, "tel": [], "text": ["05 56 12 34 56"]},
+    ]
+    assert choose_phone(pages) == "05 56 12 34 56"
+
+
+# --- Découverte robuste de la page contact (contact_page_urls) -------------------
+
+
+def test_contact_urls_discovers_relative_link():
+    html = '<nav><a href="/contact">Contact</a><a href="/projets">Projets</a></nav>'
+    urls = contact_page_urls(html, "https://exemple.fr")
+    assert "https://exemple.fr/contact" in urls
+    assert all("projets" not in u for u in urls)
+
+
+def test_contact_urls_discovers_absolute_and_ignores_other_domains():
+    html = (
+        '<a href="https://exemple.fr/nous-contacter/">Contact</a>'
+        '<a href="https://facebook.com/exemple/contact">FB</a>'
+    )
+    urls = contact_page_urls(html, "https://exemple.fr")
+    assert "https://exemple.fr/nous-contacter/" in urls
+    assert all("facebook.com" not in u for u in urls)
+
+
+def test_contact_urls_tolerates_www_and_scheme_variations():
+    # Home servie en www ; lien contact relatif -> résolu sur le même hôte.
+    html = '<a href="mentions-legales/">Mentions légales</a>'
+    urls = contact_page_urls(html, "https://www.exemple.fr")
+    assert "https://www.exemple.fr/mentions-legales/" in urls
+
+
+def test_contact_urls_excludes_home_and_dedups_trailing_slash():
+    # Un lien qui pointe vers la home elle-même ne doit pas être re-sondé ;
+    # /contact et /contact/ sont la même page (slash final normalisé).
+    html = '<a href="/">Accueil</a><a href="/contact/">Contact</a><a href="/contact">Contact</a>'
+    urls = contact_page_urls(html, "https://exemple.fr")
+    # La home ("/") n'est jamais re-sondée.
+    assert "https://exemple.fr" not in [u.rstrip("/") for u in urls]
+    # /contact et /contact/ = même page (slash final normalisé) -> une seule entrée.
+    contact = [u for u in urls if u.rstrip("/").endswith("/contact")]
+    assert len({u.rstrip("/") for u in contact}) == 1
+
+
+def test_contact_urls_falls_back_to_static_paths_when_no_links():
+    urls = contact_page_urls("<p>rien</p>", "https://exemple.fr")
+    assert "https://exemple.fr/contact" in urls
+    assert "https://exemple.fr/mentions-legales" in urls
 
 
 # --- Garde « site propre » ------------------------------------------------------
