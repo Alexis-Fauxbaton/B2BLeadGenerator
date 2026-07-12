@@ -28,7 +28,7 @@ ARCHI_NAF_CODES = ["71.11Z", "74.10Z"]
 # SEUL un marqueur autorise la qualification -- un token FAIBLE présent seul
 # (design, studio, atelier, deco…) est indiscernable d'un faux-ami AU NOM SEUL
 # (« GARRIGOS DESIGN » [packaging] ~= « MATHILDE DESIGN » [archi]) -> rejeté.
-INTERIOR_MARKERS = ("interieur", "home", "espace", "archi")
+INTERIOR_MARKERS = ("interieur", "interior", "home", "espace", "archi")
 
 # Tokens FAIBLES (mots métier ambivalents) : conservés pour documentation/tests.
 # Règle effective = « un MARQUEUR INTÉRIEUR doit co-occurrer », donc un token
