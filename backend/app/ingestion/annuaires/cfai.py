@@ -192,5 +192,12 @@ class CfaiConnector(Connector):
                 website=f.get("website"),
                 proof_text=proof,
                 proof_url=f.get("fiche_url") or "",
+                # Téléphone exposé en clair sur la fiche (« Téléphones/fax »,
+                # publié par le membre) : reporté dans raw['phone'] -- seul
+                # chemin lu par pipeline._process_candidate pour remplir
+                # Opportunity.phone (même contrat qu'UFDI data-numero / Places
+                # nationalPhoneNumber). Sans ceci le téléphone est parsé par
+                # parse_fiche puis silencieusement perdu (régression 728 fiches).
+                raw={"phone": f.get("phone") or None},
             ))
         return out

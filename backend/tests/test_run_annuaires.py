@@ -197,3 +197,80 @@ def test_same_postal_different_street_does_not_corroborate():
             main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
             establishment_type="architecte d'intérieur", population="architecte")
         assert _soft_dedup_architecte(s, incoming) is None
+
+
+def test_run_annuaires_cfai_fills_phone_on_creation():
+    # Régression : la fiche CFAI (téléphone en clair, "Téléphones/fax") doit
+    # remplir Opportunity.phone à la création, comme UFDI/Places (raw['phone']
+    # — même contrat, cf. pipeline._process_candidate). 728 fiches CFAI en base
+    # avaient 0 téléphone faute de ce report cand.raw['phone'] -> opp.phone.
+    pages = {
+        "https://www.cfai.fr/fr/recherche/annuaire-professionnel?page=1": CFAI_LIST,
+        "https://www.cfai.fr/annuaire-professionnel/adherent/12": (
+            CFAI_FICHE.replace(
+                "<h3>Site</h3>",
+                '<h3>Téléphones/fax</h3><div class="details-group">'
+                '01 53 68 91 80</div><h3>Site</h3>',
+            )
+        ),
+    }
+
+    def matcher(name, city=None, postal=None, website=None, context=None, **k):
+        return None  # pas de SIREN nécessaire pour ce test
+
+    with Session(_engine()) as s:
+        stats = run_annuaires("cfai", limit=10, session=s,
+                              http_fetch=lambda u: pages.get(u),
+                              matcher=matcher, sirene=None)
+        assert stats.created == 1
+        opp = s.exec(select(Opportunity).where(Opportunity.source == "annuaire")).first()
+        assert opp is not None
+        assert opp.phone == "01 53 68 91 80"
+        # Contact natif (téléphone publié par le membre) = fiable -> pas
+        # "à trouver" en UI (même doctrine que le site/email CFAI, décision #9/#10).
+        assert opp.contact_confidence == "haute"
+
+
+def test_run_annuaires_cfai_update_fills_empty_phone_without_overwriting():
+    # La branche UPDATE (même source+source_ref+population) doit combler un
+    # Opportunity.phone vide au re-passage CFAI (728 fiches déjà en base avant
+    # le fix) -- sans jamais écraser un téléphone déjà renseigné par ailleurs
+    # (doctrine : jamais d'écrasement d'un champ rempli).
+    with Session(_engine()) as s:
+        # 1er passage (pré-fix simulé) : candidate SANS téléphone -> ligne créée,
+        # phone vide.
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:12",
+            establishment_name="SARL METROPOLE CONCEPT", city="Paris", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte"),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+        opp = s.exec(select(Opportunity).where(Opportunity.source_ref == "cfai:12")).first()
+        assert opp.phone is None
+
+        # 2e passage (post-fix) : même source_ref, cette fois avec le téléphone
+        # dans raw -> l'UPDATE doit le combler.
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:12",
+            establishment_name="SARL METROPOLE CONCEPT", city="Paris", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            raw={"phone": "01 53 68 91 80"}),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+        s.refresh(opp)
+        assert opp.phone == "01 53 68 91 80"
+
+        # 3e passage : un téléphone DIFFÉRENT (ex. erreur de source amont) ne doit
+        # JAMAIS écraser le téléphone déjà en base.
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:12",
+            establishment_name="SARL METROPOLE CONCEPT", city="Paris", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            raw={"phone": "01 99 99 99 99"}),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+        s.refresh(opp)
+        assert opp.phone == "01 53 68 91 80"

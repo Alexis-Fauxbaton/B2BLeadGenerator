@@ -126,6 +126,11 @@ def test_to_candidates_maps_architecte_annuaire():
     assert "annuaire cfai" in cand.secondary_signals
     assert cand.email == "alezra@metropole-concept.com"
     assert cand.establishment_type == "architecte d'intérieur"
+    # Régression : le téléphone de fiche (parse_fiche) doit être reporté dans
+    # cand.raw['phone'] -- c'est le seul chemin lu par pipeline._process_candidate
+    # pour remplir Opportunity.phone (cf. UFDI/Places, même contrat). Sans ceci
+    # le téléphone CFAI est parsé puis silencieusement perdu (728 fiches à 0 tél).
+    assert cand.raw.get("phone") == "01 53 68 91 80"
 
 
 def test_to_candidates_falls_back_to_person_name_without_company():
@@ -136,3 +141,6 @@ def test_to_candidates_falls_back_to_person_name_without_company():
         "fiche_id": "21", "fiche_url": "x", "is_honoraire": False,
     }])[0]
     assert cand.establishment_name == "Alain AURIERES"
+    # VIDE > FAUX : phone absent en fiche -> raw['phone'] falsy, jamais une
+    # chaîne vide qui passerait à tort le `if cand.raw.get("phone")` aval.
+    assert not cand.raw.get("phone")
