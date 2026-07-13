@@ -18,6 +18,44 @@ from .http import HtmlFetch, polite_get
 BASE = "https://www.cfai.fr"
 LIST_URL = f"{BASE}/fr/recherche/annuaire-professionnel"
 
+# Champ « société » CFAI = saisie LIBRE : certains membres y décrivent leur mode
+# d'exercice (« Exercice en libéral », « salariée chez alinea », « MICRO
+# ENTREPRISE »…) au lieu d'un nom d'enseigne. Motifs déterministes (vocabulaire
+# de mode d'exercice, mentions administratives, « depuis <année> ») — les vrais
+# noms (SARL X, BUSH & Associates SAS, ECOPLAN SOLUTIONS…) n'en contiennent pas.
+_PLACEHOLDER_SOCIETE_RE = re.compile(
+    "|".join([
+        r"\blib[ée]ral(?:es?|aux)?\b",            # (en) libéral(e)
+        r"\bexercice\b",                          # Exercice / Mode d'exercice
+        r"\bexer[cç]e\b",
+        r"\bprofession\b",                        # profession libérale
+        r"\bsalari[ée]e?s?\b",                    # salarié(e)(s) chez …
+        r"\b(?:auto|micro)[\s-]?entrepreneu(?:r|se)s?\b",
+        r"\bmicro[\s-]?entreprises?\b",
+        r"\bentreprise\s+individuelle\b",
+        r"\bind[ée]pendant(?:es?|s)?\b",
+        r"\bfree[\s-]?lance\b",
+        r"\bdepuis\s+(?:19|20)\d{2}\b",           # « … depuis 2006 »
+        r"\ben\s+nom\s+propre\b",
+        r"\b[àa]\s+(?:mon|son)\s+compte\b",
+        r"\b[àa]\s+titre\s+individuel\b",
+        r"\bportage\s+salarial\b",
+        r"^(?:n[ée]ant|aucune?|sans\s+objet|non\s+renseign[ée]e?|n/?a|[-.\s]+)$",
+    ]),
+    re.IGNORECASE,
+)
+
+
+def _societe_is_placeholder(societe: str) -> bool:
+    """Vrai si le champ « société » (saisie LIBRE côté CFAI) décrit un mode
+    d'exercice ou une mention administrative plutôt qu'un nom d'enseigne —
+    y compris mêlé au nom de la personne (« ALEXIS MORAND libérale … »).
+    Déterministe (regex), PURE. Champ vide -> False (le fallback `company or
+    name` s'en charge déjà) ; doctrine VIDE > FAUX en aval : le descriptif
+    n'est gardé nulle part."""
+    s = " ".join((societe or "").split())
+    return bool(s) and bool(_PLACEHOLDER_SOCIETE_RE.search(s))
+
 
 def parse_list_page(html: str) -> List[Dict[str, str]]:
     """Lignes de la table annuaire -> [{fiche_id, cp, ville, nom, societe, fiche_url}].
@@ -173,6 +211,13 @@ class CfaiConnector(Connector):
         for f in records:
             company = (f.get("company") or "").strip()
             name = (f.get("name") or "").strip()
+            if _societe_is_placeholder(company):
+                # Saisie « mode d'exercice » (« Exercice en libéral »…) : ce
+                # n'est pas un nom -> establishment_name retombe sur le nom de
+                # la personne (h1, déjà parsé pour decision_maker) et le
+                # descriptif n'est gardé NULLE PART (VIDE > FAUX). Couvre aussi
+                # le cas mixte « ALEXIS MORAND libérale … » : juste le nom.
+                company = ""
             proof = "Architecte d'intérieur membre du CFAI (annuaire professionnel)."
             out.append(LeadCandidate(
                 source="annuaire",

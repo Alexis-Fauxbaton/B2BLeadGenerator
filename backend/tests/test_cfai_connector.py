@@ -1,7 +1,10 @@
 """Connecteur CFAI (A2, T1) — parsing PUR sur extraits des HTML sondés
 (.superpowers/sdd/sonde-a2/cfai-*.html). Aucun réseau : http_fetch injecté."""
+import pytest
+
 from app.ingestion.annuaires.cfai import (
-    CfaiConnector, parse_fiche, parse_list_page, parse_total,
+    CfaiConnector, _societe_is_placeholder, parse_fiche, parse_list_page,
+    parse_total,
 )
 
 # Extrait RÉEL de cfai-annuaire-p1.html (table-list) — 2 lignes + 1 honoraire.
@@ -131,6 +134,70 @@ def test_to_candidates_maps_architecte_annuaire():
     # pour remplir Opportunity.phone (cf. UFDI/Places, même contrat). Sans ceci
     # le téléphone CFAI est parsé puis silencieusement perdu (728 fiches à 0 tél).
     assert cand.raw.get("phone") == "01 53 68 91 80"
+
+
+@pytest.mark.parametrize("societe", [
+    # Les 6 saisies RÉELLES repérées par le propriétaire sur les fiches CFAI.
+    "Exercice en libéral",
+    "Mode d'exercice en profession libérale",
+    "En libéral depuis 2006",
+    "Architecte d'intérieur - Profession libérale",
+    "salariée chez alinea",
+    "ALEXIS MORAND libérale architecture d'intérieur maîtrise d'oeuvre Annecy",
+    # Autres saisies réelles observées en base (source_ref cfai:56/209/1415).
+    "MICRO ENTREPRISE",
+    "Micro entreprise.",
+    "Autoentrepreneur",
+])
+def test_societe_placeholder_detected(societe):
+    # Saisie « mode d'exercice » : pas un nom d'enseigne -> placeholder.
+    assert _societe_is_placeholder(societe)
+
+
+@pytest.mark.parametrize("societe", [
+    # Vrais noms d'enseigne (base réelle) : ne doivent JAMAIS être détectés.
+    "BUSH & Associates SAS",
+    "ECOPLAN SOLUTIONS",
+    "MISE EN SCENE M2",
+    "SARL METROPOLE CONCEPT",
+    "EURL François LOBLIGEOIS ARCHITECTE D'INTÉRIEUR",
+    "Garance de Longevialle - Architecte d'Intérieur",  # nom commercial légitime
+    "La Maison Boisson",
+    "",  # vide : pas un placeholder (fallback `company or name` déjà en place)
+])
+def test_societe_legitime_not_placeholder(societe):
+    assert not _societe_is_placeholder(societe)
+
+
+def test_to_candidates_placeholder_societe_uses_person_name():
+    # Bug réel (cfai:1419) : société = « Exercice en libéral » -> la fiche UI
+    # doit porter le nom de la personne, et le descriptif NULLE PART.
+    conn = CfaiConnector(http_fetch=lambda u: None)
+    cand = conn.to_candidates([{
+        "name": "Laetitia DUVAL-BOQUET", "company": "Exercice en libéral",
+        "activity": "Architecte d'intérieur", "address": "", "city": "",
+        "phone": "", "email": None, "website": "https://www.ae-interieur.fr",
+        "fiche_id": "1419", "fiche_url": "x", "is_honoraire": False,
+    }])[0]
+    assert cand.establishment_name == "Laetitia DUVAL-BOQUET"
+    assert cand.decision_maker == "Laetitia DUVAL-BOQUET"
+    # VIDE > FAUX : le descriptif ne fuit ni dans le nom ni dans le texte de
+    # classification.
+    assert "libéral" not in cand.classification_text.lower()
+
+
+def test_to_candidates_societe_mixing_person_name_and_descriptif():
+    # Cas limite réel : le champ CONTIENT le nom de la personne + du descriptif
+    # -> on garde JUSTE le nom de la personne (h1, déjà parsé).
+    conn = CfaiConnector(http_fetch=lambda u: None)
+    cand = conn.to_candidates([{
+        "name": "Alexis MORAND",
+        "company": "ALEXIS MORAND libérale architecture d'intérieur maîtrise d'oeuvre Annecy",
+        "activity": "", "address": "", "city": "ANNECY", "phone": "",
+        "email": None, "website": None,
+        "fiche_id": "999", "fiche_url": "x", "is_honoraire": False,
+    }])[0]
+    assert cand.establishment_name == "Alexis MORAND"
 
 
 def test_to_candidates_falls_back_to_person_name_without_company():
