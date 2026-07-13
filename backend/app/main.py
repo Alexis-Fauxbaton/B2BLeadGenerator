@@ -25,7 +25,15 @@ from .models import (
     STATUSES,
     Opportunity,
 )
-from .routes import dashboard, messages, opportunities, pipeline, settings
+from .routes import (
+    activities,
+    dashboard,
+    followups,
+    messages,
+    opportunities,
+    pipeline,
+    settings,
+)
 
 app = FastAPI(title="CHR Signal Radar API", version="0.1.0")
 
@@ -49,6 +57,8 @@ def on_startup() -> None:
 
 app.include_router(dashboard.router)
 app.include_router(opportunities.router)
+app.include_router(activities.router)
+app.include_router(followups.router)
 app.include_router(messages.router)
 app.include_router(pipeline.router)
 app.include_router(settings.router)

@@ -42,6 +42,7 @@ export interface OpportunityList {
   decision_maker_email: string | null;
   decision_maker_confidence: string | null;
   next_follow_up_date: string | null;
+  next_action: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -75,6 +76,31 @@ export interface ContactHistoryRead {
   note: string | null;
   contacted_at: string | null;
   created_at: string;
+}
+
+// Journal d'activités (suivi de contact) : geste rapide sur une fiche —
+// distinct de ContactHistoryRead (événements système : message généré, import).
+export interface ContactActivity {
+  id: number;
+  opportunity_id: number;
+  type: "appel" | "email" | "dm_insta" | "note" | "statut";
+  note: string | null;
+  created_at: string;
+}
+
+// Vue « À relancer », groupée par échéance (voir GET /api/followups).
+export interface FollowUpBuckets {
+  en_retard: OpportunityList[];
+  aujourdhui: OpportunityList[];
+  cette_semaine: OpportunityList[];
+}
+
+// Compteur léger pour le badge de nav (GET /api/followups/count).
+export interface FollowUpCount {
+  en_retard: number;
+  aujourdhui: number;
+  cette_semaine: number;
+  total: number;
 }
 
 export interface OpportunityRead extends OpportunityList {

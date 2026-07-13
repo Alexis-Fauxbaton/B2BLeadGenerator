@@ -7,7 +7,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from ..database import get_session
-from ..models import ContactHistory, Opportunity
+from ..models import ContactActivity, ContactHistory, Opportunity
 from ..schemas import (
     OpportunityList,
     OpportunityRead,
@@ -147,6 +147,7 @@ def update_status(
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunité introuvable")
 
+    old_status = opp.status
     opp.status = payload.status
     if payload.next_follow_up_date is not None:
         opp.next_follow_up_date = payload.next_follow_up_date
@@ -164,6 +165,18 @@ def update_status(
             contacted_at=datetime.utcnow(),
         )
     )
+
+    # Journal de suivi (nouveau) : trace un changement de statut effectif dans le
+    # journal d'activités SOBRE (« ancien -> nouveau »). Silencieux si le statut
+    # n'a pas bougé (évite le fouilli sur une simple (re)planification de relance).
+    if payload.status != old_status:
+        session.add(
+            ContactActivity(
+                opportunity_id=opp.id,
+                type="statut",
+                note=f"{old_status} -> {payload.status}",
+            )
+        )
 
     session.commit()
     session.refresh(opp)

@@ -22,9 +22,8 @@ import {
   Star,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { GeneratedMessages, OpportunityRead } from "@/lib/types";
+import type { ContactActivity, GeneratedMessages, OpportunityRead } from "@/lib/types";
 import {
-  ACTION_LABELS,
   CHANNEL_LABELS,
   STATUS_LABELS,
   STATUS_ORDER,
@@ -44,6 +43,7 @@ import {
 } from "@/components/Badges";
 import { Loading, ErrorState } from "@/components/States";
 import CopyButton from "@/components/CopyButton";
+import { QuickActions, ActivityTimeline, NextActionCard } from "@/components/ContactPanel";
 
 const STATUS_ACTIONS = [
   { status: "contacte", label: "Marquer comme contacté" },
@@ -61,14 +61,18 @@ export default function OpportunityDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [msgSource, setMsgSource] = useState<string | null>(null);
-  const [followUp, setFollowUp] = useState("");
   const [busyStatus, setBusyStatus] = useState(false);
+  const [activities, setActivities] = useState<ContactActivity[] | null>(null);
 
   const reload = () =>
     api.getOpportunity(id).then(setOpp).catch((e) => setError(e.message));
 
+  const reloadActivities = () =>
+    api.getActivities(id).then(setActivities).catch((e) => setError(e.message));
+
   useEffect(() => {
     reload();
+    reloadActivities();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -89,18 +93,6 @@ export default function OpportunityDetailPage() {
     setBusyStatus(true);
     try {
       await api.updateStatus(id, { status });
-      await reload();
-    } finally {
-      setBusyStatus(false);
-    }
-  };
-
-  const planFollowUp = async () => {
-    if (!followUp) return;
-    setBusyStatus(true);
-    try {
-      await api.updateStatus(id, { status: "relance", next_follow_up_date: followUp });
-      setFollowUp("");
       await reload();
     } finally {
       setBusyStatus(false);
@@ -255,32 +247,28 @@ export default function OpportunityDetailPage() {
             )}
           </Section>
 
-          {/* Historique */}
-          <Section icon={History} title="Historique de contact">
-            {opp.contact_history.length === 0 ? (
-              <p className="text-sm text-slate-400">Aucune interaction enregistrée.</p>
+          {/* Suivi de contact : boutons rapides + journal compact */}
+          <Section icon={History} title="Suivi de contact">
+            <QuickActions opportunityId={opp.id} onAdded={reloadActivities} />
+            {activities === null ? (
+              <p className="mt-3 text-sm text-slate-400">Chargement du journal…</p>
             ) : (
-              <ol className="relative space-y-4 border-l border-slate-200 pl-5">
-                {opp.contact_history.map((h) => (
-                  <li key={h.id} className="relative">
-                    <span className="absolute -left-[23px] top-1 h-2.5 w-2.5 rounded-full bg-brand-400 ring-4 ring-white" />
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-slate-700">
-                        {ACTION_LABELS[h.action_type] ?? h.action_type}
-                      </span>
-                      {h.status && <StatusBadge status={h.status} />}
-                    </div>
-                    {h.note && <p className="text-sm text-slate-500">{h.note}</p>}
-                    <p className="text-xs text-slate-400">{formatDate(h.created_at)}</p>
-                  </li>
-                ))}
-              </ol>
+              <ActivityTimeline activities={activities} />
             )}
           </Section>
         </div>
 
         {/* Colonne latérale : infos + actions */}
         <div className="space-y-6">
+          <Section icon={Calendar} title="Prochaine action">
+            <NextActionCard
+              opportunityId={opp.id}
+              nextAction={opp.next_action}
+              nextFollowUpDate={opp.next_follow_up_date}
+              onSaved={reload}
+            />
+          </Section>
+
           <Section icon={Phone} title="Contact">
             <ContactBlock opp={opp} />
           </Section>
@@ -289,10 +277,6 @@ export default function OpportunityDetailPage() {
             <InfoRow label="Décideur probable" value={opp.decision_maker ?? "—"} />
             <InfoRow label="Besoins probables" value={opp.probable_needs.join(", ") || "—"} />
             <InfoRow label="Timing estimé" value={opp.estimated_timing} />
-            <InfoRow
-              label="Prochaine relance"
-              value={formatDate(opp.next_follow_up_date)}
-            />
             {opp.siren && (
               <div className="flex justify-between gap-4 border-b border-slate-50 py-2 last:border-0">
                 <span className="text-sm text-slate-400">SIREN</span>
@@ -320,25 +304,6 @@ export default function OpportunityDetailPage() {
                   {a.label}
                 </button>
               ))}
-            </div>
-
-            <div className="mt-4 border-t border-slate-100 pt-4">
-              <label className="text-xs font-medium text-slate-500">Planifier une relance</label>
-              <div className="mt-1.5 flex gap-2">
-                <input
-                  type="date"
-                  value={followUp}
-                  onChange={(e) => setFollowUp(e.target.value)}
-                  className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
-                />
-                <button
-                  onClick={planFollowUp}
-                  disabled={!followUp || busyStatus}
-                  className="rounded-lg bg-amber-500 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
-                >
-                  OK
-                </button>
-              </div>
             </div>
           </Section>
 

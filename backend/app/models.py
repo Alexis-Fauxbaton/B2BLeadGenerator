@@ -54,6 +54,12 @@ STATUSES = [
     "perdu",
 ]
 
+# Types d'activités du journal de suivi de contact (closers Ambient Home).
+# SOBRE et fermé : quatre gestes rapides + le journal AUTO des changements de
+# statut ('statut'). Distinct des `action_type` libres de ContactHistory (qui
+# trace des événements système : message généré, ingestion...).
+ACTIVITY_TYPES = ["appel", "email", "dm_insta", "note", "statut"]
+
 
 # --- Tables -------------------------------------------------------------------
 
@@ -157,6 +163,10 @@ class Opportunity(SQLModel, table=True):
     generated_call_script: Optional[str] = None
 
     next_follow_up_date: Optional[date] = None
+    # Prochaine action (texte court) associée à `next_follow_up_date` : « UNE
+    # prochaine action par fiche ». NULL = aucune action planifiée. Les deux se
+    # posent/s'effacent ensemble via PUT /api/opportunities/{id}/next-action.
+    next_action: Optional[str] = None
 
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
@@ -176,6 +186,13 @@ class Opportunity(SQLModel, table=True):
         sa_relationship_kwargs={
             "cascade": "all, delete-orphan",
             "order_by": "ContactHistory.created_at.desc()",
+        },
+    )
+    contact_activities: List["ContactActivity"] = Relationship(
+        back_populates="opportunity",
+        sa_relationship_kwargs={
+            "cascade": "all, delete-orphan",
+            "order_by": "ContactActivity.created_at.desc()",
         },
     )
 
@@ -210,6 +227,24 @@ class ContactHistory(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     opportunity: Optional[Opportunity] = Relationship(back_populates="contact_history")
+
+
+class ContactActivity(SQLModel, table=True):
+    """Journal d'activités SOBRE par fiche (suivi de contact des closers) :
+    quoi (`type`) / quand (`created_at`), avec une note optionnelle. Alimenté par
+    les gestes rapides (« J'ai appelé », « Email envoyé », « DM envoyé », « Note »)
+    et par le journal AUTO des changements de statut (type 'statut', note
+    « ancien -> nouveau »). Volontairement distinct de ContactHistory pour ne pas
+    mêler le suivi commercial aux événements système (messages IA, ingestion)."""
+    __tablename__ = "contact_activities"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    opportunity_id: int = Field(foreign_key="opportunities.id", index=True)
+    type: str  # appel | email | dm_insta | note | statut (ACTIVITY_TYPES)
+    note: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    opportunity: Optional[Opportunity] = Relationship(back_populates="contact_activities")
 
 
 class Settings(SQLModel, table=True):

@@ -1,5 +1,8 @@
 import type {
+  ContactActivity,
   DashboardStats,
+  FollowUpBuckets,
+  FollowUpCount,
   GeneratedMessages,
   GroundtruthResult,
   IngestStats,
@@ -121,5 +124,41 @@ export const api = {
   getGroundtruth: (asOf?: string) => {
     const qs = asOf ? `?as_of=${encodeURIComponent(asOf)}` : "";
     return request<GroundtruthResult>(`/api/eval/groundtruth${qs}`);
+  },
+
+  // --- Suivi de contact : journal d'activités + prochaine action + relances --
+
+  getActivities: (id: number, limit = 50, offset = 0) =>
+    request<ContactActivity[]>(
+      `/api/opportunities/${id}/activities?limit=${limit}&offset=${offset}`
+    ),
+
+  addActivity: (id: number, body: { type: string; note?: string }) =>
+    request<ContactActivity>(`/api/opportunities/${id}/activities`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  setNextAction: (
+    id: number,
+    body: { next_action?: string | null; next_follow_up_date?: string | null }
+  ) =>
+    request<OpportunityRead>(`/api/opportunities/${id}/next-action`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  // population omis => défaut backend "architecte" (cohérent avec le reste du
+  // produit, pivot Ambient Home) ; passer "" pour toutes les populations.
+  getFollowUps: (population?: string) => {
+    const qs =
+      population !== undefined ? `?population=${encodeURIComponent(population)}` : "";
+    return request<FollowUpBuckets>(`/api/followups${qs}`);
+  },
+
+  getFollowUpsCount: (population?: string) => {
+    const qs =
+      population !== undefined ? `?population=${encodeURIComponent(population)}` : "";
+    return request<FollowUpCount>(`/api/followups/count${qs}`);
   },
 };

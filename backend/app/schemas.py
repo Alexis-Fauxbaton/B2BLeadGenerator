@@ -67,6 +67,7 @@ class OpportunityBase(BaseModel):
     proof_url: str = ""
     status: str = "non_contacte"
     next_follow_up_date: Optional[date] = None
+    next_action: Optional[str] = None
 
 
 class OpportunityList(OpportunityBase):
@@ -173,6 +174,55 @@ class StatusUpdate(BaseModel):
     status: str
     note: Optional[str] = None
     next_follow_up_date: Optional[date] = None
+
+
+# --- Suivi de contact : journal d'activités + prochaine action ----------------
+
+
+class ContactActivityRead(BaseModel):
+    id: int
+    opportunity_id: int
+    type: str
+    note: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ContactActivityCreate(BaseModel):
+    """Geste rapide : type ('appel'|'email'|'dm_insta'|'note'|'statut') + note
+    optionnelle (le petit champ inline de « Note »)."""
+
+    type: str
+    note: Optional[str] = None
+
+
+class NextActionUpdate(BaseModel):
+    """UNE prochaine action par fiche : texte court + date, posés/effacés
+    ENSEMBLE. Sémantique PUT (remplacement complet) : un champ omis vaut null =>
+    effacé. `{}` efface les deux."""
+
+    next_action: Optional[str] = None
+    next_follow_up_date: Optional[date] = None
+
+
+class FollowUpBuckets(BaseModel):
+    """Vue « À relancer » groupée. Chaque bucket est trié par échéance croissante
+    (le plus urgent d'abord). Exclut les fiches gagne/perdu."""
+
+    en_retard: List[OpportunityList]
+    aujourdhui: List[OpportunityList]
+    cette_semaine: List[OpportunityList]
+
+
+class FollowUpCount(BaseModel):
+    """Compteur léger pour le badge discret de la nav."""
+
+    en_retard: int
+    aujourdhui: int
+    cette_semaine: int
+    total: int  # en_retard + aujourdhui + cette_semaine
 
 
 # --- Messages -----------------------------------------------------------------

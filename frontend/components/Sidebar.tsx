@@ -1,19 +1,23 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Target,
+  BellRing,
   KanbanSquare,
   Settings as SettingsIcon,
   FlaskConical,
   Radar,
 } from "lucide-react";
+import { api } from "@/lib/api";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/opportunities", label: "Opportunités", icon: Target },
+  { href: "/followups", label: "À relancer", icon: BellRing },
   { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { href: "/eval", label: "Éval Instagram", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
@@ -21,6 +25,17 @@ const NAV = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  // Badge discret : "à faire maintenant" = en retard + aujourd'hui (voir
+  // contrat GET /api/followups/count). Absent (pas de 0 affiché) tant que
+  // rien n'est dû -> jamais criard.
+  const [dueCount, setDueCount] = useState(0);
+
+  useEffect(() => {
+    api
+      .getFollowUpsCount()
+      .then((c) => setDueCount(c.en_retard + c.aujourdhui))
+      .catch(() => {});
+  }, []);
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -51,7 +66,12 @@ export default function Sidebar() {
               }`}
             >
               <Icon size={18} className={active ? "text-brand-600" : "text-slate-400"} />
-              {label}
+              <span className="flex-1">{label}</span>
+              {href === "/followups" && dueCount > 0 && (
+                <span className="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-slate-600">
+                  {dueCount}
+                </span>
+              )}
             </Link>
           );
         })}

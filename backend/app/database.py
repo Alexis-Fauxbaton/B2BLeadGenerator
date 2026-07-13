@@ -28,7 +28,13 @@ def init_db() -> None:
 
 def _run_lightweight_migrations() -> None:
     """Ajoute les colonnes ajoutées après coup (SQLite n'a pas de IF NOT EXISTS
-    sur ADD COLUMN ; on inspecte donc PRAGMA table_info)."""
+    sur ADD COLUMN ; on inspecte donc PRAGMA table_info).
+
+    Nouvelles TABLES (ex. `contact_activities`) : rien à faire ici — elles sont
+    créées par `SQLModel.metadata.create_all(engine)` dans `init_db` (create_all
+    est conditionnel : `checkfirst=True`, il ne crée QUE les tables absentes).
+    Cette fonction ne gère QUE l'ajout de colonnes sur des tables existantes
+    (create_all ne modifie jamais une table déjà présente)."""
     from sqlalchemy import inspect, text
 
     if not DATABASE_URL.startswith("sqlite"):
@@ -69,6 +75,7 @@ def _run_lightweight_migrations() -> None:
         "extra_emails": "ALTER TABLE opportunities ADD COLUMN extra_emails JSON",
         "lifecycle_label": "ALTER TABLE opportunities ADD COLUMN lifecycle_label VARCHAR",
         "population": "ALTER TABLE opportunities ADD COLUMN population VARCHAR DEFAULT 'chr'",
+        "next_action": "ALTER TABLE opportunities ADD COLUMN next_action VARCHAR",
     }
     with engine.begin() as conn:
         for column, ddl in additions.items():

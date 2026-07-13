@@ -99,6 +99,69 @@ export const ACTION_LABELS: Record<string, string> = {
   ingested: "Importé automatiquement",
 };
 
+// Journal d'activités (suivi de contact, ContactActivity) — distinct de
+// ACTION_LABELS (événements système ContactHistory).
+export const ACTIVITY_TYPE_LABELS: Record<string, string> = {
+  appel: "Appel",
+  email: "Email envoyé",
+  dm_insta: "DM envoyé",
+  note: "Note",
+  statut: "Changement de statut",
+};
+
+// Le backend sérialise les timestamps naïfs (sans suffixe de fuseau, ex.
+// "2026-07-13T11:18:20.081942") qui sont en UTC. new Date() sur une chaîne
+// sans 'Z'/offset l'interprète comme heure LOCALE -> décalage. On force
+// l'interprétation UTC quand aucun fuseau n'est déjà présent.
+function parseBackendTimestamp(value: string): Date {
+  const hasTimezone = /Z$|[+-]\d{2}:?\d{2}$/.test(value);
+  const hasTime = value.includes("T");
+  return new Date(hasTime && !hasTimezone ? `${value}Z` : value);
+}
+
+// Date relative fr, courte, pour le journal d'activités (toujours dans le
+// passé). Retombe sur formatDate au-delà d'un an pour rester lisible.
+export function formatRelativeDate(value: string | null | undefined): string {
+  if (!value) return "—";
+  const d = parseBackendTimestamp(value);
+  if (Number.isNaN(d.getTime())) return value;
+  const diffDays = Math.round((Date.now() - d.getTime()) / 86_400_000);
+  if (diffDays <= 0) return "aujourd'hui";
+  if (diffDays === 1) return "hier";
+  if (diffDays < 30) return `il y a ${diffDays} j`;
+  if (diffDays < 365) return `il y a ${Math.round(diffDays / 30)} mois`;
+  return formatDate(value);
+}
+
+// Échéance relative fr pour la vue « À relancer » (dates calendaires, sans
+// heure). "aujourd'hui" / "demain" / "dans N j" / "en retard de N j".
+export function formatDueLabel(value: string | null | undefined): string {
+  if (!value) return "—";
+  const due = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(due.getTime())) return value;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((due.getTime() - today.getTime()) / 86_400_000);
+  if (diffDays === 0) return "aujourd'hui";
+  if (diffDays === 1) return "demain";
+  if (diffDays > 1) return `dans ${diffDays} j`;
+  if (diffDays === -1) return "en retard de 1 j";
+  return `en retard de ${Math.abs(diffDays)} j`;
+}
+
+// Une échéance passée (hors gagné/perdu, filtré côté appelant) = en retard.
+// Comparaison sur la date LOCALE (comme formatDueLabel), pas UTC : entre
+// 00:00 et 02:00 heure française l'été, toISOString() donne encore la
+// veille et ferait manquer une relance due la veille.
+export function isOverdue(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const due = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(due.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return due.getTime() < today.getTime();
+}
+
 export const SOURCE_LABELS: Record<string, string> = {
   demo: "Démo",
   bodacc: "BODACC",
