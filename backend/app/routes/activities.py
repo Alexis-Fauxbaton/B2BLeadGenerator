@@ -70,7 +70,10 @@ def add_activity(
         )
 
     activity = ContactActivity(
-        opportunity_id=opp.id, type=payload.type, note=payload.note
+        opportunity_id=opp.id,
+        type=payload.type,
+        note=payload.note,
+        author=payload.author,
     )
     session.add(activity)
     opp.updated_at = datetime.utcnow()

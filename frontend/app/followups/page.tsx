@@ -70,11 +70,16 @@ export default function FollowUpsPage() {
 }
 
 function FollowUpRow({ o }: { o: OpportunityList }) {
+  // « Stretched link » : le <Link> couvre toute la ligne en overlay absolu, ce
+  // qui laisse le numéro être un vrai <a href="tel:"> indépendant (impossible
+  // d'imbriquer deux <a>). Le closer compose en un tap sans ouvrir la fiche.
   return (
-    <Link
-      href={`/opportunities/${o.id}`}
-      className="flex items-center justify-between gap-4 px-5 py-3 hover:bg-slate-50"
-    >
+    <div className="relative flex items-center justify-between gap-4 px-5 py-3 hover:bg-slate-50">
+      <Link
+        href={`/opportunities/${o.id}`}
+        aria-label={o.establishment_name}
+        className="absolute inset-0 z-0"
+      />
       <div className="min-w-0">
         <p className="truncate text-sm font-medium text-slate-900">{o.establishment_name}</p>
         <p className="truncate text-xs text-slate-500">
@@ -82,15 +87,18 @@ function FollowUpRow({ o }: { o: OpportunityList }) {
           {o.next_action ? ` · ${o.next_action}` : ""}
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-3 text-xs text-slate-400">
+      <div className="relative z-10 flex shrink-0 items-center gap-3 text-xs text-slate-400">
         {o.phone && (
-          <span className="hidden items-center gap-1 text-slate-500 sm:inline-flex">
+          <a
+            href={`tel:${o.phone.replace(/\s/g, "")}`}
+            className="hidden items-center gap-1 text-slate-500 hover:text-brand-600 sm:inline-flex"
+          >
             <Phone size={12} /> {o.phone}
-          </span>
+          </a>
         )}
-        <span className="tabular-nums">{formatDueLabel(o.next_follow_up_date)}</span>
-        <ChevronRight size={14} />
+        <span className="pointer-events-none tabular-nums">{formatDueLabel(o.next_follow_up_date)}</span>
+        <ChevronRight size={14} className="pointer-events-none" />
       </div>
-    </Link>
+    </div>
   );
 }

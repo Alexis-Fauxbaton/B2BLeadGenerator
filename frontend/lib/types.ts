@@ -85,6 +85,9 @@ export interface ContactActivity {
   opportunity_id: number;
   type: "appel" | "email" | "dm_insta" | "note" | "statut";
   note: string | null;
+  // Auteur (closer) — fondation des comptes closers. Exposé en lecture ; pas
+  // encore renseigné ni affiché (l'auth viendra plus tard).
+  author: string | null;
   created_at: string;
 }
 

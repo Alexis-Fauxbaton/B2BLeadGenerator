@@ -242,6 +242,10 @@ class ContactActivity(SQLModel, table=True):
     opportunity_id: int = Field(foreign_key="opportunities.id", index=True)
     type: str  # appel | email | dm_insta | note | statut (ACTIVITY_TYPES)
     note: Optional[str] = None
+    # Auteur de l'activité (closer Ambient Home). Optionnel pour l'instant :
+    # l'authentification viendra plus tard, mais la colonne existe AVANT que les
+    # données ne s'accumulent (fondation des comptes closers). NULL = inconnu.
+    author: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     opportunity: Optional[Opportunity] = Relationship(back_populates="contact_activities")

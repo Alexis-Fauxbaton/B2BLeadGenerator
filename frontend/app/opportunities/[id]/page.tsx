@@ -93,7 +93,10 @@ export default function OpportunityDetailPage() {
     setBusyStatus(true);
     try {
       await api.updateStatus(id, { status });
-      await reload();
+      // Un changement de statut journalise AUTO une activité 'statut' côté
+      // backend : on recharge aussi le journal pour la voir apparaître tout de
+      // suite (sinon elle ne s'affichait qu'après un rechargement manuel).
+      await Promise.all([reload(), reloadActivities()]);
     } finally {
       setBusyStatus(false);
     }

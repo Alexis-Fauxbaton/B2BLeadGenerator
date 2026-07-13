@@ -184,6 +184,7 @@ class ContactActivityRead(BaseModel):
     opportunity_id: int
     type: str
     note: Optional[str]
+    author: Optional[str]
     created_at: datetime
 
     class Config:
@@ -192,10 +193,13 @@ class ContactActivityRead(BaseModel):
 
 class ContactActivityCreate(BaseModel):
     """Geste rapide : type ('appel'|'email'|'dm_insta'|'note'|'statut') + note
-    optionnelle (le petit champ inline de « Note »)."""
+    optionnelle (le petit champ inline de « Note »). `author` optionnel : accepté
+    en écriture dès maintenant (fondation des comptes closers) même si l'UI ne le
+    renseigne pas encore ; l'auth le remplira plus tard."""
 
     type: str
     note: Optional[str] = None
+    author: Optional[str] = None
 
 
 class NextActionUpdate(BaseModel):

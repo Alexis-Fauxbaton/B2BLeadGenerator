@@ -82,6 +82,19 @@ def _run_lightweight_migrations() -> None:
             if column not in existing:
                 conn.execute(text(ddl))
 
+    # Colonnes ajoutées après coup sur `contact_activities` (table déjà présente
+    # sur une base existante : create_all ne la modifie pas). `author` est la
+    # fondation des comptes closers (rempli plus tard par l'auth).
+    if "contact_activities" in inspector.get_table_names():
+        ca_cols = {col["name"] for col in inspector.get_columns("contact_activities")}
+        ca_additions = {
+            "author": "ALTER TABLE contact_activities ADD COLUMN author VARCHAR",
+        }
+        with engine.begin() as conn:
+            for column, ddl in ca_additions.items():
+                if column not in ca_cols:
+                    conn.execute(text(ddl))
+
 
 def get_session():
     """Dépendance FastAPI : fournit une session DB par requête."""

@@ -17,7 +17,21 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ContactActivity } from "@/lib/types";
-import { ACTIVITY_TYPE_LABELS, formatDate, formatRelativeDate, isOverdue } from "@/lib/labels";
+import {
+  ACTIVITY_TYPE_LABELS,
+  STATUS_LABELS,
+  formatDate,
+  formatRelativeDate,
+  isOverdue,
+} from "@/lib/labels";
+
+// Note d'un changement de statut auto-journalisé : "ancien -> nouveau" (clés
+// techniques) rendu en libellés FR pour le closer ("Non contacté → Contacté").
+function frStatusNote(note: string): string {
+  const parts = note.split("->").map((s) => s.trim());
+  if (parts.length !== 2) return note;
+  return `${STATUS_LABELS[parts[0]] ?? parts[0]} → ${STATUS_LABELS[parts[1]] ?? parts[1]}`;
+}
 
 const ACTIVITY_ICONS: Record<string, typeof Phone> = {
   appel: Phone,
@@ -171,7 +185,11 @@ export function ActivityTimeline({ activities }: { activities: ContactActivity[]
                     {formatRelativeDate(a.created_at)}
                   </span>
                 </div>
-                {a.note && <p className="mt-0.5 text-sm text-slate-500">{a.note}</p>}
+                {a.note && (
+                  <p className="mt-0.5 text-sm text-slate-500">
+                    {a.type === "statut" ? frStatusNote(a.note) : a.note}
+                  </p>
+                )}
               </div>
             </li>
           );
@@ -242,6 +260,28 @@ export function NextActionCard({
     }
   };
 
+  // Relance rapide en UN clic : programme une échéance à J+N (date LOCALE, pas
+  // toISOString/UTC qui décalerait d'un jour près de minuit) en gardant le texte
+  // éventuel. Le geste le plus courant du closer (« ça n'a pas répondu → J+3 »).
+  const quickSchedule = async (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate()
+    ).padStart(2, "0")}`;
+    setDate(iso);
+    setBusy(true);
+    try {
+      await api.setNextAction(opportunityId, {
+        next_action: text.trim() || null,
+        next_follow_up_date: iso,
+      });
+      onSaved();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div>
       {hasValue && (
@@ -265,6 +305,23 @@ export function NextActionCard({
           </button>
         </div>
       )}
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-xs text-slate-400">Relance rapide :</span>
+        <button
+          onClick={() => quickSchedule(3)}
+          disabled={busy}
+          className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          J+3
+        </button>
+        <button
+          onClick={() => quickSchedule(7)}
+          disabled={busy}
+          className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          J+7
+        </button>
+      </div>
       <div className="flex flex-col gap-2 sm:flex-row">
         <input
           value={text}

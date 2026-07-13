@@ -83,6 +83,21 @@ def test_add_activity_note_type_with_inline_text():
         assert act.type == "note" and act.note == "relancé par mail"
 
 
+def test_add_activity_accepts_optional_author():
+    """`author` (fondation des comptes closers) : accepté en écriture et exposé
+    en lecture. NULL par défaut tant que l'auth ne le renseigne pas."""
+    with Session(_engine()) as s:
+        opp = _opp(s)
+        # Écriture optionnelle : fournie -> persistée et relue.
+        act = add_activity(
+            opp.id, ContactActivityCreate(type="appel", author="marie"), s
+        )
+        assert act.author == "marie"
+        # Omise -> NULL (défaut), l'app fonctionne sans auth.
+        act2 = add_activity(opp.id, ContactActivityCreate(type="note", note="RAS"), s)
+        assert act2.author is None
+
+
 # --- GET /activities : tri desc + pagination ----------------------------------
 
 
@@ -265,6 +280,37 @@ def test_migration_adds_next_action_column(tmp_path):
         db._run_lightweight_migrations()
         cols = {c["name"] for c in inspect(db.engine).get_columns("opportunities")}
         assert "next_action" in cols
+    finally:
+        db.engine.dispose()
+        db.engine, db.DATABASE_URL = orig_engine, orig_url
+
+
+def test_migration_adds_author_column_on_existing_table(tmp_path):
+    """Base existante avec un `contact_activities` SANS `author` (créé avant
+    l'évolution) : la migration légère ajoute la colonne sans casser la table."""
+    from sqlalchemy import create_engine as ce, inspect, text
+    import app.database as db
+
+    url = f"sqlite:///{tmp_path/'legacy_ca.db'}"
+    old = ce(url)
+    with old.begin() as conn:
+        # opportunities minimal (garde-fou d'entrée de la migration).
+        conn.execute(text("CREATE TABLE opportunities (id INTEGER PRIMARY KEY, "
+                          "establishment_name VARCHAR, establishment_type VARCHAR, "
+                          "city VARCHAR, address VARCHAR, main_signal VARCHAR, "
+                          "detection_date DATE, estimated_timing VARCHAR)"))
+        # contact_activities ancien : pas de colonne author.
+        conn.execute(text("CREATE TABLE contact_activities (id INTEGER PRIMARY KEY, "
+                          "opportunity_id INTEGER, type VARCHAR, note VARCHAR, "
+                          "created_at DATETIME)"))
+    old.dispose()
+
+    orig_engine, orig_url = db.engine, db.DATABASE_URL
+    db.engine, db.DATABASE_URL = ce(url), url
+    try:
+        db._run_lightweight_migrations()
+        cols = {c["name"] for c in inspect(db.engine).get_columns("contact_activities")}
+        assert "author" in cols
     finally:
         db.engine.dispose()
         db.engine, db.DATABASE_URL = orig_engine, orig_url
