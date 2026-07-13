@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Phone, ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import type { FollowUpBuckets, OpportunityList } from "@/lib/types";
 import { formatDueLabel } from "@/lib/labels";
 import PageHeader from "@/components/PageHeader";
@@ -21,12 +22,18 @@ const SECTIONS: { key: keyof FollowUpBuckets; label: string; accent: string }[] 
 ];
 
 export default function FollowUpsPage() {
+  const { user } = useAuth();
+  const [assigned, setAssigned] = useState<string>("");
   const [data, setData] = useState<FollowUpBuckets | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getFollowUps().then(setData).catch((e) => setError(e.message));
-  }, []);
+    setData(null);
+    api
+      .getFollowUps(undefined, assigned || undefined)
+      .then(setData)
+      .catch((e) => setError(e.message));
+  }, [assigned]);
 
   if (error) return <ErrorState message={error} />;
 
@@ -39,7 +46,21 @@ export default function FollowUpsPage() {
       <PageHeader
         title="À relancer"
         subtitle={data ? `${total} fiche(s) à traiter` : "Chargement…"}
-      />
+      >
+        {/* « Mes relances » : visible seulement si loggé. */}
+        {user && (
+          <button
+            onClick={() => setAssigned((a) => (a === "me" ? "" : "me"))}
+            className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
+              assigned === "me"
+                ? "border-brand-300 bg-brand-50 text-brand-700"
+                : "border-slate-200 text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            Mes relances
+          </button>
+        )}
+      </PageHeader>
       <div className="space-y-6 p-8">
         {!data ? (
           <Loading />

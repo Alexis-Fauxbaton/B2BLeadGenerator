@@ -76,6 +76,7 @@ def _run_lightweight_migrations() -> None:
         "lifecycle_label": "ALTER TABLE opportunities ADD COLUMN lifecycle_label VARCHAR",
         "population": "ALTER TABLE opportunities ADD COLUMN population VARCHAR DEFAULT 'chr'",
         "next_action": "ALTER TABLE opportunities ADD COLUMN next_action VARCHAR",
+        "assigned_to": "ALTER TABLE opportunities ADD COLUMN assigned_to VARCHAR",
     }
     with engine.begin() as conn:
         for column, ddl in additions.items():

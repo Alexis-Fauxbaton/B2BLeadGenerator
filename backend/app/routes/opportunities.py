@@ -6,14 +6,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func
 from sqlmodel import Session, select
 
+from ..assignment import apply_assigned_filter
 from ..database import get_session
-from ..models import ContactActivity, ContactHistory, Opportunity
+from ..models import ContactActivity, ContactHistory, Opportunity, User
 from ..schemas import (
+    AssignmentUpdate,
     OpportunityList,
     OpportunityRead,
     OpportunityUpdate,
     StatusUpdate,
 )
+from ..security import get_current_user, require_admin_soft
 
 router = APIRouter(prefix="/api/opportunities", tags=["opportunities"])
 
@@ -39,10 +42,12 @@ def list_opportunities(
     source: Optional[str] = None,
     lifecycle_label: Optional[str] = None,
     population: Optional[str] = None,
+    assigned: Optional[str] = None,
     sort_by: str = "score",
     order: str = "desc",
     limit: int = 100,
     offset: int = 0,
+    current_user: Optional[User] = Depends(get_current_user),
 ):
     # Bornes défensives (les appels directs — tests A1 — passent des ints bruts,
     # sans la validation FastAPI Query ; on clampe donc ici).
@@ -70,6 +75,8 @@ def list_opportunities(
         query = query.where(Opportunity.lifecycle_label == lifecycle_label)
     if population:
         query = query.where(Opportunity.population == population)
+    # Filtre d'assignation : me (session) | none (non assignés) | <nom du closer>.
+    query = apply_assigned_filter(query, assigned, current_user)
 
     # Total AVANT pagination (en-tête X-Total-Count) : indispensable au pager
     # côté frontend à l'échelle du stock (~30k lignes, ~300 pages).
@@ -178,6 +185,29 @@ def update_status(
             )
         )
 
+    session.commit()
+    session.refresh(opp)
+    return opp
+
+
+@router.patch("/{opportunity_id}/assignment", response_model=OpportunityRead)
+def update_assignment(
+    opportunity_id: int,
+    payload: AssignmentUpdate,
+    session: Session = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user),
+):
+    """Assigne (ou désassigne, `assigned_to=null`) un lead à un closer. Réservé
+    à l'admin QUAND une session existe (soft : libre tant que personne n'est
+    loggé — Alexis aujourd'hui). Un closer loggé se voit refuser (403)."""
+    require_admin_soft(current_user)
+    opp = session.get(Opportunity, opportunity_id)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunité introuvable")
+
+    opp.assigned_to = payload.assigned_to
+    opp.updated_at = datetime.utcnow()
+    session.add(opp)
     session.commit()
     session.refresh(opp)
     return opp

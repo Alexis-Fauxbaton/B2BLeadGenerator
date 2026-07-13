@@ -15,6 +15,7 @@ import {
   User,
 } from "lucide-react";
 import { api, type OpportunityFilters } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import type { IngestStats, Meta, OpportunityList } from "@/lib/types";
 import {
   CHANNEL_LABELS,
@@ -102,6 +103,7 @@ const OPP_FILTERS_STORAGE_KEY = "opp_filters-v2";
 const PAGE_SIZE = 100;
 
 export default function OpportunitiesPage() {
+  const { user } = useAuth();
   const [meta, setMeta] = useState<Meta | null>(null);
   const [rows, setRows] = useState<OpportunityList[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -298,6 +300,16 @@ export default function OpportunitiesPage() {
               <option value="">Score minimum</option>
               {[8, 6, 5, 3].map((v) => <option key={v} value={v}>≥ {v}/10</option>)}
             </select>
+
+            {/* Assignation : visible seulement si loggé (« Mes leads » pour
+                tous, « Non assignés » réservé à l'admin). */}
+            {user && (
+              <select className={SELECT_CLS} value={filters.assigned ?? ""} onChange={(e) => set({ assigned: e.target.value || undefined })}>
+                <option value="">Assignation : toutes</option>
+                <option value="me">Mes leads</option>
+                {user.role === "admin" && <option value="none">Non assignés</option>}
+              </select>
+            )}
 
             <div className="flex items-center gap-2">
               <select className={`${SELECT_CLS} flex-1`} value={filters.sort_by ?? "score"} onChange={(e) => set({ sort_by: e.target.value })}>

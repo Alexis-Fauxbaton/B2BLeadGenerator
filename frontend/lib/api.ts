@@ -1,4 +1,5 @@
 import type {
+  ActivityJournal,
   ContactActivity,
   DashboardStats,
   FollowUpBuckets,
@@ -11,6 +12,8 @@ import type {
   OpportunityRead,
   Pipeline,
   Settings,
+  User,
+  UserPublic,
 } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -18,6 +21,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     cache: "no-store",
+    credentials: "include", // envoie/reçoit le cookie de session signé
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -39,6 +43,8 @@ export interface OpportunityFilters {
   source?: string;
   lifecycle_label?: string;
   population?: string;
+  // Filtre d'assignation : "me" (mes leads) | "none" (non assignés) | <nom>.
+  assigned?: string;
   sort_by?: string;
   order?: string;
   limit?: number;
@@ -68,7 +74,11 @@ export const api = {
     const qs = params.toString();
     const res = await fetch(
       `${API_URL}/api/opportunities${qs ? `?${qs}` : ""}`,
-      { cache: "no-store", headers: { "Content-Type": "application/json" } }
+      {
+        cache: "no-store",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      }
     );
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -97,6 +107,12 @@ export const api = {
   generateMessages: (id: number) =>
     request<GeneratedMessages>(`/api/opportunities/${id}/generate-messages`, {
       method: "POST",
+    }),
+
+  updateAssignment: (id: number, assignedTo: string | null) =>
+    request<OpportunityRead>(`/api/opportunities/${id}/assignment`, {
+      method: "PATCH",
+      body: JSON.stringify({ assigned_to: assignedTo }),
     }),
 
   getPipeline: () => request<Pipeline>("/api/pipeline"),
@@ -150,15 +166,42 @@ export const api = {
 
   // population omis => défaut backend "architecte" (cohérent avec le reste du
   // produit, pivot Ambient Home) ; passer "" pour toutes les populations.
-  getFollowUps: (population?: string) => {
-    const qs =
-      population !== undefined ? `?population=${encodeURIComponent(population)}` : "";
-    return request<FollowUpBuckets>(`/api/followups${qs}`);
+  // assigned : "me" (mes relances) | "none" | <nom>.
+  getFollowUps: (population?: string, assigned?: string) => {
+    const params = new URLSearchParams();
+    if (population !== undefined) params.set("population", population);
+    if (assigned) params.set("assigned", assigned);
+    const qs = params.toString();
+    return request<FollowUpBuckets>(`/api/followups${qs ? `?${qs}` : ""}`);
   },
 
-  getFollowUpsCount: (population?: string) => {
-    const qs =
-      population !== undefined ? `?population=${encodeURIComponent(population)}` : "";
-    return request<FollowUpCount>(`/api/followups/count${qs}`);
+  getFollowUpsCount: (population?: string, assigned?: string) => {
+    const params = new URLSearchParams();
+    if (population !== undefined) params.set("population", population);
+    if (assigned) params.set("assigned", assigned);
+    const qs = params.toString();
+    return request<FollowUpCount>(`/api/followups/count${qs ? `?${qs}` : ""}`);
+  },
+
+  // --- Auth légère + vue patron --------------------------------------------
+
+  login: (body: { email: string; password: string }) =>
+    request<User>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+
+  getMe: () => request<User | null>("/api/auth/me"),
+
+  getUsers: () => request<UserPublic[]>("/api/auth/users"),
+
+  getActivite: (params: { day?: string; author?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.day) qs.set("day", params.day);
+    if (params.author) qs.set("author", params.author);
+    const s = qs.toString();
+    return request<ActivityJournal>(`/api/activite${s ? `?${s}` : ""}`);
   },
 };

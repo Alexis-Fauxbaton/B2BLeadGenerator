@@ -4,9 +4,12 @@
 // rapides + journal d'activités compact + une prochaine action par fiche.
 // Regroupé ici pour rester réutilisable et garder page.tsx lisible.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Phone,
+  PhoneCall,
+  PhoneMissed,
+  Voicemail,
   Mail,
   Instagram,
   StickyNote,
@@ -14,9 +17,11 @@ import {
   Loader2,
   X,
   Plus,
+  UserCog,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { ContactActivity } from "@/lib/types";
+import type { ContactActivity, UserPublic } from "@/lib/types";
+import { useAuth } from "@/lib/auth";
 import {
   ACTIVITY_TYPE_LABELS,
   STATUS_LABELS,
@@ -56,8 +61,8 @@ export function QuickActions({
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteText, setNoteText] = useState("");
 
-  const fire = async (type: string, note?: string) => {
-    setBusy(type);
+  const fire = async (type: string, note?: string, key?: string) => {
+    setBusy(key ?? type);
     try {
       await api.addActivity(opportunityId, note ? { type, note } : { type });
       onAdded();
@@ -77,11 +82,24 @@ export function QuickActions({
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2">
+        {/* Issue d'appel en 1 clic : type reste 'appel', seule la note change. */}
         <QuickButton
-          icon={Phone}
-          label="J'ai appelé"
-          busy={busy === "appel"}
-          onClick={() => fire("appel")}
+          icon={PhoneCall}
+          label="Répondu"
+          busy={busy === "appel-repondu"}
+          onClick={() => fire("appel", "Répondu", "appel-repondu")}
+        />
+        <QuickButton
+          icon={PhoneMissed}
+          label="Pas de réponse"
+          busy={busy === "appel-absent"}
+          onClick={() => fire("appel", "Pas de réponse", "appel-absent")}
+        />
+        <QuickButton
+          icon={Voicemail}
+          label="Répondeur"
+          busy={busy === "appel-repondeur"}
+          onClick={() => fire("appel", "Répondeur", "appel-repondeur")}
         />
         <QuickButton
           icon={Mail}
@@ -343,6 +361,69 @@ export function NextActionCard({
           {busy ? <Loader2 size={14} className="animate-spin" /> : "OK"}
         </button>
       </div>
+    </div>
+  );
+}
+
+// --- Assignation (dropdown discret) ------------------------------------------
+
+export function AssignmentSelect({
+  opportunityId,
+  assignedTo,
+  onSaved,
+}: {
+  opportunityId: number;
+  assignedTo: string | null;
+  onSaved: () => void;
+}) {
+  const { user } = useAuth();
+  const [users, setUsers] = useState<UserPublic[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Admin SOFT : éditable tant que personne n'est loggé (Alexis aujourd'hui),
+  // réservé à l'admin dès qu'une session existe (cohérent avec le 403 backend).
+  const editable = !user || user.role === "admin";
+
+  useEffect(() => {
+    if (!editable) return;
+    api.getUsers().then(setUsers).catch(() => {});
+  }, [editable]);
+
+  const change = async (value: string) => {
+    setBusy(true);
+    try {
+      await api.updateAssignment(opportunityId, value || null);
+      onSaved();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!editable) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-slate-600">
+        <UserCog size={14} className="shrink-0 text-slate-400" />
+        {assignedTo ?? "Non assigné"}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <UserCog size={14} className="shrink-0 text-slate-400" />
+      <select
+        value={assignedTo ?? ""}
+        disabled={busy || !users}
+        onChange={(e) => change(e.target.value)}
+        className="flex-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
+      >
+        <option value="">Non assigné</option>
+        {users?.map((u) => (
+          <option key={u.id} value={u.name}>
+            {u.name}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

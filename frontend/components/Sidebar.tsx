@@ -11,8 +11,11 @@ import {
   Settings as SettingsIcon,
   FlaskConical,
   Radar,
+  ClipboardList,
+  LogOut,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -23,8 +26,11 @@ const NAV = [
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
+const ACTIVITE_ITEM = { href: "/activite", label: "Activité", icon: ClipboardList };
+
 export default function Sidebar() {
   const pathname = usePathname();
+  const { user, logout } = useAuth();
   // Badge discret : "à faire maintenant" = en retard + aujourd'hui (voir
   // contrat GET /api/followups/count). Absent (pas de 0 affiché) tant que
   // rien n'est dû -> jamais criard.
@@ -40,6 +46,12 @@ export default function Sidebar() {
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 
+  // Admin SOFT (cohérent avec require_admin_soft côté backend) : le lien reste
+  // visible tant que personne n'est loggé (Alexis aujourd'hui, sans compte) ;
+  // dès qu'une session existe, réservé à l'admin.
+  const showActivite = !user || user.role === "admin";
+  const nav = showActivite ? [...NAV.slice(0, 3), ACTIVITE_ITEM, ...NAV.slice(3)] : NAV;
+
   return (
     <aside className="w-64 shrink-0 border-r border-slate-200 bg-white flex flex-col">
       <div className="h-16 flex items-center gap-2.5 px-5 border-b border-slate-200">
@@ -53,7 +65,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 p-3 space-y-1">
-        {NAV.map(({ href, label, icon: Icon }) => {
+        {nav.map(({ href, label, icon: Icon }) => {
           const active = isActive(href);
           return (
             <Link
@@ -77,7 +89,26 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="p-4 border-t border-slate-200">
+      <div className="space-y-3 p-4 border-t border-slate-200">
+        {/* Utilisateur loggé + déconnexion — rien du tout tant que personne
+            n'est loggé (soft, Alexis aujourd'hui). */}
+        {user && (
+          <div className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2">
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium text-slate-700">{user.name}</p>
+              <p className="text-[10px] uppercase tracking-wide text-slate-400">
+                {user.role === "admin" ? "Admin" : "Closer"}
+              </p>
+            </div>
+            <button
+              onClick={logout}
+              title="Déconnexion"
+              className="shrink-0 rounded-md p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+            >
+              <LogOut size={14} />
+            </button>
+          </div>
+        )}
         <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
           <p className="font-medium text-slate-700">Sources</p>
           <p className="mt-1">BODACC · Sirene · Instagram</p>

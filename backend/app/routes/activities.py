@@ -6,19 +6,20 @@ statut (dans routes/opportunities.py) écrivent dans `contact_activities` ; UNE
 prochaine action (texte court + date) se pose/s'efface d'un coup.
 """
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..database import get_session
-from ..models import ACTIVITY_TYPES, ContactActivity, Opportunity
+from ..models import ACTIVITY_TYPES, ContactActivity, Opportunity, User
 from ..schemas import (
     ContactActivityCreate,
     ContactActivityRead,
     NextActionUpdate,
     OpportunityRead,
 )
+from ..security import get_current_user
 
 router = APIRouter(prefix="/api/opportunities", tags=["activities"])
 
@@ -56,9 +57,14 @@ def add_activity(
     opportunity_id: int,
     payload: ContactActivityCreate,
     session: Session = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user),
 ):
     """Enregistre un geste rapide et touche `updated_at` (l'activité fait vivre
-    la fiche). N'altère JAMAIS le statut (découplé du changement de statut)."""
+    la fiche). N'altère JAMAIS le statut (découplé du changement de statut).
+
+    `author` : la SESSION PRIME sur le body — un closer loggé ne peut pas écrire
+    au nom d'un autre (identité vide > fausse identité). Le body n'est retenu que
+    si personne n'est loggé (app ouverte sans compte, cf. auth « soft »)."""
     opp = session.get(Opportunity, opportunity_id)
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunité introuvable")
@@ -69,11 +75,15 @@ def add_activity(
             f"(attendu {ACTIVITY_TYPES}).",
         )
 
+    # isinstance et non `is not None` : appelée en direct dans les tests, la valeur
+    # par défaut est l'objet Depends (sentinelle), pas None -> on ne la traite comme
+    # une session que si c'est bien un User.
+    author = current_user.name if isinstance(current_user, User) else payload.author
     activity = ContactActivity(
         opportunity_id=opp.id,
         type=payload.type,
         note=payload.note,
-        author=payload.author,
+        author=author,
     )
     session.add(activity)
     opp.updated_at = datetime.utcnow()

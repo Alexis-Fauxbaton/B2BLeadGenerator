@@ -43,7 +43,12 @@ import {
 } from "@/components/Badges";
 import { Loading, ErrorState } from "@/components/States";
 import CopyButton from "@/components/CopyButton";
-import { QuickActions, ActivityTimeline, NextActionCard } from "@/components/ContactPanel";
+import {
+  QuickActions,
+  ActivityTimeline,
+  NextActionCard,
+  AssignmentSelect,
+} from "@/components/ContactPanel";
 
 const STATUS_ACTIONS = [
   { status: "contacte", label: "Marquer comme contacté" },
@@ -263,6 +268,14 @@ export default function OpportunityDetailPage() {
 
         {/* Colonne latérale : infos + actions */}
         <div className="space-y-6">
+          <Section icon={User} title="Assigné à">
+            <AssignmentSelect
+              opportunityId={opp.id}
+              assignedTo={opp.assigned_to}
+              onSaved={reload}
+            />
+          </Section>
+
           <Section icon={Calendar} title="Prochaine action">
             <NextActionCard
               opportunityId={opp.id}

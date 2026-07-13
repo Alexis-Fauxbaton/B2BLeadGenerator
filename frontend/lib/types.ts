@@ -43,8 +43,25 @@ export interface OpportunityList {
   decision_maker_confidence: string | null;
   next_follow_up_date: string | null;
   next_action: string | null;
+  assigned_to: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// Compte (auth légère) : le patron (admin) et ses closers.
+export interface User {
+  id: number;
+  name: string;
+  email: string;
+  role: "admin" | "closer";
+  created_at: string;
+}
+
+// Version allégée d'un compte (GET /api/auth/users, dropdown "Assigné à") :
+// id + nom SEULEMENT — jamais email/role (énumération de comptes).
+export interface UserPublic {
+  id: number;
+  name: string;
 }
 
 export interface IngestStats {
@@ -173,4 +190,26 @@ export interface GroundtruthResult {
   as_of: string | null;
   total: number;
   rows: GroundtruthRow[];
+}
+
+// Vue patron /activite : journal global des activités + compteurs par closer.
+export interface ActivityJournalEntry {
+  id: number;
+  opportunity_id: number;
+  opportunity_name: string | null;
+  type: string;
+  note: string | null;
+  author: string | null;
+  created_at: string;
+}
+
+export interface AuthorCount {
+  author: string | null;
+  count: number;
+}
+
+export interface ActivityJournal {
+  day: string;
+  activities: ActivityJournalEntry[];
+  counts: AuthorCount[];
 }

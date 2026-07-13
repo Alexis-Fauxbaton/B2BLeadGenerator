@@ -60,6 +60,10 @@ STATUSES = [
 # trace des événements système : message généré, ingestion...).
 ACTIVITY_TYPES = ["appel", "email", "dm_insta", "note", "statut"]
 
+# Rôles des comptes (auth légère). 'admin' = le patron (Alexis) : assigne, voit
+# le journal global ; 'closer' = commercial qui fait son suivi sur l'app.
+USER_ROLES = ["admin", "closer"]
+
 
 # --- Tables -------------------------------------------------------------------
 
@@ -168,6 +172,12 @@ class Opportunity(SQLModel, table=True):
     # posent/s'effacent ensemble via PUT /api/opportunities/{id}/next-action.
     next_action: Optional[str] = None
 
+    # Closer assigné (nom d'un User) : le patron (admin) répartit ses leads. NULL
+    # = non assigné (filtre « Non assignés » du patron). Posé via PATCH
+    # /api/opportunities/{id}/assignment. Stocke le NOM (pas l'id) pour rester
+    # lisible et aligné sur `ContactActivity.author`.
+    assigned_to: Optional[str] = Field(default=None, index=True)
+
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime, server_default=func.now()),
@@ -249,6 +259,20 @@ class ContactActivity(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     opportunity: Optional[Opportunity] = Relationship(back_populates="contact_activities")
+
+
+class User(SQLModel, table=True):
+    """Compte (auth légère) : le patron (admin) et ses closers. Table NEUVE :
+    créée par `SQLModel.metadata.create_all` (rien à ajouter aux migrations
+    légères). Le mot de passe n'est JAMAIS stocké en clair (bcrypt)."""
+    __tablename__ = "users"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    email: str = Field(index=True, unique=True)
+    password_hash: str
+    role: str = "closer"  # 'admin' | 'closer' (USER_ROLES)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class Settings(SQLModel, table=True):

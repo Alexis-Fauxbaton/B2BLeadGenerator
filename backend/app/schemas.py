@@ -68,6 +68,7 @@ class OpportunityBase(BaseModel):
     status: str = "non_contacte"
     next_follow_up_date: Optional[date] = None
     next_action: Optional[str] = None
+    assigned_to: Optional[str] = None
 
 
 class OpportunityList(OpportunityBase):
@@ -176,7 +177,49 @@ class StatusUpdate(BaseModel):
     next_follow_up_date: Optional[date] = None
 
 
+class AssignmentUpdate(BaseModel):
+    """Assignation d'un lead à un closer (nom de User), ou désassignation
+    (`assigned_to=null`). Posé par le patron via PATCH
+    /api/opportunities/{id}/assignment."""
+
+    assigned_to: Optional[str] = None
+
+
 # --- Suivi de contact : journal d'activités + prochaine action ----------------
+
+
+class LoginRequest(BaseModel):
+    """Corps du POST /api/auth/login."""
+
+    email: str
+    password: str
+
+
+class UserRead(BaseModel):
+    """Utilisateur exposé (JAMAIS le password_hash)."""
+
+    id: int
+    name: str
+    email: str
+    role: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class UserPublic(BaseModel):
+    """Version allégée d'un compte : id + nom SEULEMENT (jamais email/rôle).
+
+    Utilisée par GET /api/auth/users, ouvert sans garde admin (sert le dropdown
+    « Assigné à »). email/role sont sensibles côté énumération de comptes et
+    n'ont aucune utilité pour ce dropdown."""
+
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
 
 
 class ContactActivityRead(BaseModel):
@@ -209,6 +252,39 @@ class NextActionUpdate(BaseModel):
 
     next_action: Optional[str] = None
     next_follow_up_date: Optional[date] = None
+
+
+class ActivityJournalEntry(BaseModel):
+    """Ligne du journal global (vue patron /activite) : une activité + le nom de
+    la fiche concernée (jointure), pour que le patron sache d'un coup d'œil sur
+    quel lead son closer a agi."""
+
+    id: int
+    opportunity_id: int
+    opportunity_name: Optional[str] = None
+    type: str
+    note: Optional[str] = None
+    author: Optional[str] = None
+    created_at: datetime
+
+
+class AuthorCount(BaseModel):
+    """Compteur d'activités par closer sur la période (None = activités auto/sans
+    auteur, ex. changements de statut avant l'auth)."""
+
+    author: Optional[str] = None
+    count: int
+
+
+class ActivityJournal(BaseModel):
+    """Vue patron /activite : journal du jour + compteurs par closer.
+
+    `activities` respecte les filtres jour ET auteur ; `counts` reflète le JOUR
+    entier (tous auteurs) pour toujours montrer la répartition par closer."""
+
+    day: date
+    activities: List[ActivityJournalEntry]
+    counts: List[AuthorCount]
 
 
 class FollowUpBuckets(BaseModel):

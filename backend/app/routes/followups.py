@@ -15,9 +15,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
+from ..assignment import apply_assigned_filter
 from ..database import get_session
-from ..models import Opportunity
+from ..models import Opportunity, User
 from ..schemas import FollowUpBuckets, FollowUpCount, OpportunityList
+from ..security import get_current_user
 
 router = APIRouter(prefix="/api/followups", tags=["followups"])
 
@@ -26,10 +28,14 @@ _CLOSED = ("gagne", "perdu")
 
 
 def _due_opportunities(
-    session: Session, population: Optional[str]
+    session: Session,
+    population: Optional[str],
+    assigned: Optional[str] = None,
+    current_user=None,
 ) -> List[Opportunity]:
     """Fiches avec une échéance <= aujourd'hui + 7 jours, hors gagne/perdu,
-    triées par échéance croissante (urgent d'abord) puis score décroissant."""
+    triées par échéance croissante (urgent d'abord) puis score décroissant.
+    `assigned` (me|none|<nom>) filtre par closer (« Mes relances »)."""
     horizon = date.today() + timedelta(days=7)
     query = select(Opportunity).where(
         Opportunity.next_follow_up_date.is_not(None),
@@ -38,6 +44,7 @@ def _due_opportunities(
     )
     if population:
         query = query.where(Opportunity.population == population)
+    query = apply_assigned_filter(query, assigned, current_user)
     query = query.order_by(
         Opportunity.next_follow_up_date.asc(),
         Opportunity.opportunity_score.desc(),
@@ -63,9 +70,11 @@ def _bucketize(opportunities: List[Opportunity]):
 def get_follow_ups(
     session: Session = Depends(get_session),
     population: Optional[str] = "architecte",
+    assigned: Optional[str] = None,
+    current_user: Optional[User] = Depends(get_current_user),
 ):
     en_retard, aujourdhui, cette_semaine = _bucketize(
-        _due_opportunities(session, population)
+        _due_opportunities(session, population, assigned, current_user)
     )
     return FollowUpBuckets(
         en_retard=[OpportunityList.model_validate(o) for o in en_retard],
@@ -78,11 +87,14 @@ def get_follow_ups(
 def get_follow_ups_count(
     session: Session = Depends(get_session),
     population: Optional[str] = "architecte",
+    assigned: Optional[str] = None,
+    current_user: Optional[User] = Depends(get_current_user),
 ):
     """Compteur léger pour le badge discret de la nav (aucune sérialisation de
-    fiche). `total` = en_retard + aujourdhui + cette_semaine."""
+    fiche). `total` = en_retard + aujourdhui + cette_semaine. Respecte
+    `assigned=me` : le badge d'un closer loggé ne compte QUE ses relances."""
     en_retard, aujourdhui, cette_semaine = _bucketize(
-        _due_opportunities(session, population)
+        _due_opportunities(session, population, assigned, current_user)
     )
     return FollowUpCount(
         en_retard=len(en_retard),

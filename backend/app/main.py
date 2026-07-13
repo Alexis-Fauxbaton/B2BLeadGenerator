@@ -25,8 +25,12 @@ from .models import (
     STATUSES,
     Opportunity,
 )
+import os
+
 from .routes import (
+    activite,
     activities,
+    auth,
     dashboard,
     followups,
     messages,
@@ -37,10 +41,18 @@ from .routes import (
 
 app = FastAPI(title="CHR Signal Radar API", version="0.1.0")
 
-# CORS : autorise le frontend Next.js en local.
+# CORS : autorise le frontend Next.js en local. Avec les cookies de session
+# (allow_credentials=True), le navigateur REFUSE une origine wildcard "*" — il
+# faut une (ou des) origine(s) EXPLICITE(s). Configurable via CORS_ORIGINS
+# (liste séparée par des virgules) ; défaut = Next.js en dev.
+_cors_origins = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,9 +67,11 @@ def on_startup() -> None:
     init_db()
 
 
+app.include_router(auth.router)
 app.include_router(dashboard.router)
 app.include_router(opportunities.router)
 app.include_router(activities.router)
+app.include_router(activite.router)
 app.include_router(followups.router)
 app.include_router(messages.router)
 app.include_router(pipeline.router)
