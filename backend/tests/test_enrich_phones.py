@@ -109,6 +109,19 @@ def test_extract_ignores_script_block_noise():
     assert out["text"] == ["06 11 22 33 44"]
 
 
+def test_extract_ignores_unterminated_script_tail():
+    # Bug réel (zephyrinbonal.com) : page Wix tronquée au cap au MILIEU d'un
+    # <script> — sans fermant, le bloc n'était pas retiré et son JSON produisait
+    # des faux numéros ("09 99 99 99 99"...). Le bloc orphelin doit être coupé.
+    html = (
+        '<a href="tel:0612345678">appel</a>'
+        '<script>{"junk": "09 99 99 99 99 et 01 59 99 99 99'
+    )
+    out = extract_phones_from_html(html)
+    assert out["tel"] == ["06 12 34 56 78"]
+    assert out["text"] == ["06 12 34 56 78"]
+
+
 # --- Désambiguïsation par palier (choose_phone) ---------------------------------
 
 

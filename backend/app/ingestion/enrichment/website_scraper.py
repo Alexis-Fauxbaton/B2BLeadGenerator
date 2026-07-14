@@ -26,6 +26,22 @@ FR_PHONE_RE = re.compile(r"(?:(?:\+33|0)\s?[1-9])(?:[\s.-]?\d{2}){4}")
 # FR_PHONE_RE et produire un faux numéro (ex: "09 99 99 99 99" extrait d'une
 # timing-function CSS, jamais affiché nulle part sur la page).
 _NOISE_BLOCK_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.I | re.S)
+# Bloc <script>/<style> resté OUVERT en fin de page (page tronquée au cap) :
+# sans fermant, _NOISE_BLOCK_RE ne le retire pas et son contenu fuit dans les
+# regex téléphone. On coupe tout ce qui suit l'ouvrant orphelin.
+_NOISE_TAIL_RE = re.compile(r"<(?:script|style)\b[^>]*>(?:(?!</(?:script|style)).)*$", re.I | re.S)
+
+# Cap de lecture par page. Les builders type Wix inlinent un blob JSON/CSS de
+# plusieurs Mo AVANT le contenu utile (cas zephyrinbonal.com : le lien tel: de
+# la home est à ~1,8 Mo) — un cap trop bas ampute le vrai numéro. 5 Mo couvre
+# ces sites tout en bornant les pages pathologiques.
+_PAGE_CAP = 5_000_000
+
+
+def _strip_noise(html: str) -> str:
+    """Retire les blocs <script>/<style>, y compris un bloc final non terminé
+    (page tronquée au cap) dont le contenu polluerait les regex téléphone."""
+    return _NOISE_TAIL_RE.sub(" ", _NOISE_BLOCK_RE.sub(" ", html))
 
 # Sous-pages utiles à tenter (repli si aucun lien contact découvert sur la home).
 CONTACT_PATHS = ["contact", "nous-contacter", "mentions-legales", "mentions-legales/", "legal"]
@@ -79,7 +95,7 @@ def _normalize_url(url: str) -> str:
 
 def extract_from_html(html: str, site_domain: str = "") -> Dict[str, Optional[str]]:
     """Extraction pure (testable sans réseau) des contacts d'une page HTML."""
-    html = _NOISE_BLOCK_RE.sub(" ", html)
+    html = _strip_noise(html)
     out: Dict[str, Optional[str]] = {
         "email": _clean_emails(html, site_domain),
         "instagram": _first(INSTA_RE.findall(html), INSTA_IGNORE),
@@ -122,7 +138,7 @@ def scrape_contacts(url: str, max_pages: int = 3, timeout: int = 10) -> Dict[str
             resp = requests.get(page, headers=HEADERS, timeout=timeout)
             if resp.status_code != 200 or "text/html" not in resp.headers.get("content-type", ""):
                 continue
-            html = resp.text[:500_000]  # cap taille
+            html = resp.text[:_PAGE_CAP]
         except Exception:
             continue
         fetched += 1
@@ -175,7 +191,7 @@ def extract_phones_from_html(html: str) -> Dict[str, List[str]]:
     ``tel`` = liens ``tel:`` (déclarés cliquables par le site -> les plus
     fiables), ``text`` = numéros repérés dans le texte libre par regex FR.
     Extraction pure (testable sans réseau)."""
-    html = _NOISE_BLOCK_RE.sub(" ", html)
+    html = _strip_noise(html)
     return {
         "tel": _distinct([normalize_fr_phone(m) for m in TEL_RE.findall(html)]),
         "text": _distinct([normalize_fr_phone(m) for m in FR_PHONE_RE.findall(html)]),
@@ -218,7 +234,7 @@ def _fetch_html(url: str, timeout: int) -> Optional[str]:
         resp = requests.get(url, headers=HEADERS, timeout=timeout)
         if resp.status_code != 200 or "text/html" not in resp.headers.get("content-type", ""):
             return None
-        return resp.text[:500_000]
+        return resp.text[:_PAGE_CAP]
     except Exception:
         return None
 
@@ -301,7 +317,7 @@ def extract_instagram_handles(html: str) -> List[str]:
     """Handles Instagram distincts d'UNE page, filtrés (``INSTA_IGNORE``),
     dédupliqués (insensible à la casse, ordre d'apparition conservé).
     Extraction pure (testable sans réseau)."""
-    html = _NOISE_BLOCK_RE.sub(" ", html)
+    html = _strip_noise(html)
     out: List[str] = []
     seen_lower = set()
     for m in INSTA_RE.findall(html):
@@ -351,12 +367,12 @@ def scrape_site_contacts(url: str, max_pages: int = 3, timeout: int = 10) -> Dic
             resp = requests.get(page, headers=HEADERS, timeout=timeout)
             if resp.status_code != 200 or "text/html" not in resp.headers.get("content-type", ""):
                 continue
-            html = resp.text[:500_000]
+            html = resp.text[:_PAGE_CAP]
         except Exception:
             continue
         fetched += 1
 
-        clean_html = _NOISE_BLOCK_RE.sub(" ", html)
+        clean_html = _strip_noise(html)
         if not result["email"]:
             result["email"] = _clean_emails(clean_html, site_domain)
         if not result["facebook"]:
