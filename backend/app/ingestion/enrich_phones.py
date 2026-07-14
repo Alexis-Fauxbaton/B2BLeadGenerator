@@ -188,21 +188,27 @@ def _enrich_one_phone(
         stats.none += 1
 
 
-def _phone_targets(session: Session, population: str, limit: int):
+def _phone_targets(session: Session, population: str, limit: int, sites_only: bool = False):
     """Fiches d'une population SANS téléphone (VIDE > FAUX : on ne retouche
-    jamais un numéro déjà présent). Extrait pur, testable sans réseau."""
-    return session.exec(
-        select(Opportunity).where(
-            Opportunity.population == population,
-            Opportunity.phone.is_(None),
-        )
-    ).all()[:limit]
+    jamais un numéro déjà présent). ``sites_only`` restreint aux fiches AVEC
+    site : sans lui, les ~3 000 fiches stock sans site consomment la limite et
+    les fiches à site en fin de table ne sont jamais scannées (leçon du
+    2026-07-14 : 37/74 fiches à site hors de la fenêtre de 300).
+    Extrait pur, testable sans réseau."""
+    query = select(Opportunity).where(
+        Opportunity.population == population,
+        Opportunity.phone.is_(None),
+    )
+    if sites_only:
+        query = query.where(Opportunity.website.is_not(None), Opportunity.website != "")
+    return session.exec(query).all()[:limit]
 
 
 def run_phone_enrich(
     population: str = "architecte",
     limit: int = 500,
     session: Optional[Session] = None,
+    sites_only: bool = False,
 ) -> PhoneStats:
     """Passe téléphones : cible les leads d'une population sans numéro et tente
     le waterfall (site -> Places/OSM -> apify). Commit par fiche, fail-soft."""
@@ -215,7 +221,7 @@ def run_phone_enrich(
 
     site_pending: List[Tuple[Opportunity, str]] = []
     try:
-        for opp in _phone_targets(session, population, limit):
+        for opp in _phone_targets(session, population, limit, sites_only):
             stats.scanned += 1
             try:
                 _enrich_one_phone(opp, enricher, sirene, stats, site_pending)
@@ -265,10 +271,13 @@ def main() -> None:
     )
     parser.add_argument("--population", default="architecte", help="Population ciblée.")
     parser.add_argument("--limit", type=int, default=500, help="Nombre max de fiches.")
+    parser.add_argument("--sites-only", action="store_true",
+                        help="Seulement les fiches AVEC site (waterfall palier 1).")
     args = parser.parse_args()
 
     print(f"Recuperation telephones (population={args.population})...")
-    stats = run_phone_enrich(population=args.population, limit=args.limit)
+    stats = run_phone_enrich(population=args.population, limit=args.limit,
+                             sites_only=args.sites_only)
     print("[OK] Termine :")
     for key, value in asdict(stats).items():
         print(f"   {key:<14} = {value}")

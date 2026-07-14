@@ -425,6 +425,20 @@ def test_phone_targets_only_population_without_phone():
         assert refs == {"a"}
 
 
+def test_phone_targets_sites_only_filters_websiteless():
+    # Leçon du 2026-07-14 : sans ce filtre, les ~3 000 fiches stock sans site
+    # consomment la limite et les fiches à site ne sont jamais scannées.
+    with Session(_engine()) as s:
+        s.add(_mk_opp(source_ref="a", phone=None, website="https://a-studio.fr"))
+        s.add(_mk_opp(source_ref="b", phone=None))                # pas de site
+        s.add(_mk_opp(source_ref="c", phone=None, website=""))    # site vide
+        s.commit()
+        refs = {o.source_ref for o in _phone_targets(s, "architecte", 500, sites_only=True)}
+        assert refs == {"a"}
+        refs_all = {o.source_ref for o in _phone_targets(s, "architecte", 500)}
+        assert refs_all == {"a", "b", "c"}
+
+
 # --- Waterfall (doublures, sans réseau) -----------------------------------------
 
 
