@@ -109,6 +109,53 @@ def test_extract_ignores_script_block_noise():
     assert out["text"] == ["06 11 22 33 44"]
 
 
+def test_extract_drops_template_junk_phones():
+    # Numéros de démo de template (observés sur plusieurs sites sans lien) :
+    # jamais celui du lead, écartés dès l'extraction.
+    html = '<p>08 51 15 89 55</p><a href="tel:0612345678">x</a>'
+    out = extract_phones_from_html(html)
+    assert out["tel"] == ["06 12 34 56 78"]
+    assert out["text"] == ["06 12 34 56 78"]
+
+
+def test_cross_domain_junk_flags_shared_numbers():
+    from app.ingestion.enrich_phones import cross_domain_junk
+    results = [
+        (1, "06 11 22 33 44", "a-studio.fr"),
+        (2, "08 99 88 77 66", "b-studio.fr"),
+        (3, "08 99 88 77 66", "c-studio.fr"),   # même numéro, autre domaine -> junk
+        (4, "06 11 22 33 44", "a-studio.fr"),   # même domaine (doublon) -> OK
+        (5, "07 00 11 22 33", None),            # domaine illisible -> ignoré
+    ]
+    assert cross_domain_junk(results) == {"08 99 88 77 66"}
+
+
+def test_home_url_variants_covers_scheme_and_www():
+    from app.ingestion.enrichment.website_scraper import home_url_variants
+    # Cas réel parallel.fr : l'URL stockée (http+www) est morte, https sans www vit.
+    variants = home_url_variants("http://www.parallel.fr")
+    assert variants[0] == "http://www.parallel.fr"
+    assert "https://parallel.fr" in variants
+    assert "https://www.parallel.fr" in variants
+    assert len(variants) == len(set(variants))
+
+
+def test_enrich_one_phone_defers_site_phone_when_pending_list_given(monkeypatch):
+    import app.ingestion.enrich_phones as ep
+    monkeypatch.setattr(ep, "scrape_phone", lambda url: "06 55 44 33 22")
+    monkeypatch.setattr(ep, "_own_site", lambda w: w)
+    opp = Opportunity(establishment_name="X", establishment_type="architecte",
+                      city="Paris", website="https://x-studio.fr")
+    stats = PhoneStats()
+    pending = []
+    ep._enrich_one_phone(opp, _FakeEnricher(ContactInfo(phone=None)), _FakeSirene(), stats, pending)
+    # différé : rien d'écrit sur la fiche, numéro en attente de la garde
+    assert opp.phone is None
+    assert pending == [(opp, "06 55 44 33 22")]
+    assert stats.with_phone == 0 and stats.none == 0
+    assert opp.contact_enriched_at is not None
+
+
 def test_extract_international_zero_convention():
     # Bug réel (parallel.fr) : numéro affiché « +33 (0)1.47.42.14.38 » — la
     # convention (0) n'était ni matchée par la regex ni normalisée sans double 0.

@@ -7,7 +7,7 @@ porteuses d'un email et d'un téléphone).
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -29,6 +29,17 @@ FR_PHONE_RE = re.compile(r"(?<!\d)(?:\+33[\s.-]?(?:\(0\)[\s.-]?)?[1-9]|0\s?[1-9]
 # CFAI exercent à Monaco (cas AGENCE CRAI / raphaelgilardino.com) — un pipeline
 # France-only voyait leur numéro mais le jetait à la normalisation.
 MC_PHONE_RE = re.compile(r"(?<!\d)(?:\+|00)\s?377(?:[\s.-]?\d{2}){4}(?!\d)")
+
+# Numéros de DÉMO laissés par des templates de site (Wix, thèmes d'agence...) :
+# observés à l'identique sur PLUSIEURS sites de studios sans lien entre eux
+# (audit du 2026-07-14). Jamais un vrai numéro de lead -> écartés à l'extraction.
+# La passe ``enrich_phones`` ajoute une garde DYNAMIQUE équivalente (un numéro
+# sorti sur >= 2 domaines distincts dans un même run n'est pas écrit).
+TEMPLATE_JUNK_PHONES = frozenset({
+    "08 51 15 89 55",   # widget partagé, vu sur 5 domaines
+    "01 97 29 30 02", "01 97 36 21 96",   # démo Wix (2 wixsite.com)
+    "04 64 87 26 34", "06 69 93 75 59",   # démo d'un même thème (2 domaines)
+})
 # <script>/<style> retirés avant regex téléphone : leur contenu (JSON, valeurs
 # CSS type `0.00009999999999999999%` dans une @keyframes) peut sinon matcher
 # FR_PHONE_RE et produire un faux numéro (ex: "09 99 99 99 99" extrait d'une
@@ -228,9 +239,11 @@ def extract_phones_from_html(html: str) -> Dict[str, List[str]]:
     fiables), ``text`` = numéros repérés dans le texte libre par regex FR.
     Extraction pure (testable sans réseau)."""
     html = _strip_noise(html)
+    def _keep(nums: List[Optional[str]]) -> List[str]:
+        return _distinct([n for n in nums if n and n not in TEMPLATE_JUNK_PHONES])
     return {
-        "tel": _distinct([normalize_phone(m) for m in TEL_RE.findall(html)]),
-        "text": _distinct([normalize_phone(m) for m in FR_PHONE_RE.findall(html) + MC_PHONE_RE.findall(html)]),
+        "tel": _keep([normalize_phone(m) for m in TEL_RE.findall(html)]),
+        "text": _keep([normalize_phone(m) for m in FR_PHONE_RE.findall(html) + MC_PHONE_RE.findall(html)]),
     }
 
 
@@ -283,6 +296,39 @@ def _fetch_html(url: str, timeout: int) -> Optional[str]:
         return None
 
 
+def home_url_variants(url: str) -> List[str]:
+    """Variantes d'une URL de home à essayer quand elle ne répond pas : produit
+    (https puis http) × (hôte tel quel puis avec/sans www), URL d'origine en
+    premier, sans doublon. Cas réel : ``http://www.parallel.fr`` (stocké en
+    base) est mort, ``https://parallel.fr`` répond — un site vivant était
+    compté « inaccessible » à cause de la seule écriture de son URL.
+    Extraction pure (testable sans réseau)."""
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if not host:
+        return [url]
+    bare = host[4:] if host.startswith("www.") else host
+    path = parsed.path if parsed.path not in ("", "/") else ""
+    out: List[str] = [url]
+    for scheme in ("https", "http"):
+        for h in (bare, "www." + bare):
+            candidate = f"{scheme}://{h}{path}"
+            if candidate not in out:
+                out.append(candidate)
+    return out
+
+
+def _fetch_home(url: str, timeout: int) -> Tuple[Optional[str], str]:
+    """Récupère la home en essayant les variantes de schéma/www. Renvoie
+    ``(html, url_qui_a_répondu)`` — l'URL survivante sert de base à la
+    découverte des pages contact (même hôte)."""
+    for candidate in home_url_variants(url):
+        html = _fetch_html(candidate, timeout)
+        if html is not None:
+            return html, candidate
+    return None, url
+
+
 def contact_page_urls(home_html: str, base_url: str) -> List[str]:
     """Découverte ROBUSTE des pages contact/mentions à sonder pour un site.
 
@@ -331,7 +377,7 @@ def scrape_phone(url: str, max_pages: int = 3, timeout: int = 10) -> Optional[st
     collected: List[Dict] = []
     fetched = 0
 
-    home_html = _fetch_html(url, timeout)
+    home_html, url = _fetch_home(url, timeout)
     if home_html is not None:
         fetched += 1
         collected.append({"is_contact": False, **extract_phones_from_html(home_html)})

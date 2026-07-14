@@ -27,9 +27,11 @@ from __future__ import annotations
 
 import argparse
 import re
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse
 
 from sqlmodel import Session, select
 
@@ -52,7 +54,29 @@ class PhoneStats:
     high_conf: int = 0       # dont confiance « haute » (site du lead / géo / apify)
     low_conf: int = 0        # dont confiance « basse » (Places nom-fort non géo)
     none: int = 0            # aucun numéro sûr
+    junk_cross_domain: int = 0  # numéros « site » écartés (mêmes sur >= 2 domaines)
     errors: int = 0
+
+
+def _site_domain(url: Optional[str]) -> Optional[str]:
+    """Domaine enregistrable (sans www) d'une URL de site, None si illisible."""
+    if not url:
+        return None
+    host = urlparse(url if url.startswith("http") else "http://" + url).netloc.lower()
+    return host[4:] if host.startswith("www.") else host or None
+
+
+def cross_domain_junk(site_results: List[Tuple[int, str, Optional[str]]]) -> Set[str]:
+    """Numéros « site » sortis sur >= 2 DOMAINES distincts dans un même run :
+    un vrai numéro de lead n'apparaît que sur SON site — le même numéro sur
+    plusieurs domaines est un numéro de démo de template / widget partagé
+    (cas réels : démos Wix, « 08 51 15 89 55 » vu sur 5 sites de studios).
+    Fonction pure, testable sans réseau."""
+    domains_by_phone: Dict[str, Set[str]] = defaultdict(set)
+    for _opp_id, phone, domain in site_results:
+        if domain:
+            domains_by_phone[phone].add(domain)
+    return {p for p, doms in domains_by_phone.items() if len(doms) > 1}
 
 
 def _confidence_for(basis: Optional[str]) -> str:
@@ -113,9 +137,18 @@ def _phone_from_apify_cache(opp: Opportunity) -> Optional[str]:
 
 
 def _enrich_one_phone(
-    opp: Opportunity, enricher: ContactEnricher, sirene: SireneEnricher, stats: PhoneStats
+    opp: Opportunity,
+    enricher: ContactEnricher,
+    sirene: SireneEnricher,
+    stats: PhoneStats,
+    site_pending: Optional[List[Tuple[Opportunity, str]]] = None,
 ) -> None:
-    """Waterfall pour une fiche. Ne remplit ``phone`` que s'il était vide."""
+    """Waterfall pour une fiche. Ne remplit ``phone`` que s'il était vide.
+
+    Si ``site_pending`` est fourni, un numéro issu du SITE du lead n'est pas
+    écrit tout de suite : il est mis en attente pour la garde inter-domaines de
+    fin de run (cf. :func:`cross_domain_junk`) — un numéro de démo de template
+    partagé par plusieurs sites ne doit jamais être écrit comme celui du lead."""
     phone: Optional[str] = None
     basis: Optional[str] = None
 
@@ -125,6 +158,11 @@ def _enrich_one_phone(
         phone = scrape_phone(site)
         if phone:
             basis = "site"
+
+    if phone and basis == "site" and site_pending is not None:
+        opp.contact_enriched_at = datetime.utcnow()
+        site_pending.append((opp, phone))
+        return
 
     # 2. Google Places / OSM (verrous d'identité réutilisés).
     if not phone:
@@ -175,11 +213,33 @@ def run_phone_enrich(
     enricher = ContactEnricher()
     sirene = SireneEnricher()
 
+    site_pending: List[Tuple[Opportunity, str]] = []
     try:
         for opp in _phone_targets(session, population, limit):
             stats.scanned += 1
             try:
-                _enrich_one_phone(opp, enricher, sirene, stats)
+                _enrich_one_phone(opp, enricher, sirene, stats, site_pending)
+                session.add(opp)
+                session.commit()
+            except Exception:
+                stats.errors += 1
+                session.rollback()
+
+        # Garde inter-domaines : les numéros « site » ne sont écrits qu'en fin
+        # de run, une fois vérifiés uniques à leur domaine (VIDE > FAUX).
+        junk = cross_domain_junk(
+            [(o.id, p, _site_domain(o.website)) for o, p in site_pending]
+        )
+        for opp, phone in site_pending:
+            try:
+                if phone in junk:
+                    stats.junk_cross_domain += 1
+                    stats.none += 1
+                elif not opp.phone:
+                    opp.phone = phone
+                    opp.contact_confidence = _confidence_for("site")
+                    stats.with_phone += 1
+                    stats.high_conf += 1
                 session.add(opp)
                 session.commit()
             except Exception:
