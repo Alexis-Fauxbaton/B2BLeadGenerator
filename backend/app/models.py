@@ -77,27 +77,51 @@ USER_ROLES = ["admin", "closer"]
 QUALIF_ISSUES = ["joint", "pas_joint", "ko"]
 
 # N2 : raisons autorisées par (canal, issue). Clé = tuple (type, issue) — miroir
-# de `ACTIVITY_TYPES` pour `type` et de `QUALIF_ISSUES` pour `issue`.
+# de `ACTIVITY_TYPES` pour `type` et de `QUALIF_ISSUES` pour `issue`. Dispositions
+# calquées sur les grilles standards de télévente B2B (RDV pris = issue reine, en
+# tête de la liste JOINT). Restée VOLONTAIREMENT légère (retour d'Alexis : pas
+# de granularité façon « barrage secrétaire ») : on couvre les issues qui se
+# produisent souvent, pas tous les cas de figure imaginables.
+#
+# Rétro-compat : les slugs `a_suivre`, `desinscription`, `compte_introuvable`,
+# `bloque` (taxonomie v1) ne sont PLUS proposés ici (retirés du set
+# sélectionnable) mais restent lisibles sur les anciennes activités déjà
+# enregistrées -- leurs libellés FR restent dans `labels.ts`, on ne les
+# supprime jamais de l'affichage.
 QUALIF_RAISONS = {
-    ("appel", "joint"): ["interesse", "a_rappeler", "pas_interesse"],
+    ("appel", "joint"): ["rdv_pris", "interesse", "demande_infos", "a_rappeler", "pas_interesse"],
     ("appel", "pas_joint"): ["repondeur", "pas_de_reponse", "occupe"],
-    ("appel", "ko"): ["mauvais_numero", "ferme", "ne_plus_contacter"],
-    ("email", "joint"): ["interesse", "a_suivre", "pas_interesse"],
+    ("appel", "ko"): ["mauvais_numero", "ferme", "hors_cible", "ne_plus_contacter"],
+    ("email", "joint"): ["rdv_pris", "interesse", "pas_interesse"],
     ("email", "pas_joint"): ["pas_de_reponse"],
-    ("email", "ko"): ["bounce", "desinscription"],
-    ("dm_insta", "joint"): ["interesse", "a_suivre", "pas_interesse"],
-    ("dm_insta", "pas_joint"): ["vu_sans_reponse", "pas_de_reponse"],
-    ("dm_insta", "ko"): ["compte_introuvable", "bloque"],
+    ("email", "ko"): ["bounce", "hors_cible", "ne_plus_contacter"],
+    ("dm_insta", "joint"): ["rdv_pris", "interesse", "pas_interesse"],
+    ("dm_insta", "pas_joint"): ["vu_sans_reponse", "non_vu"],
+    # 'compte_inaccessible' fusionne les anciens 'compte_introuvable'/'bloque'
+    # (v1) : au closer, peu importe la distinction -- dans les deux cas le
+    # compte est hors d'atteinte sur ce canal.
+    ("dm_insta", "ko"): ["compte_inaccessible", "hors_cible", "ne_plus_contacter"],
 }
 
 # N3 : chips de détail optionnelles, réutilisables sous n'importe quel (canal,
-# issue) — surtout pertinentes sous `pas_interesse` / `a_rappeler`.
+# issue) — surtout pertinentes sous `pas_interesse` / `a_rappeler` / `repondeur`
+# / `interesse` / `rdv_pris`. Set volontairement court (retour d'Alexis).
+#
+# Rétro-compat : `mauvais_interlocuteur` et `rappeler_plus_tard` (taxonomie v1)
+# ne sont plus proposées mais restent lisibles sur les anciennes activités.
 QUALIF_DETAILS = [
     "deja_fournisseur",
     "pas_de_projet",
     "budget",
-    "mauvais_interlocuteur",
-    "rappeler_plus_tard",
+    "pas_le_bon_moment",
+    "rappel_matin",
+    "rappel_apres_midi",
+    "rappel_semaine_prochaine",
+    "message_laisse",
+    "pas_de_message",
+    "projet_en_cours",
+    "visite_showroom",
+    "envoyer_catalogue",
 ]
 
 

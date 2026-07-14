@@ -17,6 +17,7 @@ import {
   X,
   Plus,
   UserCog,
+  Trophy,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ContactActivity, QualifTaxonomy, UserPublic } from "@/lib/types";
@@ -26,6 +27,7 @@ import {
   QUALIF_ISSUE_BUTTON_STYLES,
   QUALIF_ISSUE_LABELS,
   QUALIF_RAISON_LABELS,
+  QUALIF_RAISON_HERO,
   QUALIF_DETAIL_LABELS,
   STATUS_LABELS,
   formatDate,
@@ -270,19 +272,25 @@ export function QualificationBar({
               {(raisonsByIssue[issue] ?? []).map((raison) => {
                 const key = `${issue}-${raison}`;
                 const isSelected = selected?.issue === issue && selected?.raison === raison;
+                const isHero = raison === QUALIF_RAISON_HERO;
                 return (
                   <button
                     key={raison}
                     onClick={() => pick(issue, raison)}
                     disabled={busy === key}
-                    className={`rounded-lg border px-3 py-1.5 text-left text-sm font-medium disabled:opacity-60 ${
+                    className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-left text-sm disabled:opacity-60 ${
                       QUALIF_ISSUE_BUTTON_STYLES[issue]
-                    } ${isSelected ? "ring-2 ring-brand-400" : ""}`}
+                    } ${isHero ? "border-2 border-emerald-400 font-semibold shadow-sm" : "font-medium"} ${
+                      isSelected ? "ring-2 ring-brand-400" : ""
+                    }`}
                   >
                     {busy === key ? (
                       <Loader2 size={14} className="animate-spin" />
                     ) : (
-                      QUALIF_RAISON_LABELS[raison] ?? raison
+                      <>
+                        {isHero && <Trophy size={13} className="shrink-0 text-emerald-600" />}
+                        {QUALIF_RAISON_LABELS[raison] ?? raison}
+                      </>
                     )}
                   </button>
                 );
@@ -456,12 +464,15 @@ export function QuickQualifyPopover({
               <div className="flex flex-wrap gap-1">
                 {(raisonsByIssue[issue] ?? []).map((raison) => {
                   const key = `${issue}-${raison}`;
+                  const isHero = raison === QUALIF_RAISON_HERO;
                   return (
                     <button
                       key={raison}
                       onClick={() => pick(issue, raison)}
                       disabled={busy === key}
-                      className={`rounded-md border px-2 py-1 text-[11px] font-medium disabled:opacity-60 ${QUALIF_ISSUE_BUTTON_STYLES[issue]}`}
+                      className={`rounded-md border px-2 py-1 text-[11px] disabled:opacity-60 ${
+                        QUALIF_ISSUE_BUTTON_STYLES[issue]
+                      } ${isHero ? "border-2 border-emerald-400 font-semibold" : "font-medium"}`}
                     >
                       {busy === key ? (
                         <Loader2 size={11} className="inline animate-spin" />

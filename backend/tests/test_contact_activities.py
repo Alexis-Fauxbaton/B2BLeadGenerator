@@ -292,6 +292,66 @@ def test_qualif_taxonomy_families_cover_documented_channels():
             assert len(QUALIF_RAISONS[(channel, issue)]) > 0
 
 
+def test_rdv_pris_is_joint_and_first_for_every_channel():
+    """« RDV pris » (issue reine de la télévente) est une raison JOINT -- pas
+    une case à part -- et vient en tête de la liste sur les 3 canaux (mise en
+    avant visuelle côté front, ContactPanel.QUALIF_RAISON_HERO)."""
+    for channel in ("appel", "email", "dm_insta"):
+        raisons = QUALIF_RAISONS[(channel, "joint")]
+        assert raisons[0] == "rdv_pris"
+        with Session(_engine()) as s:
+            opp = _opp(s)
+            act = add_activity(
+                opp.id,
+                ContactActivityCreate(type=channel, issue="joint", raison="rdv_pris"),
+                s,
+            )
+            assert act.issue == "joint" and act.raison == "rdv_pris"
+
+
+def test_dm_insta_ko_uses_merged_compte_inaccessible_slug():
+    """La taxonomie allégée fusionne les anciens 'compte_introuvable'/'bloque'
+    (v1) en une seule raison 'compte_inaccessible' -- les deux anciens slugs
+    ne sont plus acceptés en écriture (ils restent lisibles sur les vieilles
+    activités, mais ne sont plus proposés)."""
+    with Session(_engine()) as s:
+        opp = _opp(s)
+        act = add_activity(
+            opp.id,
+            ContactActivityCreate(type="dm_insta", issue="ko", raison="compte_inaccessible"),
+            s,
+        )
+        assert act.raison == "compte_inaccessible"
+
+        for legacy_raison in ("compte_introuvable", "bloque"):
+            with pytest.raises(HTTPException) as exc:
+                add_activity(
+                    opp.id,
+                    ContactActivityCreate(type="dm_insta", issue="ko", raison=legacy_raison),
+                    s,
+                )
+            assert exc.value.status_code == 422
+
+
+def test_email_no_longer_accepts_v1_a_suivre_or_desinscription():
+    """Taxonomie allégée : 'a_suivre' (email/joint) et 'desinscription'
+    (email/ko) ne sont plus des raisons sélectionnables (v1)."""
+    with Session(_engine()) as s:
+        opp = _opp(s)
+        with pytest.raises(HTTPException) as exc:
+            add_activity(
+                opp.id, ContactActivityCreate(type="email", issue="joint", raison="a_suivre"), s
+            )
+        assert exc.value.status_code == 422
+        with pytest.raises(HTTPException) as exc:
+            add_activity(
+                opp.id,
+                ContactActivityCreate(type="email", issue="ko", raison="desinscription"),
+                s,
+            )
+        assert exc.value.status_code == 422
+
+
 # --- PATCH .../activities/{id}/detail : enrichit sans doublon ------------------
 
 

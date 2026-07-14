@@ -280,8 +280,12 @@ export const QUALIF_ISSUE_DOT: Record<string, string> = {
 
 // N2 — raisons, libellés à plat : les clés sont partagées entre canaux avec le
 // même sens FR (ex. "interesse" -> "Intéressé" en appel/email/dm_insta).
+// « rdv_pris » = l'issue reine de la télévente ; cf. QUALIF_RAISON_HERO plus
+// bas pour sa mise en avant visuelle dans la barre de qualification.
 export const QUALIF_RAISON_LABELS: Record<string, string> = {
+  rdv_pris: "RDV pris",
   interesse: "Intéressé",
+  demande_infos: "Demande d'infos",
   a_rappeler: "À rappeler",
   pas_interesse: "Pas intéressé",
   repondeur: "Répondeur",
@@ -289,11 +293,16 @@ export const QUALIF_RAISON_LABELS: Record<string, string> = {
   occupe: "Occupé",
   mauvais_numero: "Mauvais numéro",
   ferme: "N'existe plus",
+  hors_cible: "Hors cible",
   ne_plus_contacter: "Ne pas recontacter",
-  a_suivre: "À suivre",
   bounce: "Adresse invalide",
-  desinscription: "Désinscription",
   vu_sans_reponse: "Vu, sans réponse",
+  non_vu: "Non vu",
+  compte_inaccessible: "Compte inaccessible",
+  // --- Taxonomie v1 (retirées du set sélectionnable, cf. models.QUALIF_RAISONS) :
+  // libellés conservés pour que les activités déjà enregistrées restent lisibles.
+  a_suivre: "À suivre",
+  desinscription: "Désinscription",
   compte_introuvable: "Compte introuvable",
   bloque: "Bloqué",
 };
@@ -302,10 +311,25 @@ export const QUALIF_RAISON_LABELS: Record<string, string> = {
 export const QUALIF_DETAIL_LABELS: Record<string, string> = {
   deja_fournisseur: "A déjà un fournisseur",
   pas_de_projet: "Pas de projet",
-  budget: "Budget",
+  budget: "Budget / trop cher",
+  pas_le_bon_moment: "Pas le bon moment",
+  rappel_matin: "Le matin",
+  rappel_apres_midi: "L'après-midi",
+  rappel_semaine_prochaine: "La semaine prochaine",
+  message_laisse: "Message laissé",
+  pas_de_message: "Pas de message",
+  projet_en_cours: "Projet en cours",
+  visite_showroom: "Visite showroom",
+  envoyer_catalogue: "Envoyer le catalogue",
+  // --- Taxonomie v1 (retirées du set sélectionnable, cf. models.QUALIF_DETAILS) :
+  // libellés conservés pour que les activités déjà enregistrées restent lisibles.
   mauvais_interlocuteur: "Mauvais interlocuteur",
   rappeler_plus_tard: "Rappeler plus tard",
 };
+
+// Issue "hero" de la télévente : RDV pris se distingue visuellement des autres
+// raisons JOINT dans la barre de qualification (ContactPanel.QualificationBar).
+export const QUALIF_RAISON_HERO = "rdv_pris";
 
 // Canal court (toggle de la barre de qualification) — distinct d'ACTIVITY_TYPE_LABELS
 // qui porte le libellé de l'ACTION ("Email envoyé") plutôt que du canal seul.
