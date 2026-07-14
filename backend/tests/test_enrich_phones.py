@@ -109,6 +109,60 @@ def test_extract_ignores_script_block_noise():
     assert out["text"] == ["06 11 22 33 44"]
 
 
+def test_extract_international_zero_convention():
+    # Bug réel (parallel.fr) : numéro affiché « +33 (0)1.47.42.14.38 » — la
+    # convention (0) n'était ni matchée par la regex ni normalisée sans double 0.
+    html = "<p>Tél. +33 (0)1.47.42.14.38</p>"
+    out = extract_phones_from_html(html)
+    assert out["text"] == ["01 47 42 14 38"]
+    html2 = "<p>+33(0) 1 47 42 14 38</p>"
+    assert extract_phones_from_html(html2)["text"] == ["01 47 42 14 38"]
+
+
+def test_extract_ignores_digit_runs_like_timestamps():
+    # Bug réel (parallel.fr) : le timestamp `4v1520348869305` d'une iframe
+    # Google Maps contenait 10 chiffres plausibles -> faux « 03 48 86 93 05 ».
+    # Les gardes de frontière rejettent tout match collé à d'autres chiffres.
+    html = '<iframe src="https://www.google.com/maps/embed?pb=!1m18!2sus!4v1520348869305"></iframe>'
+    out = extract_phones_from_html(html)
+    assert out["tel"] == []
+    assert out["text"] == []
+
+
+def test_choose_contact_page_number_beats_legal_page_noise():
+    # Cas raphaelgilardino.com : la page contact affiche LE numéro du studio,
+    # les mentions légales ajoutent celui de l'opérateur (Monaco Telecom) —
+    # le numéro unique de la page contact stricte doit primer.
+    pages = [
+        {"is_contact": False, "tel": [], "text": []},
+        {"is_contact": True, "is_legal": False, "tel": [], "text": ["+377 92 05 23 21"]},
+        {"is_contact": True, "is_legal": True, "tel": [],
+         "text": ["+377 92 05 23 21", "+377 97 70 30 90"]},
+    ]
+    assert choose_phone(pages) == "+377 92 05 23 21"
+
+
+def test_extract_monaco_number_from_text():
+    # Bug réel (AGENCE CRAI / raphaelgilardino.com) : studio CFAI basé à Monaco,
+    # numéro affiché en texte libre « Tél : +377 92 05 23 21 » (le lien a un
+    # href="#") — le pipeline France-only le voyait mais le jetait.
+    html = '<p>T&eacute;l : +377 92 05 23 21</p><a href="#" class="tel">+377 92 05 23 21</a>'
+    out = extract_phones_from_html(html)
+    assert out["tel"] == []
+    assert out["text"] == ["+377 92 05 23 21"]
+
+
+def test_normalize_mc_phone_variants():
+    from app.ingestion.enrichment.website_scraper import normalize_mc_phone, normalize_phone
+    assert normalize_mc_phone("+377 92 05 23 21") == "+377 92 05 23 21"
+    assert normalize_mc_phone("00377 92.05.23.21") == "+377 92 05 23 21"
+    assert normalize_mc_phone("+377 92 05 23") is None  # trop court
+    assert normalize_mc_phone("0612345678") is None  # FR n'est pas du ressort MC
+    # normalize_phone : FR prioritaire, Monaco en repli, même clé de dédup
+    assert normalize_phone("+33123456789") == "01 23 45 67 89"
+    assert normalize_phone("+37792052321") == "+377 92 05 23 21"
+
+
 def test_extract_ignores_unterminated_script_tail():
     # Bug réel (zephyrinbonal.com) : page Wix tronquée au cap au MILIEU d'un
     # <script> — sans fermant, le bloc n'était pas retiré et son JSON produisait

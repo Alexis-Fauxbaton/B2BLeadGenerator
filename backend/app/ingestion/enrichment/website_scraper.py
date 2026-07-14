@@ -20,7 +20,15 @@ MAILTO_RE = re.compile(r"mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})
 INSTA_RE = re.compile(r"instagram\.com/([A-Za-z0-9_.]+)")
 FB_RE = re.compile(r"facebook\.com/([A-Za-z0-9_.\-]+)")
 TEL_RE = re.compile(r'tel:([+0-9][\d .()-]{6,})')
-FR_PHONE_RE = re.compile(r"(?:(?:\+33|0)\s?[1-9])(?:[\s.-]?\d{2}){4}")
+# Gardes de frontière (?<!\d) / (?!\d) : sans elles, 10 chiffres AU MILIEU d'une
+# séquence plus longue matchent — cas réel parallel.fr : le timestamp
+# `4v1520348869305` d'une iframe Google Maps produisait le faux « 03 48 86 93 05 ».
+# `(?:\(0\)[\s.-]?)?` : convention internationale « +33 (0)1 47 42 14 38 ».
+FR_PHONE_RE = re.compile(r"(?<!\d)(?:\+33[\s.-]?(?:\(0\)[\s.-]?)?[1-9]|0\s?[1-9])(?:[\s.-]?\d{2}){4}(?!\d)")
+# Numéros monégasques : +377 / 00377 + 8 chiffres. Des studios de l'annuaire
+# CFAI exercent à Monaco (cas AGENCE CRAI / raphaelgilardino.com) — un pipeline
+# France-only voyait leur numéro mais le jetait à la normalisation.
+MC_PHONE_RE = re.compile(r"(?<!\d)(?:\+|00)\s?377(?:[\s.-]?\d{2}){4}(?!\d)")
 # <script>/<style> retirés avant regex téléphone : leur contenu (JSON, valeurs
 # CSS type `0.00009999999999999999%` dans une @keyframes) peut sinon matcher
 # FR_PHONE_RE et produire un faux numéro (ex: "09 99 99 99 99" extrait d'une
@@ -168,13 +176,41 @@ def normalize_fr_phone(raw: Optional[str]) -> Optional[str]:
     plus = raw.strip().startswith("+")
     digits = re.sub(r"\D", "", raw)
     if digits.startswith("0033"):
-        digits = "0" + digits[4:]
-    elif digits.startswith("33") and (plus or len(digits) == 11):
-        digits = "0" + digits[2:]
+        digits = digits[4:]
+        digits = digits if digits.startswith("0") else "0" + digits
+    elif digits.startswith("33") and (plus or len(digits) in (11, 12)):
+        # « +33 (0)1 47... » : le (0) est DÉJÀ dans les chiffres -> ne pas
+        # re-préfixer un 0 (sinon 00147... rejeté à tort).
+        digits = digits[2:]
+        digits = digits if digits.startswith("0") else "0" + digits
     # Numéro national : 10 chiffres, commence par 0, second chiffre 1..9.
     if len(digits) != 10 or digits[0] != "0" or digits[1] == "0":
         return None
     return " ".join((digits[0:2], digits[2:4], digits[4:6], digits[6:8], digits[8:10]))
+
+
+def normalize_mc_phone(raw: Optional[str]) -> Optional[str]:
+    """Normalise un numéro MONACO en « +377 XX XX XX XX » (8 chiffres après
+    l'indicatif). Renvoie None si le motif n'est pas plausible — même doctrine
+    VIDE > FAUX que :func:`normalize_fr_phone`."""
+    if not raw:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if digits.startswith("00377"):
+        digits = digits[5:]
+    elif digits.startswith("377"):
+        digits = digits[3:]
+    else:
+        return None
+    if len(digits) != 8:
+        return None
+    return "+377 " + " ".join(digits[i:i + 2] for i in range(0, 8, 2))
+
+
+def normalize_phone(raw: Optional[str]) -> Optional[str]:
+    """Normalisation multi-plans : France d'abord, Monaco en repli. Sert de clé
+    de déduplication commune aux paliers de :func:`choose_phone`."""
+    return normalize_fr_phone(raw) or normalize_mc_phone(raw)
 
 
 def _distinct(values: List[Optional[str]]) -> List[str]:
@@ -187,14 +223,14 @@ def _distinct(values: List[Optional[str]]) -> List[str]:
 
 
 def extract_phones_from_html(html: str) -> Dict[str, List[str]]:
-    """Numéros FR normalisés d'UNE page, séparés par source de confiance :
+    """Numéros FR/Monaco normalisés d'UNE page, séparés par source de confiance :
     ``tel`` = liens ``tel:`` (déclarés cliquables par le site -> les plus
     fiables), ``text`` = numéros repérés dans le texte libre par regex FR.
     Extraction pure (testable sans réseau)."""
     html = _strip_noise(html)
     return {
-        "tel": _distinct([normalize_fr_phone(m) for m in TEL_RE.findall(html)]),
-        "text": _distinct([normalize_fr_phone(m) for m in FR_PHONE_RE.findall(html)]),
+        "tel": _distinct([normalize_phone(m) for m in TEL_RE.findall(html)]),
+        "text": _distinct([normalize_phone(m) for m in FR_PHONE_RE.findall(html) + MC_PHONE_RE.findall(html)]),
     }
 
 
@@ -213,15 +249,23 @@ def choose_phone(pages: List[Dict]) -> Optional[str]:
          second point de vente) apparaissent EN PLUS sur les pages contact /
          mentions — ne les laissant plus diluer le signal (cas m2-scene) ;
       1. liens ``tel:`` de toutes les pages (déclaration explicite du site) ;
-      2. numéros regex des pages CONTACT / mentions légales ;
-      3. numéros regex de la home.
+      2. numéros regex des pages CONTACT strictes (URL « contact ») : la page
+         contact est là où le business affiche SON numéro — un numéro unique y
+         prime sur les numéros parasites des mentions légales (hébergeur,
+         opérateur télécom : cas raphaelgilardino.com, +377 de Monaco Telecom
+         sur la page legal) ;
+      3. numéros regex des pages CONTACT / mentions légales confondues ;
+      4. numéros regex de la home.
 
-    ``pages`` : liste de ``{'is_contact': bool, 'tel': [...], 'text': [...]}``."""
+    ``pages`` : liste de ``{'is_contact': bool, 'is_legal': bool, 'tel': [...],
+    'text': [...]}`` (``is_legal`` optionnel, False par défaut)."""
     tier0 = _distinct([p for pg in pages if not pg.get("is_contact") for p in pg.get("tel", [])])
     tier1 = _distinct([p for pg in pages for p in pg.get("tel", [])])
-    tier2 = _distinct([p for pg in pages if pg.get("is_contact") for p in pg.get("text", [])])
-    tier3 = _distinct([p for pg in pages if not pg.get("is_contact") for p in pg.get("text", [])])
-    for tier in (tier0, tier1, tier2, tier3):
+    tier2 = _distinct([p for pg in pages if pg.get("is_contact") and not pg.get("is_legal")
+                       for p in pg.get("text", [])])
+    tier3 = _distinct([p for pg in pages if pg.get("is_contact") for p in pg.get("text", [])])
+    tier4 = _distinct([p for pg in pages if not pg.get("is_contact") for p in pg.get("text", [])])
+    for tier in (tier0, tier1, tier2, tier3, tier4):
         if tier:
             return tier[0] if len(tier) == 1 else None
     return None
@@ -299,7 +343,10 @@ def scrape_phone(url: str, max_pages: int = 3, timeout: int = 10) -> Optional[st
         if html is None:
             continue
         fetched += 1
-        collected.append({"is_contact": True, **extract_phones_from_html(html)})
+        # Mentions légales / legal : porteuses de numéros TIERS (hébergeur,
+        # opérateur) -> palier moins sûr qu'une vraie page contact.
+        is_legal = bool(re.search(r"mention|legal", page, re.I)) and not re.search(r"contact", page, re.I)
+        collected.append({"is_contact": True, "is_legal": is_legal, **extract_phones_from_html(html)})
     return choose_phone(collected)
 
 
