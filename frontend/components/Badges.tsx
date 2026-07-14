@@ -4,9 +4,12 @@ import {
   LIFECYCLE_LABEL_STYLES,
   POPULATION_LABELS,
   POPULATION_STYLES,
+  QUALIF_ISSUE_DOT,
+  QUALIF_ISSUE_STYLES,
   SOURCE_LABELS,
   STATUS_LABELS,
   STATUS_STYLES,
+  formatIssueChip,
   scoreTier,
 } from "@/lib/labels";
 
@@ -122,6 +125,29 @@ export function FreshnessBadge({ freshness }: { freshness: string }) {
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${cls}`}>
       {freshness}
+    </span>
+  );
+}
+
+// Puce « dernière issue » (§2.2 du design qualification) : dérivée à la volée,
+// jamais persistée sur la fiche — affichage seul, pour prioriser à l'œil dans
+// les listes (/followups, journal). `raison` prime sur `issue` si connue.
+export function IssueBadge({
+  issue,
+  raison,
+}: {
+  issue: string;
+  raison?: string | null;
+}) {
+  const cls = QUALIF_ISSUE_STYLES[issue] ?? "bg-slate-100 text-slate-500 ring-slate-200";
+  const dot = QUALIF_ISSUE_DOT[issue] ?? "bg-slate-400";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${cls}`}
+      title="Dernier contact (affichage seul — n'écrit jamais sur la fiche)"
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      {formatIssueChip(issue, raison)}
     </span>
   );
 }

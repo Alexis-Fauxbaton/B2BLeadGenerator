@@ -19,8 +19,12 @@ from sqlmodel import Session, select
 
 from .database import get_session, init_db
 from .models import (
+    ACTIVITY_TYPES,
     CHANNELS,
     ESTABLISHMENT_TYPES,
+    QUALIF_DETAILS,
+    QUALIF_ISSUES,
+    QUALIF_RAISONS,
     SIGNAL_TYPES,
     STATUSES,
     Opportunity,
@@ -69,8 +73,12 @@ def on_startup() -> None:
 
 app.include_router(auth.router)
 app.include_router(dashboard.router)
-app.include_router(opportunities.router)
+# activities AVANT opportunities : `GET /api/opportunities/last-issues` (chemin
+# littéral) doit être testé avant `GET /api/opportunities/{opportunity_id}` (sinon
+# Starlette matche ce dernier en premier et FastAPI répond 422 en tentant de
+# convertir "last-issues" en int, sans jamais retomber sur la route littérale).
 app.include_router(activities.router)
+app.include_router(opportunities.router)
 app.include_router(activite.router)
 app.include_router(followups.router)
 app.include_router(messages.router)
@@ -88,6 +96,21 @@ def root():
 meta_router = APIRouter(prefix="/api/meta", tags=["meta"])
 
 
+def _qualif_taxonomy() -> dict:
+    """Sérialise `QUALIF_RAISONS` (clé tuple (type, issue) -> [raisons]) en objet
+    JSON imbriqué {type: {issue: [raisons]}}, seule forme exploitable côté front.
+    Source de vérité UNIQUE : le backend fait autorité, le frontend consomme cet
+    endpoint plutôt que de dupliquer la taxonomie (cf. design qualification)."""
+    raisons: dict = {}
+    for (activity_type, issue), values in QUALIF_RAISONS.items():
+        raisons.setdefault(activity_type, {})[issue] = values
+    return {
+        "issues": QUALIF_ISSUES,
+        "raisons": raisons,
+        "details": QUALIF_DETAILS,
+    }
+
+
 @meta_router.get("")
 def get_meta(session: Session = Depends(get_session)):
     cities = sorted(set(session.exec(select(Opportunity.city)).all()))
@@ -98,6 +121,8 @@ def get_meta(session: Session = Depends(get_session)):
         "statuses": STATUSES,
         "populations": ["chr", "architecte"],
         "cities": cities,
+        "activity_types": ACTIVITY_TYPES,
+        "qualif_taxonomy": _qualif_taxonomy(),
     }
 
 

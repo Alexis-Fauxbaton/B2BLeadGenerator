@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func
+from sqlalchemy import exists, func
 from sqlmodel import Session, select
 
 from ..assignment import apply_assigned_filter
@@ -43,6 +43,7 @@ def list_opportunities(
     lifecycle_label: Optional[str] = None,
     population: Optional[str] = None,
     assigned: Optional[str] = None,
+    has_activity: Optional[bool] = None,
     sort_by: str = "score",
     order: str = "desc",
     limit: int = 100,
@@ -75,6 +76,19 @@ def list_opportunities(
         query = query.where(Opportunity.lifecycle_label == lifecycle_label)
     if population:
         query = query.where(Opportunity.population == population)
+    if has_activity is not None:
+        # « Jamais appelés » (et son inverse) : au moins une ligne dans
+        # contact_activities pour cette fiche, PEU IMPORTE le statut lu/écrit.
+        # Lecture seule — ne modifie rien (cf. invariant qualification, design
+        # §2). Corrige l'approximation status=='non_contacte' : un lead qualifié
+        # (issue quelconque, y compris émission issue=NULL) ne doit plus
+        # ressortir comme « jamais appelé », même si le statut n'a pas bougé.
+        has_any_activity = exists(
+            select(ContactActivity.id).where(
+                ContactActivity.opportunity_id == Opportunity.id
+            )
+        )
+        query = query.where(has_any_activity if has_activity else ~has_any_activity)
     # Filtre d'assignation : me (session) | none (non assignés) | <nom du closer>.
     query = apply_assigned_filter(query, assigned, current_user)
 

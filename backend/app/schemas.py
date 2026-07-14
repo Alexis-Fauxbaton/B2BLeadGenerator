@@ -228,21 +228,56 @@ class ContactActivityRead(BaseModel):
     type: str
     note: Optional[str]
     author: Optional[str]
+    # Qualification cross-canal (N1/N2/N3) : lecture seule ici, jamais réécrite
+    # sur la fiche (cf. `issue`/`raison`/`detail` sur `ContactActivity`).
+    issue: Optional[str] = None
+    raison: Optional[str] = None
+    detail: List[str] = []
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+    # `detail` : colonne JSON, NULL sur les lignes antérieures à la migration ->
+    # coercée en liste vide pour ne pas casser la sérialisation (même pattern que
+    # `OpportunityList._coerce_none_list`).
+    @field_validator("detail", mode="before")
+    @classmethod
+    def _coerce_none_detail(cls, v):
+        return v if v is not None else []
 
 
 class ContactActivityCreate(BaseModel):
     """Geste rapide : type ('appel'|'email'|'dm_insta'|'note'|'statut') + note
     optionnelle (le petit champ inline de « Note »). `author` optionnel : accepté
     en écriture dès maintenant (fondation des comptes closers) même si l'UI ne le
-    renseigne pas encore ; l'auth le remplira plus tard."""
+    renseigne pas encore ; l'auth le remplira plus tard.
+
+    Qualification cross-canal (N1/N2/N3, optionnelle) : `issue` (universel),
+    `raison` (par (type, issue)), `detail` (chips libres). Validée côté serveur
+    contre `QUALIF_ISSUES`/`QUALIF_RAISONS`/`QUALIF_DETAILS` (routes/activities.py)
+    — n'écrit JAMAIS sur la fiche (statut/flags), enregistrée pour le monitoring
+    uniquement."""
 
     type: str
     note: Optional[str] = None
     author: Optional[str] = None
+    issue: Optional[str] = None
+    raison: Optional[str] = None
+    detail: List[str] = []
+
+
+class ContactActivityDetailUpdate(BaseModel):
+    """Enrichit le N3 (`detail`/`note`) d'une qualification DÉJÀ postée, sans
+    créer de doublon : cas du closer qui tape le preset rapide (chemin 1 tap)
+    puis rouvre « + Détail » pour préciser après coup — au lieu de reposter une
+    2ᵉ activité avec le même (issue, raison). Champs omis = inchangés (PATCH
+    partiel, pas un remplacement). `type`/`issue`/`raison`/`author` ne sont
+    JAMAIS modifiables ici (déjà posés, immuables) ; ne touche jamais le statut
+    de la fiche (même invariant que `ContactActivityCreate`)."""
+
+    detail: Optional[List[str]] = None
+    note: Optional[str] = None
 
 
 class NextActionUpdate(BaseModel):
@@ -285,6 +320,72 @@ class ActivityJournal(BaseModel):
     day: date
     activities: List[ActivityJournalEntry]
     counts: List[AuthorCount]
+
+
+# --- Monitoring des résultats de qualification (lecture agrégée SEULEMENT) ----
+# Alimente l'onglet « Résultats » de /activite. Jamais d'écriture sur la fiche —
+# cf. docs/plans/2026-07-14-qualification-contacts-design.md §2.
+
+
+class QualifChannelStats(BaseModel):
+    """Tentatives/joignabilité pour un canal (`type`) sur la période."""
+
+    type: str
+    tentatives: int
+    joints: int
+    joignabilite: Optional[float] = None  # None = aucune tentative (pas 0 %)
+
+
+class QualifCloserStats(BaseModel):
+    """Tentatives/joignabilité pour un closer (`author`) sur la période. `closer`
+    = None regroupe les activités sans auteur (avant l'auth)."""
+
+    closer: Optional[str] = None
+    tentatives: int
+    joints: int
+    joignabilite: Optional[float] = None
+
+
+class QualifKoReason(BaseModel):
+    raison: str
+    count: int
+
+
+class QualifDailyVolume(BaseModel):
+    day: date
+    count: int
+
+
+class QualifKpis(BaseModel):
+    """Bandeau de tuiles en tête de l'onglet Résultats."""
+
+    tentatives: int  # activités avec `issue` non nul sur la période
+    joignabilite: Optional[float] = None  # joint / (joint+pas_joint+ko)
+    volume_appels: int  # activités type='appel' (indicateur de rythme)
+    reponses_email_dm: int  # activités email/dm_insta avec un résultat (issue non nul)
+
+
+class QualifStats(BaseModel):
+    """Agrégats de monitoring des issues sur une période — 100 % lecture,
+    aucun effet de bord sur les fiches."""
+
+    period_start: date
+    period_end: date
+    kpis: QualifKpis
+    by_closer: List[QualifCloserStats]
+    by_channel: List[QualifChannelStats]
+    top_ko_reasons: List[QualifKoReason]
+    daily_call_volume: List[QualifDailyVolume]
+
+
+class LastIssue(BaseModel):
+    """Dernière issue connue d'une fiche — DÉRIVÉE à la volée pour l'affichage
+    (puce « dernier contact »), jamais persistée sur `Opportunity`."""
+
+    opportunity_id: int
+    issue: str
+    raison: Optional[str] = None
+    at: datetime
 
 
 class FollowUpBuckets(BaseModel):

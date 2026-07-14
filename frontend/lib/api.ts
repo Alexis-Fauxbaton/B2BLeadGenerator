@@ -7,10 +7,12 @@ import type {
   GeneratedMessages,
   GroundtruthResult,
   IngestStats,
+  LastIssue,
   Meta,
   OpportunityList,
   OpportunityRead,
   Pipeline,
+  QualifStats,
   Settings,
   User,
   UserPublic,
@@ -45,6 +47,9 @@ export interface OpportunityFilters {
   population?: string;
   // Filtre d'assignation : "me" (mes leads) | "none" (non assignés) | <nom>.
   assigned?: string;
+  // true = au moins une contact_activity ; false = AUCUNE (« jamais travaillé »,
+  // cf. /followups « Jamais appelés ») ; omis = pas de filtre.
+  has_activity?: boolean;
   sort_by?: string;
   order?: string;
   limit?: number;
@@ -57,10 +62,20 @@ export interface OpportunityPage {
   total: number;
 }
 
+// Cache mémoire simple pour /api/meta : la taxonomie de qualification
+// (qualif_taxonomy) est statique côté client et lue par chaque instance de
+// barre de qualification/puce — évite un fetch par ligne dans les listes.
+let metaCache: Meta | null = null;
+
 export const api = {
   getDashboard: () => request<DashboardStats>("/api/dashboard/stats"),
 
   getMeta: () => request<Meta>("/api/meta"),
+
+  getMetaCached: async (): Promise<Meta> => {
+    if (!metaCache) metaCache = await request<Meta>("/api/meta");
+    return metaCache;
+  },
 
   getOpportunities: async (
     filters: OpportunityFilters = {}
@@ -149,11 +164,41 @@ export const api = {
       `/api/opportunities/${id}/activities?limit=${limit}&offset=${offset}`
     ),
 
-  addActivity: (id: number, body: { type: string; note?: string }) =>
+  addActivity: (
+    id: number,
+    body: {
+      type: string;
+      note?: string;
+      issue?: string;
+      raison?: string;
+      detail?: string[];
+    }
+  ) =>
     request<ContactActivity>(`/api/opportunities/${id}/activities`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // Enrichit une qualification déjà postée (N3 : detail/note) SANS créer de
+  // doublon — cas « quick tap puis + Détail après coup » (QualificationBar).
+  updateActivityDetail: (
+    opportunityId: number,
+    activityId: number,
+    body: { detail?: string[]; note?: string }
+  ) =>
+    request<ContactActivity>(
+      `/api/opportunities/${opportunityId}/activities/${activityId}/detail`,
+      { method: "PATCH", body: JSON.stringify(body) }
+    ),
+
+  // Puce « dernière issue » (§2.2 du design) : batch, dérivé à la volée,
+  // jamais persisté. `ids` = ceux de la page courante (pas de N+1).
+  getLastIssues: (ids: number[]): Promise<Record<number, LastIssue>> => {
+    if (ids.length === 0) return Promise.resolve({});
+    return request<Record<number, LastIssue>>(
+      `/api/opportunities/last-issues?ids=${ids.join(",")}`
+    );
+  },
 
   setNextAction: (
     id: number,
@@ -203,5 +248,19 @@ export const api = {
     if (params.author) qs.set("author", params.author);
     const s = qs.toString();
     return request<ActivityJournal>(`/api/activite${s ? `?${s}` : ""}`);
+  },
+
+  // Onglet « Résultats » de /activite (monitoring, 100% lecture). `period` :
+  // preset 'today'|'7j'|'30j' ; `start`/`end` (dates libres) priment s'ils
+  // sont fournis (même politique que le backend, cf. _resolve_period).
+  getActivityStats: (
+    params: { period?: string; start?: string; end?: string } = {}
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.period) qs.set("period", params.period);
+    if (params.start) qs.set("start", params.start);
+    if (params.end) qs.set("end", params.end);
+    const s = qs.toString();
+    return request<QualifStats>(`/api/activite/stats${s ? `?${s}` : ""}`);
   },
 };

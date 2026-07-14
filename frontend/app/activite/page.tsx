@@ -11,6 +11,7 @@ import type { ActivityJournal } from "@/lib/types";
 import { ACTIVITY_TYPE_LABELS, formatRelativeDate } from "@/lib/labels";
 import PageHeader from "@/components/PageHeader";
 import { Loading, EmptyState } from "@/components/States";
+import QualifResults from "@/components/QualifResults";
 
 function isoDay(offsetDays = 0): string {
   const d = new Date();
@@ -23,6 +24,7 @@ const YESTERDAY = isoDay(-1);
 
 export default function ActivitePage() {
   const { user, loading: authLoading } = useAuth();
+  const [tab, setTab] = useState<"journal" | "resultats">("journal");
   const [day, setDay] = useState(TODAY);
   const [author, setAuthor] = useState("");
   const [data, setData] = useState<ActivityJournal | null>(null);
@@ -32,13 +34,13 @@ export default function ActivitePage() {
   const isAdminSoft = !user || user.role === "admin";
 
   useEffect(() => {
-    if (!isAdminSoft) return;
+    if (!isAdminSoft || tab !== "journal") return;
     setData(null);
     api
       .getActivite({ day, author: author || undefined })
       .then(setData)
       .catch((e) => setError(e.message));
-  }, [day, author, isAdminSoft]);
+  }, [day, author, isAdminSoft, tab]);
 
   if (authLoading) return <Loading />;
 
@@ -50,7 +52,7 @@ export default function ActivitePage() {
     );
   }
 
-  if (error) {
+  if (tab === "journal" && error) {
     return (
       <div className="mx-8 my-10 rounded-xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">
         {error}
@@ -64,8 +66,39 @@ export default function ActivitePage() {
     <>
       <PageHeader
         title="Activité"
-        subtitle={data ? `${data.activities.length} activité(s) — ${dayLabel}` : "Chargement…"}
-      />
+        subtitle={
+          tab === "journal"
+            ? data
+              ? `${data.activities.length} activité(s) — ${dayLabel}`
+              : "Chargement…"
+            : "Monitoring des résultats de qualification"
+        }
+      >
+        {/* Toggle Journal | Résultats — zéro nouvelle page dans la nav. */}
+        <div className="inline-flex rounded-lg border border-slate-200 p-0.5">
+          <button
+            onClick={() => setTab("journal")}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+              tab === "journal" ? "bg-brand-600 text-white" : "text-slate-500 hover:bg-slate-50"
+            }`}
+          >
+            Journal
+          </button>
+          <button
+            onClick={() => setTab("resultats")}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+              tab === "resultats" ? "bg-brand-600 text-white" : "text-slate-500 hover:bg-slate-50"
+            }`}
+          >
+            Résultats
+          </button>
+        </div>
+      </PageHeader>
+      {tab === "resultats" ? (
+        <div className="p-8">
+          <QualifResults />
+        </div>
+      ) : (
       <div className="space-y-6 p-8">
         {/* Compteurs par closer (journée entière, tous auteurs). */}
         {data && data.counts.length > 0 && (
@@ -157,6 +190,7 @@ export default function ActivitePage() {
           )}
         </div>
       </div>
+      )}
     </>
   );
 }

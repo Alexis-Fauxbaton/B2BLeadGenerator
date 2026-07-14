@@ -245,6 +245,94 @@ export const LIFECYCLE_LABEL_STYLES: Record<string, string> = {
   studio_dormant: "bg-slate-100 text-slate-500 ring-slate-200",
 };
 
+// --- Qualification des contacts (issue/raison/detail, cross-canal) ----------
+// Miroir FR de QUALIF_ISSUES/QUALIF_RAISONS/QUALIF_DETAILS (models.py) : le
+// backend fait autorité sur la VALIDITÉ des combinaisons (servie en lecture
+// via GET /api/meta -> qualif_taxonomy) ; les libellés FR restent ici, comme
+// pour le reste de l'app. Cf. docs/plans/2026-07-14-qualification-contacts-design.md.
+
+export const QUALIF_ISSUE_LABELS: Record<string, string> = {
+  joint: "Joint",
+  pas_joint: "Pas joint",
+  ko: "KO",
+};
+
+// Couleur par N1 (badge) : vert = joint, ambre = pas joint, rouge = KO —
+// cohérent dans toute l'app (barre de qualification, journal, listes).
+export const QUALIF_ISSUE_STYLES: Record<string, string> = {
+  joint: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  pas_joint: "bg-amber-50 text-amber-700 ring-amber-200",
+  ko: "bg-rose-50 text-rose-700 ring-rose-200",
+};
+
+// Variante bouton (barre de qualification) — mêmes teintes que STATUS_STYLES.
+export const QUALIF_ISSUE_BUTTON_STYLES: Record<string, string> = {
+  joint: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+  pas_joint: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
+  ko: "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100",
+};
+
+export const QUALIF_ISSUE_DOT: Record<string, string> = {
+  joint: "bg-emerald-500",
+  pas_joint: "bg-amber-500",
+  ko: "bg-rose-500",
+};
+
+// N2 — raisons, libellés à plat : les clés sont partagées entre canaux avec le
+// même sens FR (ex. "interesse" -> "Intéressé" en appel/email/dm_insta).
+export const QUALIF_RAISON_LABELS: Record<string, string> = {
+  interesse: "Intéressé",
+  a_rappeler: "À rappeler",
+  pas_interesse: "Pas intéressé",
+  repondeur: "Répondeur",
+  pas_de_reponse: "Pas de réponse",
+  occupe: "Occupé",
+  mauvais_numero: "Mauvais numéro",
+  ferme: "N'existe plus",
+  ne_plus_contacter: "Ne pas recontacter",
+  a_suivre: "À suivre",
+  bounce: "Adresse invalide",
+  desinscription: "Désinscription",
+  vu_sans_reponse: "Vu, sans réponse",
+  compte_introuvable: "Compte introuvable",
+  bloque: "Bloqué",
+};
+
+// N3 — détails (chips optionnelles, réutilisables sous n'importe quel canal/issue).
+export const QUALIF_DETAIL_LABELS: Record<string, string> = {
+  deja_fournisseur: "A déjà un fournisseur",
+  pas_de_projet: "Pas de projet",
+  budget: "Budget",
+  mauvais_interlocuteur: "Mauvais interlocuteur",
+  rappeler_plus_tard: "Rappeler plus tard",
+};
+
+// Canal court (toggle de la barre de qualification) — distinct d'ACTIVITY_TYPE_LABELS
+// qui porte le libellé de l'ACTION ("Email envoyé") plutôt que du canal seul.
+export const QUALIF_CHANNEL_LABELS: Record<string, string> = {
+  appel: "Appel",
+  email: "Email",
+  dm_insta: "DM",
+};
+
+// Puce « dernière issue » (listes /followups, journal) : le libellé de la
+// raison si connue (plus précis, ex. "Répondeur"), sinon le N1 seul ("Joint").
+export function formatIssueChip(issue: string, raison?: string | null): string {
+  if (raison && QUALIF_RAISON_LABELS[raison]) return QUALIF_RAISON_LABELS[raison];
+  return QUALIF_ISSUE_LABELS[issue] ?? issue;
+}
+
+// Canal recommandé (recommended_channel, ex. "telephone"/"email"/"instagram")
+// -> canal de la barre de qualification (ACTIVITY_TYPES). Défaut "appel" pour
+// les canaux sans équivalent direct (ex. "linkedin").
+export function recommendedToActivityType(
+  channel: string | null | undefined
+): "appel" | "email" | "dm_insta" {
+  if (channel === "email") return "email";
+  if (channel === "instagram") return "dm_insta";
+  return "appel";
+}
+
 // Population du lead (A1) : CHR (défaut) ou architectes d'intérieur (prescripteurs).
 export const POPULATION_LABELS: Record<string, string> = {
   chr: "CHR",

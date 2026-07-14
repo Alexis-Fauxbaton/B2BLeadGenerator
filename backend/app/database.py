@@ -90,6 +90,12 @@ def _run_lightweight_migrations() -> None:
         ca_cols = {col["name"] for col in inspector.get_columns("contact_activities")}
         ca_additions = {
             "author": "ALTER TABLE contact_activities ADD COLUMN author VARCHAR",
+            # Qualification cross-canal (N1/N2/N3) : cf. docs/plans/
+            # 2026-07-14-qualification-contacts-design.md. Colonnes NULL/liste
+            # vide sur les lignes existantes (pas de backfill, démarrage propre).
+            "issue": "ALTER TABLE contact_activities ADD COLUMN issue VARCHAR",
+            "raison": "ALTER TABLE contact_activities ADD COLUMN raison VARCHAR",
+            "detail": "ALTER TABLE contact_activities ADD COLUMN detail JSON",
         }
         with engine.begin() as conn:
             for column, ddl in ca_additions.items():

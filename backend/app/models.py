@@ -64,6 +64,42 @@ ACTIVITY_TYPES = ["appel", "email", "dm_insta", "note", "statut"]
 # le journal global ; 'closer' = commercial qui fait son suivi sur l'app.
 USER_ROLES = ["admin", "closer"]
 
+# --- Qualification des contacts (cross-canal) ---------------------------------
+# Taxonomie à 3 niveaux posée par-dessus `ContactActivity.type` (le CANAL) :
+# `issue` (N1, universel) -> `raison` (N2, par canal) -> `detail` (N3, chips
+# libres). Backend = autorité de validation, servie au frontend en lecture (pas
+# de duplication de la vérité). Voir docs/plans/2026-07-14-qualification-contacts-design.md.
+#
+# N1 : « pas joint » (à retenter) et « KO » (impasse) déclenchent des gestes
+# opposés -> 3 valeurs, pas 2. Un refus (« pas intéressé ») compte comme JOINT
+# (l'échange a eu lieu, c'est une tentative aboutie) ; seul un refus ferme (« ne
+# me rappelez plus ») est KO.
+QUALIF_ISSUES = ["joint", "pas_joint", "ko"]
+
+# N2 : raisons autorisées par (canal, issue). Clé = tuple (type, issue) — miroir
+# de `ACTIVITY_TYPES` pour `type` et de `QUALIF_ISSUES` pour `issue`.
+QUALIF_RAISONS = {
+    ("appel", "joint"): ["interesse", "a_rappeler", "pas_interesse"],
+    ("appel", "pas_joint"): ["repondeur", "pas_de_reponse", "occupe"],
+    ("appel", "ko"): ["mauvais_numero", "ferme", "ne_plus_contacter"],
+    ("email", "joint"): ["interesse", "a_suivre", "pas_interesse"],
+    ("email", "pas_joint"): ["pas_de_reponse"],
+    ("email", "ko"): ["bounce", "desinscription"],
+    ("dm_insta", "joint"): ["interesse", "a_suivre", "pas_interesse"],
+    ("dm_insta", "pas_joint"): ["vu_sans_reponse", "pas_de_reponse"],
+    ("dm_insta", "ko"): ["compte_introuvable", "bloque"],
+}
+
+# N3 : chips de détail optionnelles, réutilisables sous n'importe quel (canal,
+# issue) — surtout pertinentes sous `pas_interesse` / `a_rappeler`.
+QUALIF_DETAILS = [
+    "deja_fournisseur",
+    "pas_de_projet",
+    "budget",
+    "mauvais_interlocuteur",
+    "rappeler_plus_tard",
+]
+
 
 # --- Tables -------------------------------------------------------------------
 
@@ -256,6 +292,13 @@ class ContactActivity(SQLModel, table=True):
     # l'authentification viendra plus tard, mais la colonne existe AVANT que les
     # données ne s'accumulent (fondation des comptes closers). NULL = inconnu.
     author: Optional[str] = None
+    # Qualification cross-canal (N1/N2/N3, cf. QUALIF_ISSUES/QUALIF_RAISONS/
+    # QUALIF_DETAILS) : NE MODIFIE JAMAIS la fiche (statut/flags) — enregistrée et
+    # agrégée pour le monitoring UNIQUEMENT. NULL = pas de résultat encore connu
+    # (ex. « Email envoyé » : action d'émission sans résultat).
+    issue: Optional[str] = None  # N1 : joint | pas_joint | ko
+    raison: Optional[str] = None  # N2 : cf. QUALIF_RAISONS[(type, issue)]
+    detail: List[str] = Field(default_factory=list, sa_column=Column(JSON))  # N3
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     opportunity: Optional[Opportunity] = Relationship(back_populates="contact_activities")

@@ -1,15 +1,14 @@
 "use client";
 
-// Suivi de contact SOBRE (critère d'acceptation « pas le fouilli ») : boutons
-// rapides + journal d'activités compact + une prochaine action par fiche.
-// Regroupé ici pour rester réutilisable et garder page.tsx lisible.
+// Suivi de contact SOBRE (critère d'acceptation « pas le fouilli ») : barre de
+// qualification cross-canal + journal d'activités compact + une prochaine
+// action par fiche. Regroupé ici pour rester réutilisable et garder page.tsx
+// lisible. Cf. docs/plans/2026-07-14-qualification-contacts-design.md.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Phone,
   PhoneCall,
-  PhoneMissed,
-  Voicemail,
   Mail,
   Instagram,
   StickyNote,
@@ -20,15 +19,21 @@ import {
   UserCog,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { ContactActivity, UserPublic } from "@/lib/types";
+import type { ContactActivity, QualifTaxonomy, UserPublic } from "@/lib/types";
 import { useAuth } from "@/lib/auth";
 import {
   ACTIVITY_TYPE_LABELS,
+  QUALIF_ISSUE_BUTTON_STYLES,
+  QUALIF_ISSUE_LABELS,
+  QUALIF_RAISON_LABELS,
+  QUALIF_DETAIL_LABELS,
   STATUS_LABELS,
   formatDate,
   formatRelativeDate,
   isOverdue,
+  recommendedToActivityType,
 } from "@/lib/labels";
+import { IssueBadge } from "@/components/Badges";
 
 // Note d'un changement de statut auto-journalisé : "ancien -> nouveau" (clés
 // techniques) rendu en libellés FR pour le closer ("Non contacté → Contacté").
@@ -48,23 +53,138 @@ const ACTIVITY_ICONS: Record<string, typeof Phone> = {
 
 const FOLD_AT = 5;
 
-// --- Boutons rapides ---------------------------------------------------------
+const CANAL_OPTIONS: { type: "appel" | "email" | "dm_insta"; label: string; icon: typeof Phone }[] = [
+  { type: "appel", label: "Appel", icon: Phone },
+  { type: "email", label: "Email", icon: Mail },
+  { type: "dm_insta", label: "DM", icon: Instagram },
+];
 
-export function QuickActions({
+function issueLabelClass(issue: string): string {
+  if (issue === "joint") return "text-emerald-600";
+  if (issue === "pas_joint") return "text-amber-600";
+  return "text-rose-600";
+}
+
+// --- Barre de qualification (canal-aware, N1/N2/N3) --------------------------
+// Remplace l'ancien QuickActions : chemin rapide = 1 tap = 1 POST (couleur =
+// lecture immédiate) ; « + détail » = chips N3 + note, opt-in, même POST.
+
+export function QualificationBar({
   opportunityId,
+  recommendedChannel,
   onAdded,
 }: {
   opportunityId: number;
+  recommendedChannel?: string | null;
   onAdded: () => void;
 }) {
+  const [taxonomy, setTaxonomy] = useState<QualifTaxonomy | null>(null);
+  const [canal, setCanal] = useState<"appel" | "email" | "dm_insta">(
+    recommendedToActivityType(recommendedChannel)
+  );
   const [busy, setBusy] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [selected, setSelected] = useState<{ issue: string; raison: string } | null>(null);
+  const [chips, setChips] = useState<string[]>([]);
+  const [detailNote, setDetailNote] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteText, setNoteText] = useState("");
+  // Dernier tap rapide (chemin 1-clic) : permet de rattacher un détail (N3) à
+  // CETTE activité via PATCH au lieu de reposter une 2ᵉ ligne si le closer
+  // rouvre « + Détail » juste après (cf. revue produit — ordre issue-d'abord).
+  const [justPosted, setJustPosted] = useState<{ id: number; issue: string; raison: string } | null>(null);
 
-  const fire = async (type: string, note?: string, key?: string) => {
-    setBusy(key ?? type);
+  useEffect(() => {
+    api
+      .getMetaCached()
+      .then((m) => setTaxonomy(m.qualif_taxonomy))
+      .catch(() => {});
+  }, []);
+
+  const post = async (
+    body: { type: string; issue?: string; raison?: string; detail?: string[]; note?: string },
+    key: string
+  ) => {
+    setBusy(key);
     try {
-      await api.addActivity(opportunityId, note ? { type, note } : { type });
+      const activity = await api.addActivity(opportunityId, body);
+      onAdded();
+      setDetailOpen(false);
+      setSelected(null);
+      setChips([]);
+      setDetailNote("");
+      return activity;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Chemin rapide (défaut) : chaque chip = 1 POST immédiat — on retient
+  // l'activité créée (`justPosted`) pour pouvoir y rattacher un détail après
+  // coup (voir « + détail » plus bas) sans reposter une 2ᵉ ligne. Chemin
+  // détaillé (« + détail » déjà ouvert) : la chip sélectionne seulement, la
+  // validation se fait plus bas avec les chips N3 + la note (un seul POST).
+  const pick = async (issue: string, raison: string) => {
+    if (!detailOpen) {
+      const activity = await post({ type: canal, issue, raison }, `${issue}-${raison}`);
+      if (activity) setJustPosted({ id: activity.id, issue, raison });
+    } else {
+      setSelected({ issue, raison });
+      setJustPosted(null); // nouvelle sélection explicite -> plus de lien avec un post précédent
+    }
+  };
+
+  // Si le closer rouvre « + Détail » juste après un tap rapide sans avoir
+  // changé de case, on précharge sa dernière qualification : `submitDetailed`
+  // enrichira alors CETTE activité (PATCH) plutôt que d'en créer une nouvelle.
+  const toggleDetail = () => {
+    setDetailOpen((v) => {
+      const next = !v;
+      if (next && justPosted && !selected) setSelected(justPosted);
+      return next;
+    });
+  };
+
+  const isEnrichingJustPosted = Boolean(
+    selected && justPosted && selected.issue === justPosted.issue && selected.raison === justPosted.raison
+  );
+
+  const submitDetailed = async () => {
+    if (!selected) return;
+    if (isEnrichingJustPosted && justPosted) {
+      setBusy("detail");
+      try {
+        await api.updateActivityDetail(opportunityId, justPosted.id, {
+          detail: chips,
+          note: detailNote.trim() || undefined,
+        });
+        onAdded();
+        setDetailOpen(false);
+        setSelected(null);
+        setChips([]);
+        setDetailNote("");
+        setJustPosted(null);
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+    post(
+      {
+        type: canal,
+        issue: selected.issue,
+        raison: selected.raison,
+        detail: chips,
+        note: detailNote.trim() || undefined,
+      },
+      "detail"
+    );
+  };
+
+  const emit = async () => {
+    setBusy("emit");
+    try {
+      await api.addActivity(opportunityId, { type: canal });
       onAdded();
     } finally {
       setBusy(null);
@@ -74,103 +194,289 @@ export function QuickActions({
   const submitNote = async () => {
     const note = noteText.trim();
     if (!note) return;
-    await fire("note", note);
-    setNoteText("");
-    setNoteOpen(false);
+    setBusy("note");
+    try {
+      await api.addActivity(opportunityId, { type: "note", note });
+      onAdded();
+      setNoteText("");
+      setNoteOpen(false);
+    } finally {
+      setBusy(null);
+    }
   };
+
+  if (!taxonomy) {
+    return <p className="text-sm text-slate-400">Chargement…</p>;
+  }
+
+  const raisonsByIssue = taxonomy.raisons[canal] ?? {};
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-2">
-        {/* Issue d'appel en 1 clic : type reste 'appel', seule la note change. */}
-        <QuickButton
-          icon={PhoneCall}
-          label="Répondu"
-          busy={busy === "appel-repondu"}
-          onClick={() => fire("appel", "Répondu", "appel-repondu")}
-        />
-        <QuickButton
-          icon={PhoneMissed}
-          label="Pas de réponse"
-          busy={busy === "appel-absent"}
-          onClick={() => fire("appel", "Pas de réponse", "appel-absent")}
-        />
-        <QuickButton
-          icon={Voicemail}
-          label="Répondeur"
-          busy={busy === "appel-repondeur"}
-          onClick={() => fire("appel", "Répondeur", "appel-repondeur")}
-        />
-        <QuickButton
-          icon={Mail}
-          label="Email envoyé"
-          busy={busy === "email"}
-          onClick={() => fire("email")}
-        />
-        <QuickButton
-          icon={Instagram}
-          label="DM envoyé"
-          busy={busy === "dm_insta"}
-          onClick={() => fire("dm_insta")}
-        />
-        <QuickButton
-          icon={Plus}
-          label="Note"
-          busy={false}
-          onClick={() => setNoteOpen((v) => !v)}
-          active={noteOpen}
-        />
+      {/* Canal */}
+      <div className="mb-3 inline-flex rounded-lg border border-slate-200 p-0.5">
+        {CANAL_OPTIONS.map((c) => (
+          <button
+            key={c.type}
+            onClick={() => {
+              setCanal(c.type);
+              setJustPosted(null); // le lien d'enrichissement ne traverse pas un changement de canal
+            }}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium ${
+              canal === c.type ? "bg-brand-600 text-white" : "text-slate-500 hover:bg-slate-50"
+            }`}
+          >
+            <c.icon size={14} /> {c.label}
+          </button>
+        ))}
       </div>
 
-      {noteOpen && (
-        <div className="mt-2 flex gap-2">
-          <input
-            autoFocus
-            value={noteText}
-            onChange={(e) => setNoteText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submitNote()}
-            placeholder="Note rapide…"
-            className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
-          />
-          <button
-            onClick={submitNote}
-            disabled={!noteText.trim() || busy === "note"}
-            className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-          >
-            {busy === "note" ? <Loader2 size={14} className="animate-spin" /> : "Ajouter"}
-          </button>
-        </div>
+      {/* Émission (email/DM) : action sans résultat encore connu (issue=NULL) */}
+      {canal !== "appel" && (
+        <button
+          onClick={emit}
+          disabled={busy === "emit"}
+          className="mb-3 flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+        >
+          {busy === "emit" ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : canal === "email" ? (
+            <Mail size={14} />
+          ) : (
+            <Instagram size={14} />
+          )}
+          {canal === "email" ? "Email envoyé" : "DM envoyé"}
+        </button>
       )}
+
+      {/* Grille de presets N1 x N2 — couleur = issue, 1 tap = 1 POST */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {taxonomy.issues.map((issue) => (
+          <div key={issue}>
+            <p className={`mb-1.5 text-xs font-semibold uppercase tracking-wide ${issueLabelClass(issue)}`}>
+              {QUALIF_ISSUE_LABELS[issue] ?? issue}
+              {/* JOINT couvre aussi un refus (« Pas intéressé ») : la personne
+                  a bien été jointe, ce qui compte pour la joignabilité —
+                  contre-intuitif au premier regard (revue produit), donc
+                  explicité ici plutôt qu'en tooltip qu'un débutant ne survole
+                  pas. */}
+              {issue === "joint" && (
+                <span className="ml-1 block text-[10px] font-normal normal-case leading-tight text-slate-400">
+                  tu as eu la personne, même si elle refuse
+                </span>
+              )}
+            </p>
+            <div className="flex flex-col gap-1.5">
+              {(raisonsByIssue[issue] ?? []).map((raison) => {
+                const key = `${issue}-${raison}`;
+                const isSelected = selected?.issue === issue && selected?.raison === raison;
+                return (
+                  <button
+                    key={raison}
+                    onClick={() => pick(issue, raison)}
+                    disabled={busy === key}
+                    className={`rounded-lg border px-3 py-1.5 text-left text-sm font-medium disabled:opacity-60 ${
+                      QUALIF_ISSUE_BUTTON_STYLES[issue]
+                    } ${isSelected ? "ring-2 ring-brand-400" : ""}`}
+                  >
+                    {busy === key ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      QUALIF_RAISON_LABELS[raison] ?? raison
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* + détail (N3 + note), opt-in — jamais requis */}
+      <div className="mt-3">
+        <button
+          onClick={toggleDetail}
+          className="text-xs font-medium text-brand-600 hover:text-brand-700"
+        >
+          {detailOpen ? "− Masquer le détail" : "+ Détail (facultatif)"}
+        </button>
+        {detailOpen && (
+          <div className="mt-2 space-y-2 rounded-lg border border-slate-200 p-3">
+            <p className="text-xs text-slate-400">
+              {isEnrichingJustPosted
+                ? `Déjà enregistrée : ${QUALIF_ISSUE_LABELS[selected!.issue]} · ${
+                    QUALIF_RAISON_LABELS[selected!.raison] ?? selected!.raison
+                  } — ajoute juste le détail.`
+                : selected
+                ? `Sélection : ${QUALIF_ISSUE_LABELS[selected.issue]} · ${
+                    QUALIF_RAISON_LABELS[selected.raison] ?? selected.raison
+                  }`
+                : "Choisis une case ci-dessus, puis précise si besoin."}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {taxonomy.details.map((d) => {
+                const active = chips.includes(d);
+                return (
+                  <button
+                    key={d}
+                    onClick={() =>
+                      setChips((cs) => (active ? cs.filter((x) => x !== d) : [...cs, d]))
+                    }
+                    className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                      active
+                        ? "border-brand-300 bg-brand-50 text-brand-700"
+                        : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    {QUALIF_DETAIL_LABELS[d] ?? d}
+                  </button>
+                );
+              })}
+            </div>
+            <input
+              value={detailNote}
+              onChange={(e) => setDetailNote(e.target.value)}
+              placeholder="Note libre…"
+              className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
+            />
+            <button
+              onClick={submitDetailed}
+              disabled={!selected || busy === "detail"}
+              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+            >
+              {busy === "detail" ? <Loader2 size={14} className="animate-spin" /> : "Enregistrer"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Note libre indépendante (geste 'note', hors qualification) */}
+      <div className="mt-3">
+        <button
+          onClick={() => setNoteOpen((v) => !v)}
+          className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium ${
+            noteOpen
+              ? "border-brand-300 bg-brand-50 text-brand-700"
+              : "border-slate-200 text-slate-700 hover:bg-slate-50"
+          }`}
+        >
+          <Plus size={14} /> Note
+        </button>
+        {noteOpen && (
+          <div className="mt-2 flex gap-2">
+            <input
+              autoFocus
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitNote()}
+              placeholder="Note rapide…"
+              className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
+            />
+            <button
+              onClick={submitNote}
+              disabled={!noteText.trim() || busy === "note"}
+              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+            >
+              {busy === "note" ? <Loader2 size={14} className="animate-spin" /> : "Ajouter"}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-function QuickButton({
-  icon: Icon,
-  label,
-  busy,
-  active,
-  onClick,
+// --- Qualification compacte (2 clics) depuis une liste (ex. /followups) ------
+// Popover léger : clic sur « Qualifier » (1) puis sur une case (2) = 1 POST.
+// Canal fixé sur 'appel' (contexte : liste d'appels). `taxonomy` passée par le
+// parent (fetch UNIQUE au niveau page, pas un fetch par ligne).
+export function QuickQualifyPopover({
+  opportunityId,
+  taxonomy,
+  onAdded,
 }: {
-  icon: typeof Phone;
-  label: string;
-  busy: boolean;
-  active?: boolean;
-  onClick: () => void;
+  opportunityId: number;
+  taxonomy: QualifTaxonomy;
+  onAdded: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [open]);
+
+  const pick = async (issue: string, raison: string) => {
+    const key = `${issue}-${raison}`;
+    setBusy(key);
+    try {
+      await api.addActivity(opportunityId, { type: "appel", issue, raison });
+      onAdded();
+      setOpen(false);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const raisonsByIssue = taxonomy.raisons["appel"] ?? {};
+
   return (
-    <button
-      onClick={onClick}
-      disabled={busy}
-      className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium disabled:opacity-60 ${
-        active
-          ? "border-brand-300 bg-brand-50 text-brand-700"
-          : "border-slate-200 text-slate-700 hover:bg-slate-50"
-      }`}
-    >
-      {busy ? <Loader2 size={14} className="animate-spin" /> : <Icon size={14} />}
-      {label}
-    </button>
+    <div ref={ref} className="relative z-10">
+      <button
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        title="Qualifier l'appel"
+        className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium ${
+          open
+            ? "border-brand-300 bg-brand-50 text-brand-700"
+            : "border-slate-200 text-slate-500 hover:bg-slate-50"
+        }`}
+      >
+        <PhoneCall size={12} /> Qualifier
+      </button>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute right-0 top-full z-20 mt-1 w-60 rounded-lg border border-slate-200 bg-white p-2 shadow-lg"
+        >
+          {taxonomy.issues.map((issue) => (
+            <div key={issue} className="mb-1.5 last:mb-0">
+              <p className={`mb-1 text-[10px] font-semibold uppercase tracking-wide ${issueLabelClass(issue)}`}>
+                {QUALIF_ISSUE_LABELS[issue] ?? issue}
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {(raisonsByIssue[issue] ?? []).map((raison) => {
+                  const key = `${issue}-${raison}`;
+                  return (
+                    <button
+                      key={raison}
+                      onClick={() => pick(issue, raison)}
+                      disabled={busy === key}
+                      className={`rounded-md border px-2 py-1 text-[11px] font-medium disabled:opacity-60 ${QUALIF_ISSUE_BUTTON_STYLES[issue]}`}
+                    >
+                      {busy === key ? (
+                        <Loader2 size={11} className="inline animate-spin" />
+                      ) : (
+                        QUALIF_RAISON_LABELS[raison] ?? raison
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -196,13 +502,21 @@ export function ActivityTimeline({ activities }: { activities: ContactActivity[]
               <Icon size={14} className="mt-0.5 shrink-0 text-slate-400" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-slate-700">
-                    {ACTIVITY_TYPE_LABELS[a.type] ?? a.type}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-sm font-medium text-slate-700">
+                      {ACTIVITY_TYPE_LABELS[a.type] ?? a.type}
+                    </span>
+                    {a.issue && <IssueBadge issue={a.issue} raison={a.raison} />}
+                  </div>
                   <span className="shrink-0 text-xs text-slate-400">
                     {formatRelativeDate(a.created_at)}
                   </span>
                 </div>
+                {a.detail.length > 0 && (
+                  <p className="mt-0.5 text-xs text-slate-400">
+                    {a.detail.map((d) => QUALIF_DETAIL_LABELS[d] ?? d).join(" · ")}
+                  </p>
+                )}
                 {a.note && (
                   <p className="mt-0.5 text-sm text-slate-500">
                     {a.type === "statut" ? frStatusNote(a.note) : a.note}

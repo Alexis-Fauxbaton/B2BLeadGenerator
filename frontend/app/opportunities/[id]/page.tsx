@@ -44,7 +44,7 @@ import {
 import { Loading, ErrorState } from "@/components/States";
 import CopyButton from "@/components/CopyButton";
 import {
-  QuickActions,
+  QualificationBar,
   ActivityTimeline,
   NextActionCard,
   AssignmentSelect,
@@ -255,9 +255,13 @@ export default function OpportunityDetailPage() {
             )}
           </Section>
 
-          {/* Suivi de contact : boutons rapides + journal compact */}
+          {/* Suivi de contact : barre de qualification + journal compact */}
           <Section icon={History} title="Suivi de contact">
-            <QuickActions opportunityId={opp.id} onAdded={reloadActivities} />
+            <QualificationBar
+              opportunityId={opp.id}
+              recommendedChannel={opp.recommended_channel}
+              onAdded={reloadActivities}
+            />
             {activities === null ? (
               <p className="mt-3 text-sm text-slate-400">Chargement du journal…</p>
             ) : (

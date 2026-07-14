@@ -105,7 +105,78 @@ export interface ContactActivity {
   // Auteur (closer) — fondation des comptes closers. Exposé en lecture ; pas
   // encore renseigné ni affiché (l'auth viendra plus tard).
   author: string | null;
+  // Qualification cross-canal (N1/N2/N3) — lecture seule ici, jamais réécrite
+  // sur la fiche. `issue` = NULL pour une action d'émission (ex. « Email
+  // envoyé ») sans résultat encore connu.
+  issue: "joint" | "pas_joint" | "ko" | null;
+  raison: string | null;
+  detail: string[];
   created_at: string;
+}
+
+// Taxonomie de qualification servie par GET /api/meta (`qualif_taxonomy`) —
+// source de vérité pour la VALIDITÉ des combinaisons (backend = autorité).
+// `raisons` : { canal: { issue: [raisons] } }. Les libellés FR restent dans
+// lib/labels.ts, comme pour le reste de l'app.
+export interface QualifTaxonomy {
+  issues: string[];
+  raisons: Record<string, Record<string, string[]>>;
+  details: string[];
+}
+
+// --- Monitoring des résultats de qualification (GET /api/activite/stats) ----
+// 100% lecture agrégée, aucun effet de bord sur les fiches (cf. design
+// qualification §2).
+
+export interface QualifKpis {
+  tentatives: number;
+  joignabilite: number | null;
+  volume_appels: number;
+  reponses_email_dm: number;
+}
+
+export interface QualifCloserStats {
+  closer: string | null;
+  tentatives: number;
+  joints: number;
+  joignabilite: number | null;
+}
+
+export interface QualifChannelStats {
+  type: string;
+  tentatives: number;
+  joints: number;
+  joignabilite: number | null;
+}
+
+export interface QualifKoReason {
+  raison: string;
+  count: number;
+}
+
+export interface QualifDailyVolume {
+  day: string;
+  count: number;
+}
+
+export interface QualifStats {
+  period_start: string;
+  period_end: string;
+  kpis: QualifKpis;
+  by_closer: QualifCloserStats[];
+  by_channel: QualifChannelStats[];
+  top_ko_reasons: QualifKoReason[];
+  daily_call_volume: QualifDailyVolume[];
+}
+
+// Dernière issue connue d'une fiche (GET /api/opportunities/last-issues,
+// batch) — DÉRIVÉE à la volée pour l'affichage (puce « dernier contact »),
+// jamais persistée sur la fiche.
+export interface LastIssue {
+  opportunity_id: number;
+  issue: string;
+  raison: string | null;
+  at: string;
 }
 
 // Vue « À relancer », groupée par échéance (voir GET /api/followups).
@@ -169,6 +240,8 @@ export interface Meta {
   channels: string[];
   statuses: string[];
   cities: string[];
+  activity_types: string[];
+  qualif_taxonomy: QualifTaxonomy;
 }
 
 export type Pipeline = Record<string, OpportunityList[]>;

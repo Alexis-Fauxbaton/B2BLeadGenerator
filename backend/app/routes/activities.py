@@ -6,22 +6,66 @@ statut (dans routes/opportunities.py) écrivent dans `contact_activities` ; UNE
 prochaine action (texte court + date) se pose/s'efface d'un coup.
 """
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..database import get_session
-from ..models import ACTIVITY_TYPES, ContactActivity, Opportunity, User
+from ..models import (
+    ACTIVITY_TYPES,
+    QUALIF_DETAILS,
+    QUALIF_ISSUES,
+    QUALIF_RAISONS,
+    ContactActivity,
+    Opportunity,
+    User,
+)
 from ..schemas import (
     ContactActivityCreate,
+    ContactActivityDetailUpdate,
     ContactActivityRead,
+    LastIssue,
     NextActionUpdate,
     OpportunityRead,
 )
 from ..security import get_current_user
 
 router = APIRouter(prefix="/api/opportunities", tags=["activities"])
+
+
+def _validate_detail(detail: List[str]) -> None:
+    """Valide le N3 (`detail`, chips libres) contre `QUALIF_DETAILS` — factorisé
+    car réutilisé par la création (`add_activity`) ET l'enrichissement a
+    posteriori (`update_activity_detail`)."""
+    invalid_details = [d for d in detail if d not in QUALIF_DETAILS]
+    if invalid_details:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Détail(s) inconnu(s) : {invalid_details} (attendu {QUALIF_DETAILS}).",
+        )
+
+
+def _validate_qualification(payload: ContactActivityCreate) -> None:
+    """Valide la qualification N1/N2/N3 (`issue`/`raison`/`detail`), TOUS
+    optionnels. Même politique que la validation `type` existante : 422 sur
+    combo invalide. N'écrit jamais rien — c'est une porte d'entrée seulement."""
+    if payload.issue is not None and payload.issue not in QUALIF_ISSUES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Issue inconnue : {payload.issue!r} (attendu {QUALIF_ISSUES}).",
+        )
+    if payload.raison is not None:
+        allowed = QUALIF_RAISONS.get((payload.type, payload.issue), [])
+        if payload.raison not in allowed:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Raison inconnue pour type={payload.type!r}/"
+                    f"issue={payload.issue!r} : {payload.raison!r} (attendu {allowed})."
+                ),
+            )
+    _validate_detail(payload.detail)
 
 
 @router.get("/{opportunity_id}/activities", response_model=List[ContactActivityRead])
@@ -74,6 +118,7 @@ def add_activity(
             detail=f"Type d'activité inconnu : {payload.type!r} "
             f"(attendu {ACTIVITY_TYPES}).",
         )
+    _validate_qualification(payload)
 
     # isinstance et non `is not None` : appelée en direct dans les tests, la valeur
     # par défaut est l'objet Depends (sentinelle), pas None -> on ne la traite comme
@@ -84,13 +129,104 @@ def add_activity(
         type=payload.type,
         note=payload.note,
         author=author,
+        issue=payload.issue,
+        raison=payload.raison,
+        detail=payload.detail,
     )
+    session.add(activity)
+    # Une qualification fait vivre la fiche comme n'importe quel geste — mais NE
+    # touche JAMAIS `status` ni aucun autre champ métier (invariant du design :
+    # « on monitore, on ne nourrit pas la donnée »).
+    opp.updated_at = datetime.utcnow()
+    session.add(opp)
+    session.commit()
+    session.refresh(activity)
+    return activity
+
+
+@router.patch(
+    "/{opportunity_id}/activities/{activity_id}/detail",
+    response_model=ContactActivityRead,
+)
+def update_activity_detail(
+    opportunity_id: int,
+    activity_id: int,
+    payload: ContactActivityDetailUpdate,
+    session: Session = Depends(get_session),
+):
+    """Enrichit le N3 (`detail`/`note`) d'une qualification déjà postée, SANS
+    créer de doublon. Cas d'usage : le closer tape le preset rapide (1 tap =
+    1 POST, issue+raison) puis rouvre « + Détail » pour préciser — au lieu de
+    reposter une 2ᵉ activité avec le même (issue, raison), le front rattache le
+    détail à l'activité déjà créée via cet endpoint.
+
+    Ne touche JAMAIS `type`/`issue`/`raison`/`author` (déjà posés, immuables
+    ici) ni le statut de la fiche — même invariant que `add_activity`. Champs
+    omis du payload = inchangés (PATCH partiel)."""
+    opp = session.get(Opportunity, opportunity_id)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunité introuvable")
+    activity = session.get(ContactActivity, activity_id)
+    if not activity or activity.opportunity_id != opportunity_id:
+        raise HTTPException(status_code=404, detail="Activité introuvable")
+
+    if payload.detail is not None:
+        _validate_detail(payload.detail)
+        activity.detail = payload.detail
+    if payload.note is not None:
+        activity.note = payload.note
     session.add(activity)
     opp.updated_at = datetime.utcnow()
     session.add(opp)
     session.commit()
     session.refresh(activity)
     return activity
+
+
+@router.get("/last-issues", response_model=Dict[int, LastIssue])
+def get_last_issues(
+    ids: str,
+    session: Session = Depends(get_session),
+):
+    """Dernière issue connue par fiche, pour les puces « dernier contact » des
+    listes (§2.2 du design) — DÉRIVÉE à la volée, jamais persistée sur la fiche.
+
+    `ids` : liste d'identifiants séparés par des virgules (ids de la page
+    courante ; endpoint batch pour éviter le N+1). Une seule requête triée par
+    date décroissante ; on ne garde que la première ligne rencontrée par fiche.
+    Enregistré ICI (et non sous `/{opportunity_id}/...`) : chemin littéral, doit
+    être routé avant `GET /api/opportunities/{opportunity_id}` (cf. ordre
+    d'inclusion des routers dans main.py)."""
+    try:
+        opp_ids = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"ids invalide : {ids!r} (attendu une liste d'entiers séparés par des virgules).",
+        )
+    if not opp_ids:
+        return {}
+
+    rows = session.exec(
+        select(ContactActivity)
+        .where(
+            ContactActivity.opportunity_id.in_(opp_ids),
+            ContactActivity.issue.is_not(None),
+        )
+        .order_by(ContactActivity.created_at.desc(), ContactActivity.id.desc())
+    ).all()
+
+    result: Dict[int, LastIssue] = {}
+    for row in rows:
+        if row.opportunity_id in result:
+            continue  # déjà vu une ligne plus récente pour cette fiche
+        result[row.opportunity_id] = LastIssue(
+            opportunity_id=row.opportunity_id,
+            issue=row.issue,
+            raison=row.raison,
+            at=row.created_at,
+        )
+    return result
 
 
 @router.put("/{opportunity_id}/next-action", response_model=OpportunityRead)

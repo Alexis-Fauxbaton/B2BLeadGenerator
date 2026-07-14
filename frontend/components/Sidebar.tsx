@@ -20,7 +20,7 @@ import { useAuth } from "@/lib/auth";
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/opportunities", label: "Opportunités", icon: Target },
-  { href: "/followups", label: "À relancer", icon: BellRing },
+  { href: "/followups", label: "Mes appels", icon: BellRing },
   { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { href: "/eval", label: "Éval Instagram", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
