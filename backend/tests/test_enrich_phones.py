@@ -176,6 +176,28 @@ def test_extract_ignores_digit_runs_like_timestamps():
     assert out["text"] == []
 
 
+def test_choose_home_text_unique_corroborated_by_contact_wins():
+    # Cas deniseomerdesign.fr : la home affiche UN numéro (texte), la page
+    # contact le répète avec un second (fixe + mobile du même studio). Le
+    # numéro mis en avant dès l'accueil ET corroboré en contact prime.
+    pages = [
+        {"is_contact": False, "tel": [], "text": ["06 15 94 64 36"]},
+        {"is_contact": True, "is_legal": False, "tel": [],
+         "text": ["06 15 94 64 36", "01 40 06 99 12"]},
+    ]
+    assert choose_phone(pages) == "06 15 94 64 36"
+
+
+def test_choose_home_text_without_contact_corroboration_does_not_fire():
+    # Home et contact affichent des numéros DIFFÉRENTS : pas de corroboration
+    # -> le numéro unique de la vraie page contact décide (palier 2).
+    pages = [
+        {"is_contact": False, "tel": [], "text": ["06 15 94 64 36"]},
+        {"is_contact": True, "is_legal": False, "tel": [], "text": ["01 40 06 99 12"]},
+    ]
+    assert choose_phone(pages) == "01 40 06 99 12"
+
+
 def test_choose_contact_page_number_beats_legal_page_noise():
     # Cas raphaelgilardino.com : la page contact affiche LE numéro du studio,
     # les mentions légales ajoutent celui de l'opérateur (Monaco Telecom) —

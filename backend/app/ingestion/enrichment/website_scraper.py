@@ -262,6 +262,11 @@ def choose_phone(pages: List[Dict]) -> Optional[str]:
          second point de vente) apparaissent EN PLUS sur les pages contact /
          mentions — ne les laissant plus diluer le signal (cas m2-scene) ;
       1. liens ``tel:`` de toutes les pages (déclaration explicite du site) ;
+      1bis. numéro texte UNIQUE de la HOME, corroboré par une page contact :
+         le numéro que le site met en avant dès l'accueil ET répète sur sa page
+         contact est son numéro principal — il prime même si la page contact
+         liste un second numéro (fixe + mobile du même studio, cas
+         deniseomerdesign.fr) ; sans corroboration contact, on ne décide pas ;
       2. numéros regex des pages CONTACT strictes (URL « contact ») : la page
          contact est là où le business affiche SON numéro — un numéro unique y
          prime sur les numéros parasites des mentions légales (hébergeur,
@@ -274,11 +279,18 @@ def choose_phone(pages: List[Dict]) -> Optional[str]:
     'text': [...]}`` (``is_legal`` optionnel, False par défaut)."""
     tier0 = _distinct([p for pg in pages if not pg.get("is_contact") for p in pg.get("tel", [])])
     tier1 = _distinct([p for pg in pages for p in pg.get("tel", [])])
+    home_text = _distinct([p for pg in pages if not pg.get("is_contact") for p in pg.get("text", [])])
+    contact_text = {p for pg in pages if pg.get("is_contact") for p in pg.get("text", [])}
     tier2 = _distinct([p for pg in pages if pg.get("is_contact") and not pg.get("is_legal")
                        for p in pg.get("text", [])])
     tier3 = _distinct([p for pg in pages if pg.get("is_contact") for p in pg.get("text", [])])
-    tier4 = _distinct([p for pg in pages if not pg.get("is_contact") for p in pg.get("text", [])])
-    for tier in (tier0, tier1, tier2, tier3, tier4):
+    for tier in (tier0, tier1):
+        if tier:
+            return tier[0] if len(tier) == 1 else None
+    # 1bis : home texte unique + corroboration contact (cf. docstring).
+    if len(home_text) == 1 and home_text[0] in contact_text:
+        return home_text[0]
+    for tier in (tier2, tier3, home_text):
         if tier:
             return tier[0] if len(tier) == 1 else None
     return None
