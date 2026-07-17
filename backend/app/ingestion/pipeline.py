@@ -135,6 +135,29 @@ SOFT_DEDUP_SOURCES = {"annuaire", "sirene_stock", "places"}
 MASS_SOURCES = {"sirene_stock", "places"}
 
 
+def _connector_key(source: str, source_ref: str) -> str:
+    """Clé de connecteur : granularité PLUS FINE que `source` pour distinguer
+    « même provenance technique » de « même connecteur ». Les connecteurs
+    annuaire (CFAI/UFDI/annuaire_decoration/mon_architecte_interieur/
+    monacomania) partagent TOUS `source='annuaire'` — `source` seul ne permet
+    donc pas de savoir si deux fiches viennent du MÊME annuaire ou de deux
+    annuaires DIFFÉRENTS. Chaque connecteur annuaire préfixe son `source_ref`
+    (`cfai:<id>`, `ufdi:<slug>`, ...) : c'est ce préfixe qui fait foi.
+
+    Pour toutes les autres sources (sirene_stock, places, instagram, bodacc,
+    sirene, jeunes_studios...), il n'y a qu'un connecteur par source -> la clé
+    EST la source (comportement historique inchangé, bit-à-bit).
+
+    Utilisée partout où l'ancien filtre `Opportunity.source != cand.source`
+    servait de proxy pour « pas le même connecteur » (fusion douce nom+ville,
+    corroboration SIREN) : ce proxy était correct tant qu'une source ne
+    regroupait qu'un seul connecteur, et devient un faux négatif pour
+    'annuaire' (finding revue F2 — CFAI×UFDI ne se dédupliquaient jamais)."""
+    if source == "annuaire" and source_ref and ":" in source_ref:
+        return source_ref.split(":", 1)[0]
+    return source
+
+
 @dataclass
 class IngestStats:
     source: str
@@ -832,15 +855,19 @@ def _corroborates(cand: LeadCandidate, opp: Opportunity) -> bool:
 def _build_dedup_index(session: Session, exclude_source: str) -> dict:
     """Index de dédup nom+ville préchargé UNE fois par run (perf, décision #11).
     `{(frozenset(name_tokens), frozenset(city_tokens)) -> [lignes légères]}` des
-    fiches architecte d'une AUTRE source qu'`exclude_source`. Évite le
+    fiches architecte d'un AUTRE connecteur qu'`exclude_source` (clé de
+    connecteur, cf. `_connector_key` — pas `source` brut : deux connecteurs
+    annuaire différents partagent `source='annuaire'`, F2). Évite le
     select(...).all() full-ORM + re-tokenisation PAR candidat de
     `_soft_dedup_architecte` (O(N×M) à l'échelle stock ~28k / places ~4k).
 
     SELECT LÉGER (colonnes de matching + corroboration seules, pas d'objets ORM
     pleins) : la fiche ORM complète n'est chargée (session.get) que sur un hit
-    corroboré, rare. Snapshot valide pour un run mono-source (les candidats
-    `exclude_source` ne se dédupliquent jamais entre eux -> l'index des AUTRES
-    sources n'a pas à voir les insertions du run)."""
+    corroboré, rare. Snapshot valide pour un run mono-connecteur (les candidats
+    du connecteur `exclude_source` ne se dédupliquent jamais entre eux -> l'index
+    des AUTRES connecteurs n'a pas à voir les insertions du run). `exclude_source`
+    est aujourd'hui toujours un connecteur à source unique (sirene_stock, places)
+    -> comportement bit-à-bit inchangé pour ces appelants."""
     from types import SimpleNamespace
     from .enrichment.siret_matcher import _tokens, _city_tokens
     index: dict = {}
@@ -848,13 +875,12 @@ def _build_dedup_index(session: Session, exclude_source: str) -> dict:
         select(
             Opportunity.id, Opportunity.establishment_name, Opportunity.city,
             Opportunity.website, Opportunity.address, Opportunity.phone,
-            Opportunity.decision_maker, Opportunity.source,
-        ).where(
-            Opportunity.population == "architecte",
-            Opportunity.source != exclude_source,
-        )
+            Opportunity.decision_maker, Opportunity.source, Opportunity.source_ref,
+        ).where(Opportunity.population == "architecte")
     ).all()
     for r in rows:
+        if _connector_key(r.source, r.source_ref) == exclude_source:
+            continue
         nt, ct = _tokens(r.establishment_name), _city_tokens(r.city)
         if not nt or not ct:
             continue
@@ -863,6 +889,7 @@ def _build_dedup_index(session: Session, exclude_source: str) -> dict:
                 id=r.id, establishment_name=r.establishment_name, city=r.city,
                 website=r.website, address=r.address, phone=r.phone,
                 decision_maker=r.decision_maker, source=r.source,
+                source_ref=r.source_ref,
             )
         )
     return index
@@ -872,16 +899,18 @@ def _soft_dedup_architecte(
     session: Session, cand: LeadCandidate, dedup_index: Optional[dict] = None,
 ) -> Optional[Opportunity]:
     """Fusion douce nom+ville pour la population architecte (A2, généralisée B).
-    Cherche une Opportunity architecte d'une AUTRE source, même nom normalisé ET
-    même ville normalisée. Le nom+ville est NÉCESSAIRE mais PAS SUFFISANT : il faut
-    AUSSI une corroboration (`_corroborates`) pour écarter l'homonyme fortuit.
-    Exactement 1 candidat corroboré -> la renvoie ; 0, >=2, ou aucune corroboration
-    -> None (jamais de faux merge : vide/2 fiches > mauvaise fusion). DB seule,
-    aucun réseau.
+    Cherche une Opportunity architecte d'un AUTRE CONNECTEUR (`_connector_key` —
+    PAS `source` brut : CFAI/UFDI/annuaire_decoration/... partagent tous
+    `source='annuaire'`, seul le préfixe de `source_ref` les distingue, F2),
+    même nom normalisé ET même ville normalisée. Le nom+ville est NÉCESSAIRE
+    mais PAS SUFFISANT : il faut AUSSI une corroboration (`_corroborates`) pour
+    écarter l'homonyme fortuit. Exactement 1 candidat corroboré -> la renvoie ;
+    0, >=2, ou aucune corroboration -> None (jamais de faux merge : vide/2
+    fiches > mauvaise fusion). DB seule, aucun réseau.
 
     `dedup_index` (préchargé par `_build_dedup_index`) : lookup O(1) au lieu du
-    scan full-table par candidat (run_stock/run_places). Absent (A2, tests
-    directs) -> repli sur le SELECT historique (comportement bit-à-bit)."""
+    scan full-table par candidat (run_stock/run_places). Absent (A2/annuaires,
+    tests directs) -> repli sur le SELECT historique (comportement bit-à-bit)."""
     from .enrichment.siret_matcher import _tokens, _city_tokens
     want_name = _tokens(cand.establishment_name)
     want_city = _city_tokens(cand.city)
@@ -892,14 +921,13 @@ def _soft_dedup_architecte(
         if len(hits) != 1 or not _corroborates(cand, hits[0]):
             return None
         return session.get(Opportunity, hits[0].id)  # ORM plein pour la fusion
+    cand_key = _connector_key(cand.source, cand.source_ref)
     rows = session.exec(
-        select(Opportunity).where(
-            Opportunity.population == "architecte",
-            Opportunity.source != cand.source,
-        )
+        select(Opportunity).where(Opportunity.population == "architecte")
     ).all()
     hits = [o for o in rows
-            if _tokens(o.establishment_name) == want_name
+            if _connector_key(o.source, o.source_ref) != cand_key
+            and _tokens(o.establishment_name) == want_name
             and _city_tokens(o.city) == want_city]
     if len(hits) != 1:
         return None
@@ -1098,14 +1126,21 @@ def _process_candidate(
     # source ne cree pas de doublon — il CORROBORE (registre x instagram =
     # quasi-certitude d'ouverture). La fiche d'origine est conservee, la
     # provenance entrante est journalisee en Signal.
+    # Filtre par CONNECTEUR (`_connector_key`, pas `source` brut) [F2] : deux
+    # connecteurs annuaire differents (CFAI/UFDI/...) partagent tous
+    # source='annuaire' — un `source != cand.source` les aurait exclus l'un de
+    # l'autre a tort, empechant toute corroboration SIREN entre eux.
     corroborated = None
     if existing is None and cand.siren:
-        corroborated = session.exec(
-            select(Opportunity).where(
-                Opportunity.siren == cand.siren,
-                Opportunity.source != cand.source,
-            )
-        ).first()
+        cand_key = _connector_key(cand.source, cand.source_ref)
+        siren_matches = session.exec(
+            select(Opportunity).where(Opportunity.siren == cand.siren)
+        ).all()
+        corroborated = next(
+            (o for o in siren_matches
+             if _connector_key(o.source, o.source_ref) != cand_key),
+            None,
+        )
 
     if (
         corroborated is not None

@@ -7,7 +7,8 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from app.ingestion.base import LeadCandidate
 from app.ingestion.enrichment.siret_matcher import MatchResult
 from app.ingestion.pipeline import (
-    IngestStats, _process_candidate, _soft_dedup_architecte, run_annuaires,
+    IngestStats, _connector_key, _process_candidate, _soft_dedup_architecte,
+    run_annuaires,
 )
 from app.models import Opportunity
 
@@ -274,3 +275,147 @@ def test_run_annuaires_cfai_update_fills_empty_phone_without_overwriting():
         s.commit()
         s.refresh(opp)
         assert opp.phone == "01 53 68 91 80"
+
+
+# --- F2 (revue adverse) : deux connecteurs annuaire DIFFÉRENTS partagent tous
+# `source='annuaire'` — seul le préfixe de `source_ref` (`cfai:`, `ufdi:`,
+# `annuairedecoration:`, ...) les distingue. Le filtre `source != cand.source`
+# excluait à tort TOUT le pool 'annuaire' de la fusion douce/corroboration
+# SIREN, empêchant deux annuaires de se dédupliquer entre eux (doublon garanti
+# pour un même prescripteur listé dans 2 annuaires). Fix : `_connector_key`.
+
+def test_connector_key_distinguishes_annuaire_connectors_by_source_ref_prefix():
+    # Deux annuaires -> deux clés différentes malgré `source='annuaire'` identique.
+    assert _connector_key("annuaire", "cfai:12") == "cfai"
+    assert _connector_key("annuaire", "annuairedecoration:9") == "annuairedecoration"
+    assert (_connector_key("annuaire", "cfai:12")
+            != _connector_key("annuaire", "ufdi:studio-lumen-1"))
+    # Même connecteur, fiches différentes -> même clé.
+    assert _connector_key("annuaire", "cfai:12") == _connector_key("annuaire", "cfai:99")
+    # Sources non-annuaire : la clé EST la source (comportement historique).
+    assert _connector_key("sirene_stock", "11111111100011") == "sirene_stock"
+    assert _connector_key("places", "places:gp9") == "places"
+    assert _connector_key("instagram", "atelier_nord_insta") == "instagram"
+
+
+def test_two_different_annuaire_connectors_merge_with_phone_corroboration():
+    """(a) même personne dans CFAI puis annuaire_decoration (nom+ville identiques
+    + corroboration téléphone) -> 1 SEULE fiche, ENRICHIE par le second passage."""
+    with Session(_engine()) as s:
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:501",
+            establishment_name="Studio Meridien", city="Toulouse", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            raw={"phone": "05 61 00 11 22"}),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+        opp = s.exec(select(Opportunity)).first()
+        assert opp.phone == "05 61 00 11 22"
+
+        stats = IngestStats(source="annuaire")
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="annuairedecoration:77",
+            establishment_name="Studio Meridien", city="Toulouse", address="",
+            website="https://studio-meridien.fr",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            raw={"phone": "05.61.00.11.22"}),  # même tél, format différent
+            stats, set(), None)
+        s.commit()
+
+        rows = s.exec(select(Opportunity).where(
+            Opportunity.population == "architecte")).all()
+        assert len(rows) == 1
+        assert rows[0].source_ref == "cfai:501"  # fiche d'origine conservée
+        assert rows[0].website == "https://studio-meridien.fr"  # comblé
+        assert stats.updated == 1
+        assert stats.soft_merges == [("annuairedecoration:77", "cfai:501")]
+
+
+def test_two_different_annuaire_connectors_homonym_without_corroboration_not_merged():
+    """(b) homonyme même ville, SANS aucune corroboration (tél/domaine/adresse/
+    dirigeant) -> PAS de fusion, 2 fiches distinctes (vide > faux)."""
+    with Session(_engine()) as s:
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:502",
+            establishment_name="Atelier Central", city="Nice", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte"),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+
+        stats = IngestStats(source="annuaire")
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="monacomania:88",
+            establishment_name="Atelier Central", city="Nice", address="",
+            website="https://un-autre-atelier-central.fr",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte"),
+            stats, set(), None)
+        s.commit()
+
+        rows = s.exec(select(Opportunity).where(
+            Opportunity.population == "architecte")).all()
+        assert len(rows) == 2 and stats.soft_merges == []
+
+
+def test_cfai_recrawl_same_source_ref_updates_not_duplicate_even_with_siren():
+    """(c) re-crawl CFAI d'une fiche déjà en base (même source_ref, donc même
+    connecteur) -> chemin `existing` (update), jamais la fusion douce ni la
+    corroboration SIREN -> aucun doublon, aucun soft_merge enregistré."""
+    with Session(_engine()) as s:
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:503",
+            establishment_name="Cabinet Delta", city="Rennes", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            siren="333333333", siret="33333333300011"),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+
+        stats = IngestStats(source="annuaire")
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:503",  # même connecteur, même fiche
+            establishment_name="Cabinet Delta", city="Rennes", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            siren="333333333", siret="33333333300011",
+            website="https://cabinet-delta.fr"),
+            stats, set(), None)
+        s.commit()
+
+        rows = s.exec(select(Opportunity).where(
+            Opportunity.population == "architecte")).all()
+        assert len(rows) == 1
+        assert rows[0].website == "https://cabinet-delta.fr"
+        assert stats.soft_merges == []
+
+
+def test_two_different_annuaire_connectors_merge_by_siren_corroboration():
+    """Corroboration SIREN (pas seulement la fusion douce nom+ville) doit aussi
+    fonctionner entre deux connecteurs annuaire distincts partageant `source=
+    'annuaire'` (même matcher SIREN, deux annuaires) -> 1 fiche, pas 2."""
+    with Session(_engine()) as s:
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="ufdi:studio-alpha",
+            establishment_name="Studio Alpha", city="Marseille", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            siren="444444444", siret="44444444400011"),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+
+        stats = IngestStats(source="annuaire")
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="monarchitecteinterieur:12",
+            establishment_name="Studio Alpha SARL", city="Marseille", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            siren="444444444", siret="44444444400011"),  # même SIREN
+            stats, set(), None)
+        s.commit()
+
+        rows = s.exec(select(Opportunity).where(
+            Opportunity.population == "architecte")).all()
+        assert len(rows) == 1 and stats.updated == 1
