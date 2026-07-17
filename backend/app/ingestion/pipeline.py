@@ -32,7 +32,10 @@ from .sirene_delta import SireneDeltaConnector
 from .jeunes_studios import JeunesStudiosConnector
 from .sirene_stock import SireneStockConnector
 from .places_sweep import PlacesArchiConnector
+from .annuaires.annuaire_decoration import AnnuaireDecorationConnector
 from .annuaires.cfai import CfaiConnector
+from .annuaires.mon_architecte_interieur import MonArchitecteInterieurConnector
+from .annuaires.monacomania import MonacomaniaConnector
 from .annuaires.ufdi import UfdiConnector
 from .enrichment.contact_enricher import ContactEnricher
 from .enrichment.naf_classifier import classify_naf
@@ -620,7 +623,13 @@ def _archi_hashtags() -> List[str]:
     return ARCHI_HASHTAGS
 
 
-ANNUAIRE_CONNECTORS = {"cfai": CfaiConnector, "ufdi": UfdiConnector}
+ANNUAIRE_CONNECTORS = {
+    "cfai": CfaiConnector,
+    "ufdi": UfdiConnector,
+    "annuaire_decoration": AnnuaireDecorationConnector,
+    "mon_architecte_interieur": MonArchitecteInterieurConnector,
+    "monacomania": MonacomaniaConnector,
+}
 
 
 def run_annuaires(

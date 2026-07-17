@@ -61,7 +61,9 @@ def main() -> None:
         ],
     )
     parser.add_argument("--source", default="bodacc", help="Connecteur à utiliser.")
-    parser.add_argument("--annuaire", default="cfai", choices=["cfai", "ufdi"],
+    parser.add_argument("--annuaire", default="cfai",
+                        choices=["cfai", "ufdi", "annuaire_decoration",
+                                 "mon_architecte_interieur", "monacomania"],
                         help="Annuaire à crawler (mode annuaires).")
     parser.add_argument("--since", type=int, default=90, help="Fenêtre en jours (window/backfill).")
     parser.add_argument("--limit", type=int, default=100, help="Nombre max d'annonces.")
