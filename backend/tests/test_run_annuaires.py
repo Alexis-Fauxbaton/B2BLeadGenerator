@@ -264,7 +264,8 @@ def test_run_annuaires_cfai_update_fills_empty_phone_without_overwriting():
         assert opp.phone == "01 53 68 91 80"
 
         # 3e passage : un téléphone DIFFÉRENT (ex. erreur de source amont) ne doit
-        # JAMAIS écraser le téléphone déjà en base.
+        # JAMAIS écraser le téléphone déjà en base -- il devient CANDIDAT « à
+        # tester » au lieu d'être jeté (cf. docs/plans/2026-07-17-multi-numeros-design.md).
         _process_candidate(s, LeadCandidate(
             source="annuaire", source_ref="cfai:12",
             establishment_name="SARL METROPOLE CONCEPT", city="Paris", address="",
@@ -275,6 +276,22 @@ def test_run_annuaires_cfai_update_fills_empty_phone_without_overwriting():
         s.commit()
         s.refresh(opp)
         assert opp.phone == "01 53 68 91 80"
+        assert [c["number"] for c in opp.phone_candidates] == ["01 99 99 99 99"]
+        assert opp.phone_candidates[0]["source"] == "annuaire"
+
+        # 4e passage : le MÊME téléphone déjà en base (autre format) ne crée
+        # PAS de doublon candidat (no-op, `add_candidate` idempotent).
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:12",
+            establishment_name="SARL METROPOLE CONCEPT", city="Paris", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            raw={"phone": "01.53.68.91.80"}),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+        s.refresh(opp)
+        assert opp.phone == "01 53 68 91 80"
+        assert [c["number"] for c in opp.phone_candidates] == ["01 99 99 99 99"]
 
 
 # --- F2 (revue adverse) : deux connecteurs annuaire DIFFÉRENTS partagent tous
@@ -331,6 +348,44 @@ def test_two_different_annuaire_connectors_merge_with_phone_corroboration():
         assert rows[0].website == "https://studio-meridien.fr"  # comblé
         assert stats.updated == 1
         assert stats.soft_merges == [("annuairedecoration:77", "cfai:501")]
+        # Même numéro (format différent) -> pas de candidat créé (no-op).
+        assert rows[0].phone_candidates == []
+
+
+def test_soft_merge_annuaire_phone_diff_becomes_candidate():
+    """Fusion douce (nom+ville + corroboration DOMAINE de site, pas
+    téléphone) : si le 2e connecteur apporte un téléphone DIFFÉRENT du
+    principal déjà en base, il devient candidat « à tester » au lieu d'être
+    jeté (cf. docs/plans/2026-07-17-multi-numeros-design.md §2.3)."""
+    with Session(_engine()) as s:
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:601",
+            establishment_name="Studio Iris", city="Nantes", address="",
+            website="https://studio-iris.fr",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            raw={"phone": "02 40 00 00 01"}),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+        opp = s.exec(select(Opportunity)).first()
+        assert opp.phone == "02 40 00 00 01"
+
+        stats = IngestStats(source="annuaire")
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="ufdi:studio-iris",
+            establishment_name="Studio Iris", city="Nantes", address="",
+            website="https://studio-iris.fr",  # même domaine -> corrobore
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 11),
+            establishment_type="architecte d'intérieur", population="architecte",
+            raw={"phone": "02 40 00 00 02"}),  # DIFFÉRENT du principal
+            stats, set(), None)
+        s.commit()
+        s.refresh(opp)
+
+        assert stats.updated == 1
+        assert opp.phone == "02 40 00 00 01"           # principal INCHANGÉ
+        assert [c["number"] for c in opp.phone_candidates] == ["02 40 00 00 02"]
+        assert opp.phone_candidates[0]["source"] == "annuaire"
 
 
 def test_two_different_annuaire_connectors_homonym_without_corroboration_not_merged():

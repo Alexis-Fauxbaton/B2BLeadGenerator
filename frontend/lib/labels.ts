@@ -357,6 +357,24 @@ export function recommendedToActivityType(
   return "appel";
 }
 
+// --- Numéros candidats (§5.1) — provenance d'un numéro « à tester » ---------
+// Miroir FR de PHONE_CANDIDATE_SOURCES (services/phone_candidates.py).
+export const PHONE_CANDIDATE_SOURCE_LABELS: Record<string, string> = {
+  site: "Site",
+  annuaire: "Annuaire",
+  places: "Google Places",
+  cross_fill: "Cross-fill",
+  ex_principal: "Ancien principal",
+};
+
+export const PHONE_CANDIDATE_SOURCE_STYLES: Record<string, string> = {
+  site: "bg-sky-50 text-sky-700 ring-sky-200",
+  annuaire: "bg-violet-50 text-violet-700 ring-violet-200",
+  places: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  cross_fill: "bg-amber-50 text-amber-700 ring-amber-200",
+  ex_principal: "bg-slate-100 text-slate-500 ring-slate-200",
+};
+
 // Population du lead (A1) : CHR (défaut) ou architectes d'intérieur (prescripteurs).
 export const POPULATION_LABELS: Record<string, string> = {
   chr: "CHR",

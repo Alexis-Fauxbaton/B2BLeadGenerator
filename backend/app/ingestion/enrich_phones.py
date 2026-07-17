@@ -38,11 +38,12 @@ from sqlmodel import Session, select
 from ..database import engine, init_db
 from ..models import Opportunity
 from ..services.contact_quality import establishment_confidence
+from ..services.phone_candidates import add_candidate
 from .enrichment import siret_matcher
 from .enrichment.contact_enricher import ContactEnricher
 from .enrichment.own_site import own_site as _own_site
 from .enrichment.sirene import SireneEnricher
-from .enrichment.website_scraper import normalize_fr_phone, scrape_phone
+from .enrichment.website_scraper import normalize_fr_phone, scrape_phones
 
 
 @dataclass
@@ -141,28 +142,44 @@ def _enrich_one_phone(
     enricher: ContactEnricher,
     sirene: SireneEnricher,
     stats: PhoneStats,
-    site_pending: Optional[List[Tuple[Opportunity, str]]] = None,
+    site_pending: Optional[List[Tuple[Opportunity, Optional[str], List[str], Optional[str]]]] = None,
 ) -> None:
     """Waterfall pour une fiche. Ne remplit ``phone`` que s'il était vide.
 
-    Si ``site_pending`` est fourni, un numéro issu du SITE du lead n'est pas
-    écrit tout de suite : il est mis en attente pour la garde inter-domaines de
-    fin de run (cf. :func:`cross_domain_junk`) — un numéro de démo de template
-    partagé par plusieurs sites ne doit jamais être écrit comme celui du lead."""
+    Si ``site_pending`` est fourni, un PRINCIPAL issu du SITE n'est pas écrit
+    tout de suite : il est mis en attente pour la garde inter-domaines de fin
+    de run (cf. :func:`cross_domain_junk`) — un numéro de démo de template
+    partagé par plusieurs sites ne doit jamais être écrit comme celui du lead.
+    Ses numéros CANDIDATS (site restants, hors le principal) voyagent avec lui
+    dans la même entrée de la file d'attente — la garde inter-domaines
+    s'applique aussi à eux (numéro de démo partagé -> jamais candidat non
+    plus). Quand le site est AMBIGU (aucun principal décidé), ses candidats
+    sont pushés immédiatement : le waterfall continue dans le même appel (pas
+    de fenêtre de run à attendre)."""
     phone: Optional[str] = None
     basis: Optional[str] = None
+    site_candidates: List[str] = []
+    site_url: Optional[str] = None
 
     # 1. Site du lead (confiance haute) — uniquement si VRAI site propre.
     site = _own_site(opp.website)
     if site:
-        phone = scrape_phone(site)
+        result = scrape_phones(site)
+        phone = result["principal"]
+        site_candidates = result["candidates"]
+        site_url = result["url"]
         if phone:
             basis = "site"
 
     if phone and basis == "site" and site_pending is not None:
         opp.contact_enriched_at = datetime.utcnow()
-        site_pending.append((opp, phone))
+        site_pending.append((opp, phone, site_candidates, site_url))
         return
+
+    # Site sans principal décidé (pas de site, ou ambiguïté) : les numéros
+    # candidats vus sont ajoutés tout de suite (au lieu d'être perdus).
+    for number in site_candidates:
+        add_candidate(opp, number, "site", proof_url=site_url)
 
     # 2. Google Places / OSM (verrous d'identité réutilisés).
     if not phone:
@@ -204,6 +221,41 @@ def _phone_targets(session: Session, population: str, limit: int, sites_only: bo
     return session.exec(query).all()[:limit]
 
 
+def _flush_site_pending(
+    session: Session,
+    site_pending: List[Tuple[Opportunity, Optional[str], List[str], Optional[str]]],
+    stats: PhoneStats,
+) -> None:
+    """Écrit en fin de run les numéros « site » mis en attente (principal ET
+    candidats), une fois passés la garde inter-domaines (VIDE > FAUX) : un
+    numéro de démo de template partagé par plusieurs sites ne doit jamais
+    devenir ni le principal ni un candidat. Commit par fiche, fail-soft.
+    Extrait de :func:`run_phone_enrich` pour être testable sans toucher la
+    base réelle (pas d'``init_db``)."""
+    junk = cross_domain_junk(
+        [(o.id, p, _site_domain(o.website)) for o, p, _c, _u in site_pending]
+    )
+    for opp, phone, candidates, url in site_pending:
+        try:
+            if phone in junk:
+                stats.junk_cross_domain += 1
+                stats.none += 1
+            else:
+                if not opp.phone:
+                    opp.phone = phone
+                    opp.contact_confidence = _confidence_for("site")
+                    stats.with_phone += 1
+                    stats.high_conf += 1
+                for number in candidates:
+                    if number not in junk:
+                        add_candidate(opp, number, "site", proof_url=url)
+            session.add(opp)
+            session.commit()
+        except Exception:
+            stats.errors += 1
+            session.rollback()
+
+
 def run_phone_enrich(
     population: str = "architecte",
     limit: int = 500,
@@ -219,7 +271,7 @@ def run_phone_enrich(
     enricher = ContactEnricher()
     sirene = SireneEnricher()
 
-    site_pending: List[Tuple[Opportunity, str]] = []
+    site_pending: List[Tuple[Opportunity, Optional[str], List[str], Optional[str]]] = []
     try:
         for opp in _phone_targets(session, population, limit, sites_only):
             stats.scanned += 1
@@ -231,26 +283,7 @@ def run_phone_enrich(
                 stats.errors += 1
                 session.rollback()
 
-        # Garde inter-domaines : les numéros « site » ne sont écrits qu'en fin
-        # de run, une fois vérifiés uniques à leur domaine (VIDE > FAUX).
-        junk = cross_domain_junk(
-            [(o.id, p, _site_domain(o.website)) for o, p in site_pending]
-        )
-        for opp, phone in site_pending:
-            try:
-                if phone in junk:
-                    stats.junk_cross_domain += 1
-                    stats.none += 1
-                elif not opp.phone:
-                    opp.phone = phone
-                    opp.contact_confidence = _confidence_for("site")
-                    stats.with_phone += 1
-                    stats.high_conf += 1
-                session.add(opp)
-                session.commit()
-            except Exception:
-                stats.errors += 1
-                session.rollback()
+        _flush_site_pending(session, site_pending, stats)
     finally:
         if own_session:
             session.close()

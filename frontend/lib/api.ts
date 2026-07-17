@@ -172,11 +172,22 @@ export const api = {
       issue?: string;
       raison?: string;
       detail?: string[];
+      // Contact effectivement tenté (numéro/email/handle) au moment du geste —
+      // cf. docs/plans/2026-07-17-multi-numeros-design.md §3.
+      contact_used?: string;
     }
   ) =>
     request<ContactActivity>(`/api/opportunities/${id}/activities`, {
       method: "POST",
       body: JSON.stringify(body),
+    }),
+
+  // Promotion MANUELLE d'un numéro candidat en principal (§4 du design) —
+  // trace une activité `note` auto côté backend. Renvoie la fiche à jour.
+  promotePhone: (id: number, number: string) =>
+    request<OpportunityRead>(`/api/opportunities/${id}/phones/promote`, {
+      method: "POST",
+      body: JSON.stringify({ number }),
     }),
 
   // Enrichit une qualification déjà postée (N3 : detail/note) SANS créer de

@@ -85,6 +85,7 @@ def get_activity_journal(
                 type=act.type,
                 note=act.note,
                 author=act.author,
+                contact_used=act.contact_used,
                 created_at=act.created_at,
             )
         )

@@ -185,6 +185,7 @@ export default function OpportunitiesPage() {
     () =>
       ({
         score: "Score",
+        created_at: "Ajout récent",
         detection_date: "Date de détection",
         city: "Ville",
         status: "Statut",
@@ -275,6 +276,8 @@ export default function OpportunitiesPage() {
               <option value="instagram">Instagram</option>
               <option value="annuaire">Annuaire</option>
               <option value="jeunes_studios">Jeunes studios</option>
+              <option value="sirene_stock">Stock Sirene</option>
+              <option value="places">Google Places</option>
             </select>
 
             <select className={SELECT_CLS} value={filters.population ?? ""} onChange={(e) => set({ population: e.target.value })}>
@@ -314,6 +317,7 @@ export default function OpportunitiesPage() {
             <div className="flex items-center gap-2">
               <select className={`${SELECT_CLS} flex-1`} value={filters.sort_by ?? "score"} onChange={(e) => set({ sort_by: e.target.value })}>
                 <option value="score">Tri : Score</option>
+                <option value="created_at">Tri : Ajout récent</option>
                 <option value="detection_date">Tri : Détection</option>
                 <option value="city">Tri : Ville</option>
                 <option value="status">Tri : Statut</option>

@@ -23,6 +23,7 @@ from ..services.contact_quality import (
     establishment_confidence,
     normalize_email,
 )
+from ..services.phone_candidates import add_candidate
 from ..services.scoring import compute_score
 from ..services.segment import classify_segment
 from .base import Connector, LeadCandidate
@@ -989,6 +990,12 @@ def _merge_corroboration(session: Session, opp: Opportunity, cand: LeadCandidate
     opp.dirigeants = opp.dirigeants or cand.dirigeants
     opp.proof_text = opp.proof_text or cand.proof_text
     opp.proof_url = opp.proof_url or cand.proof_url
+    # Téléphone de l'AUTRE source : cette fonction ne touche jamais `opp.phone`
+    # (VIDE > FAUX déjà géré en amont par l'appelant pour le principal) — mais
+    # ne le PERD plus non plus : un numéro différent devient candidat
+    # `cross_fill` (cf. docs/plans/2026-07-17-multi-numeros-design.md §2.3).
+    # No-op si absent ou déjà == principal (`add_candidate` idempotent).
+    add_candidate(opp, cand.raw.get("phone"), "cross_fill", proof_url=cand.proof_url)
     sigs = list(opp.secondary_signals or [])
     # Le tag "corroboré registre × instagram" n'a de sens que si Instagram est
     # l'une des deux sources ; une fusion BODACC×Sirene (deux registres) n'est
@@ -1204,9 +1211,18 @@ def _process_candidate(
             if already is not None:
                 return
             # Téléphone UFDI (data-numero) : sans ceci, il serait perdu dans le
-            # cas fusion (_merge_corroboration ne touche pas au phone).
-            if cand.raw.get("phone"):
-                soft.phone = soft.phone or cand.raw["phone"]
+            # cas fusion (_merge_corroboration ne touche pas au phone). VIDE >
+            # FAUX pour LE PRINCIPAL (comble si vide, jamais écrasé) ; un
+            # numéro DIFFÉRENT du principal déjà là devient candidat « à
+            # tester » au lieu d'être jeté (cf. docs/plans/
+            # 2026-07-17-multi-numeros-design.md). `add_candidate` no-op si
+            # `_num` == principal (idempotent, appelable sans condition).
+            _num = cand.raw.get("phone")
+            if _num:
+                if not soft.phone:
+                    soft.phone = _num
+                else:
+                    add_candidate(soft, _num, cand.source, proof_url=cand.proof_url)
             _merge_corroboration(session, soft, cand)
             # Trace de la fusion réelle -> alimente le gate 0 faux merge (T5).
             stats.soft_merges.append((cand.source_ref, soft.source_ref))
@@ -1266,9 +1282,16 @@ def _process_candidate(
             existing.contact_confidence = "haute"
         # Téléphone exposé en clair dans raw (UFDI data-numero, Places
         # nationalPhoneNumber) — recopie GÉNÉRALISÉE à toute source (CHR/Insta ne
-        # posent pas raw['phone'] -> inchangés). Ne comble que si vide, jamais écrasé.
-        if cand.raw.get("phone"):
-            existing.phone = existing.phone or cand.raw["phone"]
+        # posent pas raw['phone'] -> inchangés). Ne comble que si vide, jamais
+        # écrasé (VIDE > FAUX pour LE PRINCIPAL) ; un numéro DIFFÉRENT devient
+        # candidat « à tester » au lieu d'être jeté (cf. docs/plans/
+        # 2026-07-17-multi-numeros-design.md §2.3).
+        _num = cand.raw.get("phone")
+        if _num:
+            if not existing.phone:
+                existing.phone = _num
+            else:
+                add_candidate(existing, _num, cand.source, proof_url=cand.proof_url)
         # Rafraîchir le label de cycle de vie (un opening peut devenir established
         # à un run ultérieur, ou l'inverse) — ne pas écraser par None (BODACC).
         existing.lifecycle_label = cand.lifecycle_label or existing.lifecycle_label

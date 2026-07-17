@@ -14,15 +14,18 @@ from ..schemas import (
     OpportunityList,
     OpportunityRead,
     OpportunityUpdate,
+    PhonePromote,
     StatusUpdate,
 )
 from ..security import get_current_user, require_admin_soft
+from ..services.phone_candidates import PromoteError, promote as _promote_phone
 
 router = APIRouter(prefix="/api/opportunities", tags=["opportunities"])
 
 SORT_FIELDS = {
     "score": Opportunity.opportunity_score,
     "detection_date": Opportunity.detection_date,
+    "created_at": Opportunity.created_at,
     "city": Opportunity.city,
     "status": Opportunity.status,
 }
@@ -222,6 +225,51 @@ def update_assignment(
     opp.assigned_to = payload.assigned_to
     opp.updated_at = datetime.utcnow()
     session.add(opp)
+    session.commit()
+    session.refresh(opp)
+    return opp
+
+
+@router.post("/{opportunity_id}/phones/promote", response_model=OpportunityRead)
+def promote_phone(
+    opportunity_id: int,
+    payload: PhonePromote,
+    session: Session = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user),
+):
+    """Promotion MANUELLE d'un numéro candidat en principal (geste du closer,
+    TRACÉ) — cf. docs/plans/2026-07-17-multi-numeros-design.md §4. L'ancien
+    principal (s'il existe) redescend en candidat `ex_principal`.
+    `contact_confidence` reste INCHANGÉ : ce champ décrit la méthode de
+    vérification de la provenance, pas une préférence humaine — la promotion
+    est tracée par l'activité `note` auto-générée, pas par ce champ.
+
+    `author` : la SESSION PRIME sur toute autre source (même politique que
+    `add_activity`) — un closer loggé ne peut jamais écrire au nom d'un autre."""
+    opp = session.get(Opportunity, opportunity_id)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunité introuvable")
+
+    old_principal = opp.phone
+    try:
+        promoted = _promote_phone(opp, payload.number)
+    except PromoteError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    opp.updated_at = datetime.utcnow()
+    session.add(opp)
+    author = current_user.name if isinstance(current_user, User) else None
+    session.add(
+        ContactActivity(
+            opportunity_id=opp.id,
+            type="note",
+            note=(
+                f"Numéro principal changé : {old_principal or 'aucun'} → "
+                f"{promoted['number']} (source {promoted['source']})"
+            ),
+            author=author,
+        )
+    )
     session.commit()
     session.refresh(opp)
     return opp

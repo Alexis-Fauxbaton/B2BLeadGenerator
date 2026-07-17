@@ -177,6 +177,7 @@ export default function ActivitePage() {
                     </p>
                     <p className="truncate text-xs text-slate-500">
                       {ACTIVITY_TYPE_LABELS[a.type] ?? a.type}
+                      {a.contact_used ? ` · ${a.contact_used}` : ""}
                       {a.note ? ` · ${a.note}` : ""}
                     </p>
                   </div>

@@ -2,6 +2,8 @@ import {
   CHANNEL_LABELS,
   LIFECYCLE_LABEL_LABELS,
   LIFECYCLE_LABEL_STYLES,
+  PHONE_CANDIDATE_SOURCE_LABELS,
+  PHONE_CANDIDATE_SOURCE_STYLES,
   POPULATION_LABELS,
   POPULATION_STYLES,
   QUALIF_ISSUE_DOT,
@@ -149,6 +151,30 @@ export function IssueBadge({
       <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
       {formatIssueChip(issue, raison)}
     </span>
+  );
+}
+
+// Provenance d'un numéro candidat (§5.1) : lien vers la preuve (site scrapé /
+// fiche annuaire) quand `proofUrl` est connue, simple badge sinon.
+export function PhoneSourceBadge({
+  source,
+  proofUrl,
+}: {
+  source: string;
+  proofUrl?: string | null;
+}) {
+  const cls = PHONE_CANDIDATE_SOURCE_STYLES[source] ?? "bg-slate-100 text-slate-500 ring-slate-200";
+  const label = PHONE_CANDIDATE_SOURCE_LABELS[source] ?? source;
+  const badge = (
+    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset ${cls}`}>
+      {label}
+    </span>
+  );
+  if (!proofUrl) return badge;
+  return (
+    <a href={proofUrl} target="_blank" rel="noreferrer" title="Voir la preuve" className="hover:opacity-80">
+      {badge}
+    </a>
   );
 }
 

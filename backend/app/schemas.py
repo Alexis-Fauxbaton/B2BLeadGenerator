@@ -99,6 +99,10 @@ class OpportunityList(OpportunityBase):
     # Contacts multiples (profil Insta d'un groupe : autres adresses/emails).
     extra_addresses: List[str] = []
     extra_emails: List[str] = []
+    # Numéros ALTERNATIFS « à tester » (le principal reste `phone`) — cf.
+    # docs/plans/2026-07-17-multi-numeros-design.md. [{number, source,
+    # proof_url?, first_seen}, ...], jamais un doublon du principal, cap 5.
+    phone_candidates: List[dict] = []
     created_at: datetime
     updated_at: datetime
 
@@ -109,7 +113,7 @@ class OpportunityList(OpportunityBase):
     # -> on coerce en liste vide pour ne pas casser la sérialisation.
     @field_validator(
         "secondary_signals", "probable_needs", "dirigeants",
-        "extra_addresses", "extra_emails", mode="before",
+        "extra_addresses", "extra_emails", "phone_candidates", mode="before",
     )
     @classmethod
     def _coerce_none_list(cls, v):
@@ -177,6 +181,15 @@ class StatusUpdate(BaseModel):
     next_follow_up_date: Optional[date] = None
 
 
+class PhonePromote(BaseModel):
+    """Corps du POST /api/opportunities/{id}/phones/promote : promeut un
+    numéro CANDIDAT existant en principal (geste manuel du closer, tracé —
+    cf. docs/plans/2026-07-17-multi-numeros-design.md §4). 422 si `number`
+    (une fois normalisé) n'est pas dans les candidats de la fiche."""
+
+    number: str
+
+
 class AssignmentUpdate(BaseModel):
     """Assignation d'un lead à un closer (nom de User), ou désassignation
     (`assigned_to=null`). Posé par le patron via PATCH
@@ -233,6 +246,9 @@ class ContactActivityRead(BaseModel):
     issue: Optional[str] = None
     raison: Optional[str] = None
     detail: List[str] = []
+    # Contact effectivement tenté (numéro/email/handle) au moment du geste —
+    # cf. docs/plans/2026-07-17-multi-numeros-design.md §3. Lecture seule ici.
+    contact_used: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -265,6 +281,10 @@ class ContactActivityCreate(BaseModel):
     issue: Optional[str] = None
     raison: Optional[str] = None
     detail: List[str] = []
+    # Contact EFFECTIVEMENT tenté au moment du geste (numéro affiché / email /
+    # handle DM) — auto-rempli côté UI, modifiable, valeur libre (pas d'enum).
+    # N'écrit JAMAIS sur la fiche (même invariant qu'issue/raison/detail).
+    contact_used: Optional[str] = None
 
 
 class ContactActivityDetailUpdate(BaseModel):
@@ -300,6 +320,10 @@ class ActivityJournalEntry(BaseModel):
     type: str
     note: Optional[str] = None
     author: Optional[str] = None
+    # Contact effectivement tenté au moment du geste — cf. ContactActivityRead.
+    # Sans lui, deux lignes « Appel · Mauvais numéro » identiques sont
+    # indiscernables pour le patron (revue produit 2026-07-17).
+    contact_used: Optional[str] = None
     created_at: datetime
 
 

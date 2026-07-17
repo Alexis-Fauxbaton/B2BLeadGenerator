@@ -13,6 +13,7 @@ from app.ingestion import enrich_phones as ep
 from app.ingestion.enrich_phones import (
     _confidence_for,
     _enrich_one_phone,
+    _flush_site_pending,
     _own_site,
     _phone_targets,
     PhoneStats,
@@ -20,6 +21,7 @@ from app.ingestion.enrich_phones import (
 from app.ingestion.enrichment.contact_enricher import ContactInfo
 from app.ingestion.enrichment.website_scraper import (
     choose_phone,
+    collect_phone_candidates,
     contact_page_urls,
     extract_phones_from_html,
     normalize_fr_phone,
@@ -140,9 +142,15 @@ def test_home_url_variants_covers_scheme_and_www():
     assert len(variants) == len(set(variants))
 
 
+def _stub_scrape_phones(principal, candidates=None):
+    """Doublure de `scrape_phones` : même forme de retour que la vraie
+    fonction, réutilisée par les tests du waterfall `_enrich_one_phone`."""
+    return lambda url: {"principal": principal, "candidates": candidates or [], "url": url}
+
+
 def test_enrich_one_phone_defers_site_phone_when_pending_list_given(monkeypatch):
     import app.ingestion.enrich_phones as ep
-    monkeypatch.setattr(ep, "scrape_phone", lambda url: "06 55 44 33 22")
+    monkeypatch.setattr(ep, "scrape_phones", _stub_scrape_phones("06 55 44 33 22"))
     monkeypatch.setattr(ep, "_own_site", lambda w: w)
     opp = Opportunity(establishment_name="X", establishment_type="architecte",
                       city="Paris", website="https://x-studio.fr")
@@ -151,9 +159,43 @@ def test_enrich_one_phone_defers_site_phone_when_pending_list_given(monkeypatch)
     ep._enrich_one_phone(opp, _FakeEnricher(ContactInfo(phone=None)), _FakeSirene(), stats, pending)
     # différé : rien d'écrit sur la fiche, numéro en attente de la garde
     assert opp.phone is None
-    assert pending == [(opp, "06 55 44 33 22")]
+    assert pending == [(opp, "06 55 44 33 22", [], "https://x-studio.fr")]
     assert stats.with_phone == 0 and stats.none == 0
     assert opp.contact_enriched_at is not None
+
+
+def test_enrich_one_phone_defers_site_candidates_with_principal(monkeypatch):
+    # Les candidats site voyagent DANS la même entrée que le principal différé
+    # -- eux aussi passeront la garde inter-domaines à la fin du run.
+    import app.ingestion.enrich_phones as ep
+    monkeypatch.setattr(
+        ep, "scrape_phones",
+        _stub_scrape_phones("06 55 44 33 22", ["01 00 00 00 01"]),
+    )
+    monkeypatch.setattr(ep, "_own_site", lambda w: w)
+    opp = Opportunity(establishment_name="X", establishment_type="architecte",
+                      city="Paris", website="https://x-studio.fr")
+    pending = []
+    ep._enrich_one_phone(opp, _FakeEnricher(ContactInfo(phone=None)), _FakeSirene(), PhoneStats(), pending)
+    assert opp.phone_candidates == []  # différé, pas encore poussé
+    assert pending == [(opp, "06 55 44 33 22", ["01 00 00 00 01"], "https://x-studio.fr")]
+
+
+def test_enrich_one_phone_pushes_ambiguous_site_candidates_immediately(monkeypatch):
+    # Site AMBIGU (aucun principal décidé) : les numéros restants deviennent
+    # candidats tout de suite (au lieu d'être perdus, cf. design §2.1).
+    import app.ingestion.enrich_phones as ep
+    monkeypatch.setattr(
+        ep, "scrape_phones",
+        _stub_scrape_phones(None, ["01 00 00 00 01", "01 00 00 00 02"]),
+    )
+    monkeypatch.setattr(ep, "_own_site", lambda w: w)
+    opp = Opportunity(establishment_name="X", establishment_type="architecte",
+                      city="Paris", website="https://x-studio.fr")
+    ep._enrich_one_phone(opp, _FakeEnricher(ContactInfo(phone=None)), _FakeSirene(), PhoneStats())
+    numbers = {c["number"] for c in opp.phone_candidates}
+    assert numbers == {"01 00 00 00 01", "01 00 00 00 02"}
+    assert all(c["source"] == "site" for c in opp.phone_candidates)
 
 
 def test_extract_international_zero_convention():
@@ -325,6 +367,95 @@ def test_choose_single_text_on_contact_retained_when_no_tel():
     assert choose_phone(pages) == "05 56 12 34 56"
 
 
+# --- Candidats site (collect_phone_candidates) -----------------------------------
+
+
+def test_collect_phone_candidates_excludes_chosen_principal():
+    # Cas réel fiche 6783 (design) : le site expose un 2e numéro sur la page
+    # contact -> il devient candidat, PRIVÉ du principal retenu par choose_phone.
+    pages = [
+        {"is_contact": False, "tel": ["01 23 45 67 89"], "text": []},
+        {"is_contact": True, "tel": [], "text": ["06 11 22 33 44"]},
+    ]
+    assert choose_phone(pages) == "01 23 45 67 89"
+    assert collect_phone_candidates(pages) == ["06 11 22 33 44"]
+
+
+def test_collect_phone_candidates_empty_when_site_has_one_number():
+    pages = [{"is_contact": False, "tel": ["01 23 45 67 89"], "text": []}]
+    assert collect_phone_candidates(pages) == []
+
+
+def test_collect_phone_candidates_returns_all_when_ambiguous():
+    # choose_phone n'a rien décidé (ambigu) -> AUCUN numéro n'est écarté, tous
+    # deviennent candidats (au lieu d'être perdus, cf. design §2.1).
+    pages = [{"is_contact": True, "tel": ["01 23 45 67 89", "06 11 22 33 44"], "text": []}]
+    assert choose_phone(pages) is None
+    assert collect_phone_candidates(pages) == ["01 23 45 67 89", "06 11 22 33 44"]
+
+
+def test_collect_phone_candidates_orders_tel_home_then_contact_then_text():
+    pages = [
+        {"is_contact": False, "tel": ["01 00 00 00 01"], "text": ["01 00 00 00 04"]},
+        {"is_contact": True, "tel": ["01 00 00 00 02"], "text": ["01 00 00 00 03"]},
+    ]
+    # tel: home (choisi -> exclu), puis tel: contact, puis texte home, puis contact.
+    assert choose_phone(pages) == "01 00 00 00 01"
+    assert collect_phone_candidates(pages) == [
+        "01 00 00 00 02", "01 00 00 00 04", "01 00 00 00 03",
+    ]
+
+
+def test_collect_phone_candidates_dedupes_repeated_number():
+    pages = [
+        {"is_contact": False, "tel": ["01 23 45 67 89"], "text": ["06 11 22 33 44"]},
+        {"is_contact": True, "tel": [], "text": ["06 11 22 33 44"]},
+    ]
+    assert collect_phone_candidates(pages) == ["06 11 22 33 44"]
+
+
+def test_collect_phone_candidates_no_pages_is_empty():
+    assert collect_phone_candidates([]) == []
+
+
+# --- scrape_phones (fetch unique, principal + candidats) -------------------------
+
+
+def test_scrape_phones_shares_one_fetch_with_principal_and_candidates(monkeypatch):
+    from app.ingestion.enrichment import website_scraper as ws
+
+    calls = {"n": 0}
+
+    def _fake_fetch_home(url, timeout):
+        calls["n"] += 1
+        return (
+            '<a href="tel:+33123456789">appelez</a> '
+            '<p>06 11 22 33 44</p>',
+            url,
+        )
+
+    monkeypatch.setattr(ws, "_fetch_home", _fake_fetch_home)
+    monkeypatch.setattr(ws, "contact_page_urls", lambda html, base: [])
+
+    result = ws.scrape_phones("https://exemple.fr")
+    assert calls["n"] == 1
+    assert result["principal"] == "01 23 45 67 89"
+    assert result["candidates"] == ["06 11 22 33 44"]
+    assert result["url"] == "https://exemple.fr"
+
+
+def test_scrape_phone_delegates_to_scrape_phones(monkeypatch):
+    from app.ingestion.enrichment import website_scraper as ws
+
+    monkeypatch.setattr(
+        ws, "scrape_phones",
+        lambda url, max_pages=3, timeout=10: {
+            "principal": "01 23 45 67 89", "candidates": ["06 11 22 33 44"], "url": url,
+        },
+    )
+    assert ws.scrape_phone("https://exemple.fr") == "01 23 45 67 89"
+
+
 # --- Découverte robuste de la page contact (contact_page_urls) -------------------
 
 
@@ -456,7 +587,7 @@ class _FakeSirene:
 
 
 def test_enrich_one_uses_site_first_high_confidence(monkeypatch):
-    monkeypatch.setattr(ep, "scrape_phone", lambda url: "01 23 45 67 89")
+    monkeypatch.setattr(ep, "scrape_phones", _stub_scrape_phones("01 23 45 67 89"))
     opp = _mk_opp(website="https://claiarchitecture.com/")
     stats = PhoneStats()
     _enrich_one_phone(opp, _FakeEnricher(ContactInfo(phone="09 99 99 99 99")),
@@ -469,7 +600,7 @@ def test_enrich_one_uses_site_first_high_confidence(monkeypatch):
 
 
 def test_enrich_one_falls_back_to_places_when_site_empty(monkeypatch):
-    monkeypatch.setattr(ep, "scrape_phone", lambda url: None)
+    monkeypatch.setattr(ep, "scrape_phones", _stub_scrape_phones(None))
     opp = _mk_opp(website="https://claiarchitecture.com/")
     stats = PhoneStats()
     info = ContactInfo(phone="01.23.45.67.89", match_basis="text")  # nom fort, non géo
@@ -480,7 +611,7 @@ def test_enrich_one_falls_back_to_places_when_site_empty(monkeypatch):
 
 
 def test_enrich_one_geo_match_is_high_confidence(monkeypatch):
-    monkeypatch.setattr(ep, "scrape_phone", lambda url: None)
+    monkeypatch.setattr(ep, "scrape_phones", _stub_scrape_phones(None))
     opp = _mk_opp(website=None)
     stats = PhoneStats()
     info = ContactInfo(phone="01 23 45 67 89", match_basis="geo")
@@ -489,7 +620,7 @@ def test_enrich_one_geo_match_is_high_confidence(monkeypatch):
 
 
 def test_enrich_one_no_phone_marks_tried(monkeypatch):
-    monkeypatch.setattr(ep, "scrape_phone", lambda url: None)
+    monkeypatch.setattr(ep, "scrape_phones", _stub_scrape_phones(None))
     opp = _mk_opp(website="https://claiarchitecture.com/")
     stats = PhoneStats()
     _enrich_one_phone(opp, _FakeEnricher(ContactInfo(phone=None)), _FakeSirene(), stats)
@@ -499,7 +630,7 @@ def test_enrich_one_no_phone_marks_tried(monkeypatch):
 
 
 def test_enrich_one_never_overwrites_existing_phone(monkeypatch):
-    monkeypatch.setattr(ep, "scrape_phone", lambda url: "01 23 45 67 89")
+    monkeypatch.setattr(ep, "scrape_phones", _stub_scrape_phones("01 23 45 67 89"))
     opp = _mk_opp(website="https://claiarchitecture.com/", phone="06 00 00 00 00")
     stats = PhoneStats()
     _enrich_one_phone(opp, _FakeEnricher(ContactInfo(phone=None)), _FakeSirene(), stats)
@@ -512,10 +643,55 @@ def test_enrich_one_skips_scrape_for_social_website(monkeypatch):
 
     def _spy(url):
         called["n"] += 1
-        return "01 23 45 67 89"
+        return {"principal": "01 23 45 67 89", "candidates": [], "url": url}
 
-    monkeypatch.setattr(ep, "scrape_phone", _spy)
+    monkeypatch.setattr(ep, "scrape_phones", _spy)
     opp = _mk_opp(website="http://www.tiktok.com/@x")
     _enrich_one_phone(opp, _FakeEnricher(ContactInfo(phone=None)), _FakeSirene(), PhoneStats())
     assert called["n"] == 0                        # on ne scrape pas un profil social
     assert opp.phone is None
+
+
+# --- _flush_site_pending (garde inter-domaines de fin de run, avec candidats) ----
+
+
+def test_flush_site_pending_filters_junk_number_from_candidates_too():
+    # Le numéro « 09 00 00 00 00 » est un junk cross-domaine (principal partagé
+    # par a/b) : il ne doit devenir NI principal NI candidat sur c (design §2.1).
+    with Session(_engine()) as s:
+        opp_a = _mk_opp(source_ref="a", website="https://a-studio.fr")
+        opp_b = _mk_opp(source_ref="b", website="https://b-studio.fr")
+        opp_c = _mk_opp(source_ref="c", website="https://c-studio.fr")
+        s.add(opp_a); s.add(opp_b); s.add(opp_c)
+        s.commit()
+
+        site_pending = [
+            (opp_a, "09 00 00 00 00", [], "https://a-studio.fr"),
+            (opp_b, "09 00 00 00 00", [], "https://b-studio.fr"),
+            (opp_c, "01 11 11 11 11", ["09 00 00 00 00", "02 22 22 22 22"], "https://c-studio.fr"),
+        ]
+        stats = PhoneStats()
+        _flush_site_pending(s, site_pending, stats)
+
+        assert opp_a.phone is None and opp_b.phone is None  # junk écarté
+        assert stats.junk_cross_domain == 2
+        assert opp_c.phone == "01 11 11 11 11"
+        numbers = [cand["number"] for cand in opp_c.phone_candidates]
+        assert numbers == ["02 22 22 22 22"]
+
+
+def test_flush_site_pending_writes_principal_and_candidates_when_no_junk():
+    with Session(_engine()) as s:
+        opp = _mk_opp(source_ref="a", website="https://a-studio.fr")
+        s.add(opp)
+        s.commit()
+
+        site_pending = [(opp, "01 23 45 67 89", ["06 11 22 33 44"], "https://a-studio.fr")]
+        stats = PhoneStats()
+        _flush_site_pending(s, site_pending, stats)
+
+        assert opp.phone == "01 23 45 67 89"
+        assert opp.contact_confidence == "haute"
+        assert stats.with_phone == 1 and stats.high_conf == 1
+        assert [c["number"] for c in opp.phone_candidates] == ["06 11 22 33 44"]
+        assert opp.phone_candidates[0]["proof_url"] == "https://a-studio.fr"

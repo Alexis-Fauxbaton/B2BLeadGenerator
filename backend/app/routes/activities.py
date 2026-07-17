@@ -132,6 +132,7 @@ def add_activity(
         issue=payload.issue,
         raison=payload.raison,
         detail=payload.detail,
+        contact_used=payload.contact_used,
     )
     session.add(activity)
     # Une qualification fait vivre la fiche comme n'importe quel geste — mais NE

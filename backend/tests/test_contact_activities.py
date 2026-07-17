@@ -107,6 +107,33 @@ def test_add_activity_accepts_optional_author():
         assert act2.author is None
 
 
+def test_add_activity_persists_and_rereads_contact_used():
+    """`contact_used` (chantier multi-numéros) : persisté et relu tel quel
+    (valeur libre, pas de validation d'enum). N'affecte JAMAIS le statut ni
+    aucun autre champ de la fiche (même invariant qu'issue/raison/detail)."""
+    with Session(_engine()) as s:
+        opp = _opp(s)
+        act = add_activity(
+            opp.id,
+            ContactActivityCreate(type="appel", contact_used="02 85 52 84 93"),
+            s,
+        )
+        assert act.contact_used == "02 85 52 84 93"
+        s.refresh(opp)
+        assert opp.status == "non_contacte"  # inchangé
+
+        # Relu depuis la DB (pas juste l'objet en mémoire).
+        reloaded = s.get(ContactActivity, act.id)
+        assert reloaded.contact_used == "02 85 52 84 93"
+
+
+def test_add_activity_contact_used_defaults_to_none():
+    with Session(_engine()) as s:
+        opp = _opp(s)
+        act = add_activity(opp.id, ContactActivityCreate(type="dm_insta"), s)
+        assert act.contact_used is None
+
+
 # --- Qualification cross-canal : issue (N1) / raison (N2) / detail (N3) -------
 
 
@@ -736,6 +763,78 @@ def test_migration_adds_qualification_columns_on_existing_table(tmp_path):
             row = s.exec(select(ContactActivity)).first()
             assert row.note == "Répondu"
             assert row.issue is None
+    finally:
+        db.engine.dispose()
+        db.engine, db.DATABASE_URL = orig_engine, orig_url
+
+
+def test_migration_adds_phone_candidates_column_on_existing_table(tmp_path):
+    """Base existante SANS `phone_candidates` (créée avant le chantier
+    multi-numéros) : la migration légère ajoute la colonne, les anciennes
+    lignes restent valides (NULL en base -> [] via le validateur de sérialisation,
+    cf. `OpportunityList._coerce_none_list`)."""
+    from sqlalchemy import create_engine as ce, inspect, text
+    import app.database as db
+
+    url = f"sqlite:///{tmp_path/'legacy_phone_candidates.db'}"
+    old = ce(url)
+    with old.begin() as conn:
+        conn.execute(text("CREATE TABLE opportunities (id INTEGER PRIMARY KEY, "
+                          "establishment_name VARCHAR, establishment_type VARCHAR, "
+                          "city VARCHAR, address VARCHAR, main_signal VARCHAR, "
+                          "detection_date DATE, estimated_timing VARCHAR, "
+                          "phone VARCHAR)"))
+        conn.execute(text(
+            "INSERT INTO opportunities (establishment_name, establishment_type, "
+            "city, address, main_signal, detection_date, estimated_timing, phone) "
+            "VALUES ('X', 'restaurant', 'Paris', '', 'reprise', '2026-01-01', 'J-60', "
+            "'01 23 45 67 89')"
+        ))
+    old.dispose()
+
+    orig_engine, orig_url = db.engine, db.DATABASE_URL
+    db.engine, db.DATABASE_URL = ce(url), url
+    try:
+        db._run_lightweight_migrations()
+        cols = {c["name"] for c in inspect(db.engine).get_columns("opportunities")}
+        assert "phone_candidates" in cols
+        # La ligne pré-existante reste lisible (pas de backfill -> NULL en base,
+        # coercé en [] côté schéma via `OpportunityList._coerce_none_list`).
+        with db.engine.begin() as conn:
+            row = conn.execute(text(
+                "SELECT phone, phone_candidates FROM opportunities"
+            )).first()
+            assert row[0] == "01 23 45 67 89"
+            assert row[1] is None
+    finally:
+        db.engine.dispose()
+        db.engine, db.DATABASE_URL = orig_engine, orig_url
+
+
+def test_migration_adds_contact_used_column_on_existing_table(tmp_path):
+    """Base existante avec `contact_activities` SANS `contact_used` : la
+    migration légère ajoute la colonne sans casser la table."""
+    from sqlalchemy import create_engine as ce, inspect, text
+    import app.database as db
+
+    url = f"sqlite:///{tmp_path/'legacy_contact_used.db'}"
+    old = ce(url)
+    with old.begin() as conn:
+        conn.execute(text("CREATE TABLE opportunities (id INTEGER PRIMARY KEY, "
+                          "establishment_name VARCHAR, establishment_type VARCHAR, "
+                          "city VARCHAR, address VARCHAR, main_signal VARCHAR, "
+                          "detection_date DATE, estimated_timing VARCHAR)"))
+        conn.execute(text("CREATE TABLE contact_activities (id INTEGER PRIMARY KEY, "
+                          "opportunity_id INTEGER, type VARCHAR, note VARCHAR, "
+                          "author VARCHAR, created_at DATETIME)"))
+    old.dispose()
+
+    orig_engine, orig_url = db.engine, db.DATABASE_URL
+    db.engine, db.DATABASE_URL = ce(url), url
+    try:
+        db._run_lightweight_migrations()
+        cols = {c["name"] for c in inspect(db.engine).get_columns("contact_activities")}
+        assert "contact_used" in cols
     finally:
         db.engine.dispose()
         db.engine, db.DATABASE_URL = orig_engine, orig_url

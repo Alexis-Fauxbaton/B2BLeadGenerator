@@ -296,6 +296,34 @@ def choose_phone(pages: List[Dict]) -> Optional[str]:
     return None
 
 
+def collect_phone_candidates(pages: List[Dict]) -> List[str]:
+    """Numéros normalisés DISTINCTS vus sur le site, PRIVÉS de celui que
+    :func:`choose_phone` a retenu (s'il a décidé). ``TEMPLATE_JUNK_PHONES``
+    déjà écartés en amont (:func:`extract_phones_from_html`). Ordre : tel:
+    home d'abord, puis tel: contact, puis texte (home puis contact) — sert à
+    peupler les candidats « site » quand le site expose plusieurs numéros
+    (ambiguïté = pile le cas où l'ancien code jetait tout). Extraction pure
+    (testable sans réseau)."""
+    chosen = choose_phone(pages)
+    ordered: List[str] = []
+    seen = set()
+
+    def _extend(nums: List[str]) -> None:
+        for n in nums:
+            if n not in seen:
+                seen.add(n)
+                ordered.append(n)
+
+    _extend([p for pg in pages if not pg.get("is_contact") for p in pg.get("tel", [])])
+    _extend([p for pg in pages if pg.get("is_contact") for p in pg.get("tel", [])])
+    _extend([p for pg in pages if not pg.get("is_contact") for p in pg.get("text", [])])
+    _extend([p for pg in pages if pg.get("is_contact") for p in pg.get("text", [])])
+
+    if chosen and chosen in seen:
+        ordered.remove(chosen)
+    return ordered
+
+
 def _fetch_html(url: str, timeout: int) -> Optional[str]:
     """Récupère le HTML d'une page (fail-soft : réseau, statut, type MIME).
     Renvoie None si la page n'est pas un ``text/html`` en 200."""
@@ -378,14 +406,16 @@ def contact_page_urls(home_html: str, base_url: str) -> List[str]:
     return urls
 
 
-def scrape_phone(url: str, max_pages: int = 3, timeout: int = 10) -> Optional[str]:
-    """Téléphone extrait du SITE d'un lead (home + pages contact/mentions), avec
-    découverte robuste des pages contact (cf. :func:`contact_page_urls`) et
-    désambiguïsation par palier (cf. :func:`choose_phone`). Fail-soft de bout en
-    bout (réseau, statut, type MIME) ; renvoie None si rien de sûr."""
+def scrape_phones(url: str, max_pages: int = 3, timeout: int = 10) -> Dict[str, object]:
+    """Comme :func:`scrape_phone`, mais renvoie AUSSI les numéros candidats
+    restants — UN SEUL fetch réseau partagé pour les deux (chantier numéros
+    candidats : pas de double requête). Renvoie ``{'principal': str|None,
+    'candidates': [str, ...], 'url': str}`` (``url`` = la home qui a répondu,
+    sert de ``proof_url`` aux candidats « site »). Fail-soft de bout en bout
+    (réseau, statut, type MIME)."""
     url = _normalize_url(url)
     if not url:
-        return None
+        return {"principal": None, "candidates": [], "url": url}
     collected: List[Dict] = []
     fetched = 0
 
@@ -405,7 +435,21 @@ def scrape_phone(url: str, max_pages: int = 3, timeout: int = 10) -> Optional[st
         # opérateur) -> palier moins sûr qu'une vraie page contact.
         is_legal = bool(re.search(r"mention|legal", page, re.I)) and not re.search(r"contact", page, re.I)
         collected.append({"is_contact": True, "is_legal": is_legal, **extract_phones_from_html(html)})
-    return choose_phone(collected)
+
+    return {
+        "principal": choose_phone(collected),
+        "candidates": collect_phone_candidates(collected),
+        "url": url,
+    }
+
+
+def scrape_phone(url: str, max_pages: int = 3, timeout: int = 10) -> Optional[str]:
+    """Téléphone extrait du SITE d'un lead (home + pages contact/mentions), avec
+    découverte robuste des pages contact (cf. :func:`contact_page_urls`) et
+    désambiguïsation par palier (cf. :func:`choose_phone`). Fail-soft de bout en
+    bout (réseau, statut, type MIME) ; renvoie None si rien de sûr. Délègue à
+    :func:`scrape_phones` (même fetch, principal seulement)."""
+    return scrape_phones(url, max_pages, timeout)["principal"]
 
 
 # --------------------------------------------------------------------------- #

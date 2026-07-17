@@ -201,6 +201,13 @@ class Opportunity(SQLModel, table=True):
     # Le principal est dans address/email ; ceci = les autres.
     extra_addresses: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     extra_emails: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    # Numéros ALTERNATIFS « à tester » (le principal reste `phone`). Chaque
+    # entrée : {number, source, proof_url?, first_seen}. Jamais un doublon
+    # (forme normalisée) du principal ; cap à 5 ; alimentés par les producteurs
+    # (site/annuaire/places/cross-fill) et réordonnés par la promotion
+    # manuelle (`services/phone_candidates.py`). AUCUN impact sur les listes
+    # d'appel (qui lisent `phone`). Cf. docs/plans/2026-07-17-multi-numeros-design.md.
+    phone_candidates: List[dict] = Field(default_factory=list, sa_column=Column(JSON))
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     # Nb d'avis Google Places (proxy de fraîcheur : 0-20 = fenêtre d'aménagement
@@ -323,6 +330,11 @@ class ContactActivity(SQLModel, table=True):
     issue: Optional[str] = None  # N1 : joint | pas_joint | ko
     raison: Optional[str] = None  # N2 : cf. QUALIF_RAISONS[(type, issue)]
     detail: List[str] = Field(default_factory=list, sa_column=Column(JSON))  # N3
+    # Contact EFFECTIVEMENT tenté au moment du geste (numéro affiché / email /
+    # handle DM). Auto-rempli à la saisie côté UI ; sert au monitoring (« quel
+    # numéro a été tenté ») et à la suggestion visuelle sur « mauvais numéro ».
+    # N'écrit JAMAIS sur la fiche (même invariant que issue/raison/detail).
+    contact_used: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     opportunity: Optional[Opportunity] = Relationship(back_populates="contact_activities")

@@ -20,9 +20,10 @@ import {
   Instagram,
   Globe,
   Star,
+  ArrowUp,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { ContactActivity, GeneratedMessages, OpportunityRead } from "@/lib/types";
+import type { ContactActivity, GeneratedMessages, OpportunityRead, PhoneCandidate } from "@/lib/types";
 import {
   CHANNEL_LABELS,
   STATUS_LABELS,
@@ -40,6 +41,7 @@ import {
   HeatBadge,
   FreshnessBadge,
   LifecycleBadge,
+  PhoneSourceBadge,
 } from "@/components/Badges";
 import { Loading, ErrorState } from "@/components/States";
 import CopyButton from "@/components/CopyButton";
@@ -260,7 +262,13 @@ export default function OpportunityDetailPage() {
             <QualificationBar
               opportunityId={opp.id}
               recommendedChannel={opp.recommended_channel}
+              phone={opp.phone}
+              phoneCandidates={opp.phone_candidates}
+              email={opp.email}
+              extraEmails={opp.extra_emails}
+              instagram={opp.instagram}
               onAdded={reloadActivities}
+              onMarkRdv={() => changeStatus("rdv")}
             />
             {activities === null ? (
               <p className="mt-3 text-sm text-slate-400">Chargement du journal…</p>
@@ -290,7 +298,13 @@ export default function OpportunityDetailPage() {
           </Section>
 
           <Section icon={Phone} title="Contact">
-            <ContactBlock opp={opp} />
+            <ContactBlock
+              opp={opp}
+              onPromoted={() => {
+                reload();
+                reloadActivities(); // la promotion trace une activité 'note'
+              }}
+            />
           </Section>
 
           <Section icon={User} title="Qualification">
@@ -392,14 +406,25 @@ function ConfidenceChip({ level }: { level: string | null }) {
   );
 }
 
-function ContactBlock({ opp }: { opp: OpportunityRead }) {
+function ContactBlock({
+  opp,
+  onPromoted,
+}: {
+  opp: OpportunityRead;
+  onPromoted: () => void;
+}) {
   const instaUrl = opp.instagram
     ? `https://instagram.com/${opp.instagram.replace(/^@/, "")}`
     : null;
   // Précision d'abord : on n'affiche les contacts établissement que si le match
   // est géo-confirmé (haute) ; sinon "à trouver".
   const estabShown = opp.contact_confidence === "haute";
-  const hasEstabValues = Boolean(opp.phone || opp.email || opp.website || opp.instagram);
+  // Le principal (phone) est TOUJOURS affiché s'il existe — cf.
+  // docs/plans/2026-07-17-multi-numeros-design.md §4.1/§5.1 : la promotion ne
+  // touche pas contact_confidence, donc un numéro fraîchement promu par un
+  // closer ne doit jamais rester masqué derrière l'ancienne garde.
+  const phoneShown = Boolean(opp.phone);
+  const hasOtherEstabValues = Boolean(opp.email || opp.website || opp.instagram);
   // Le handle d'un lead SOURCE Instagram est fiable (c'est par lui qu'on l'a
   // trouvé) -> toujours affiché, même sans match Places.
   const instaFromSource = Boolean(instaUrl && opp.source === "instagram");
@@ -410,6 +435,7 @@ function ContactBlock({ opp }: { opp: OpportunityRead }) {
   const followersBadge = followers ? `${followers} abonnés` : undefined;
   // Décideur : email affiché seulement si confiance haute.
   const decideurEmailShown = opp.decision_maker_confidence === "haute" && Boolean(opp.decision_maker_email);
+  const candidates = opp.phone_candidates ?? [];
 
   return (
     <div className="space-y-4">
@@ -425,34 +451,52 @@ function ContactBlock({ opp }: { opp: OpportunityRead }) {
             <ConfidenceChip level={opp.contact_confidence} />
           )}
         </div>
-        {estabShown && hasEstabValues ? (
-          <div className="space-y-2">
-            {opp.phone && (
-              <ContactRow icon={Phone} href={`tel:${opp.phone.replace(/\s/g, "")}`} text={opp.phone} action="Appeler" />
-            )}
-            {opp.email && (
-              <ContactRow icon={Mail} href={`mailto:${opp.email}`} text={opp.email} action="Écrire" />
-            )}
-            {instaUrl && (
-              <ContactRow icon={Instagram} href={instaUrl} text={`@${opp.instagram!.replace(/^@/, "")}`} action="Ouvrir" external badge={followersBadge} />
-            )}
-            {opp.website && (
-              <ContactRow icon={Globe} href={opp.website} text={opp.website.replace(/^https?:\/\//, "")} action="Visiter" external />
-            )}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {instaFromSource && (
-              <ContactRow icon={Instagram} href={instaUrl!} text={`@${opp.instagram!.replace(/^@/, "")}`} action="Ouvrir" external />
-            )}
-            <p className="text-sm text-slate-400">
-              {instaFromSource
-                ? "Tél / email / site à trouver."
-                : hasEstabValues
-                ? "Contact trouvé mais non vérifié — à confirmer."
-                : "Contact établissement à trouver."}
-            </p>
-          </div>
+        <div className="space-y-2">
+          {phoneShown && (
+            <ContactRow icon={Phone} href={`tel:${opp.phone!.replace(/\s/g, "")}`} text={opp.phone!} action="Appeler" />
+          )}
+          {estabShown && hasOtherEstabValues ? (
+            <>
+              {opp.email && (
+                <ContactRow icon={Mail} href={`mailto:${opp.email}`} text={opp.email} action="Écrire" />
+              )}
+              {instaUrl && (
+                <ContactRow icon={Instagram} href={instaUrl} text={`@${opp.instagram!.replace(/^@/, "")}`} action="Ouvrir" external badge={followersBadge} />
+              )}
+              {opp.website && (
+                <ContactRow icon={Globe} href={opp.website} text={opp.website.replace(/^https?:\/\//, "")} action="Visiter" external />
+              )}
+            </>
+          ) : (
+            <>
+              {!estabShown && instaFromSource && (
+                <ContactRow icon={Instagram} href={instaUrl!} text={`@${opp.instagram!.replace(/^@/, "")}`} action="Ouvrir" external />
+              )}
+              {!estabShown && hasOtherEstabValues && !instaFromSource && (
+                <p className="text-sm text-slate-400">Email / site trouvés mais non vérifiés — à confirmer.</p>
+              )}
+            </>
+          )}
+          {!phoneShown && candidates.length === 0 && !hasOtherEstabValues && !instaFromSource && (
+            <p className="text-sm text-slate-400">Contact établissement à trouver.</p>
+          )}
+          {!phoneShown && candidates.length === 0 && (hasOtherEstabValues || instaFromSource) && (
+            <p className="text-sm text-slate-400">Téléphone à trouver.</p>
+          )}
+          {!phoneShown && candidates.length > 0 && (
+            <p className="text-sm text-slate-400">Aucun numéro principal — teste un candidat ci-dessous.</p>
+          )}
+        </div>
+
+        {/* Numéros candidats « à tester » (§5.1) — additifs, jamais dans les
+            listes d'appel. Masqué quand vide (fiches sans candidat = affichage
+            strictement inchangé). */}
+        {candidates.length > 0 && (
+          <PhoneCandidatesList
+            opportunityId={opp.id}
+            candidates={candidates}
+            onPromoted={onPromoted}
+          />
         )}
 
         {/* Match Google / fraîcheur */}
@@ -487,6 +531,84 @@ function ContactBlock({ opp }: { opp: OpportunityRead }) {
         ) : (
           <p className="text-sm text-slate-400">Email du décideur à trouver.</p>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Liste discrète des numéros candidats « à tester » (§5.1) : provenance,
+// preuve, lien tel:, promotion manuelle avec confirmation légère (2 taps,
+// pas de modale — reste sobre). Style secondaire volontaire : ce sont des
+// pistes, pas le contact retenu.
+function PhoneCandidatesList({
+  opportunityId,
+  candidates,
+  onPromoted,
+}: {
+  opportunityId: number;
+  candidates: PhoneCandidate[];
+  onPromoted: () => void;
+}) {
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const promote = async (number: string) => {
+    setBusy(number);
+    try {
+      await api.promotePhone(opportunityId, number);
+      onPromoted();
+    } finally {
+      setBusy(null);
+      setConfirming(null);
+    }
+  };
+
+  return (
+    <div className="space-y-1.5 border-t border-slate-100 pt-2">
+      <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+        Autres numéros à tester
+      </span>
+      <div className="space-y-1.5">
+        {candidates.map((c) => (
+          <div
+            key={c.number}
+            className="flex items-center gap-2 rounded-lg border border-slate-100 px-2.5 py-1.5"
+          >
+            <PhoneSourceBadge source={c.source} proofUrl={c.proof_url} />
+            <a
+              href={`tel:${c.number.replace(/\s/g, "")}`}
+              className="min-w-0 flex-1 truncate text-sm text-slate-600 hover:text-brand-600"
+            >
+              {c.number}
+            </a>
+            {confirming === c.number ? (
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  onClick={() => promote(c.number)}
+                  disabled={busy === c.number}
+                  className="inline-flex items-center gap-1 rounded-md bg-brand-600 px-2 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-60"
+                >
+                  {busy === c.number ? <Loader2 size={12} className="animate-spin" /> : "Confirmer"}
+                </button>
+                <button
+                  onClick={() => setConfirming(null)}
+                  disabled={busy === c.number}
+                  className="rounded-md px-1.5 py-1 text-xs text-slate-400 hover:text-slate-600"
+                >
+                  Annuler
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirming(c.number)}
+                title="Promouvoir ce numéro en principal"
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-brand-300 hover:text-brand-600"
+              >
+                <ArrowUp size={12} /> Promouvoir
+              </button>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );

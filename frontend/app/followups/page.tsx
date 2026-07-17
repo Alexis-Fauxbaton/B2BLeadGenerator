@@ -273,7 +273,14 @@ function FollowUpRow({
         </p>
       </div>
       <div className="relative z-10 flex shrink-0 items-center gap-3 text-xs text-slate-400">
-        {taxonomy && <QuickQualifyPopover opportunityId={o.id} taxonomy={taxonomy} onAdded={onQualified} />}
+        {taxonomy && (
+          <QuickQualifyPopover
+            opportunityId={o.id}
+            taxonomy={taxonomy}
+            phone={o.phone}
+            onAdded={onQualified}
+          />
+        )}
         {o.phone && (
           <a
             href={`tel:${o.phone.replace(/\s/g, "")}`}

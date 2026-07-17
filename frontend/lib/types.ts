@@ -1,3 +1,14 @@
+// Numéro alternatif « à tester » (le principal reste `phone`) — cf.
+// docs/plans/2026-07-17-multi-numeros-design.md. Jamais un doublon du
+// principal, cap 5, alimenté par les producteurs et réordonné par la
+// promotion manuelle (POST /phones/promote).
+export interface PhoneCandidate {
+  number: string;
+  source: "site" | "annuaire" | "places" | "cross_fill" | "ex_principal";
+  proof_url?: string | null;
+  first_seen: string;
+}
+
 export interface OpportunityList {
   id: number;
   establishment_name: string;
@@ -27,7 +38,9 @@ export interface OpportunityList {
   siren: string | null;
   naf: string | null;
   phone: string | null;
+  phone_candidates: PhoneCandidate[];
   email: string | null;
+  extra_emails: string[];
   website: string | null;
   instagram: string | null;
   followers_count: number | null;
@@ -111,6 +124,9 @@ export interface ContactActivity {
   issue: "joint" | "pas_joint" | "ko" | null;
   raison: string | null;
   detail: string[];
+  // Contact EFFECTIVEMENT tenté au moment du geste (numéro/email/handle) —
+  // cf. docs/plans/2026-07-17-multi-numeros-design.md §3. Lecture seule ici.
+  contact_used: string | null;
   created_at: string;
 }
 
@@ -273,6 +289,9 @@ export interface ActivityJournalEntry {
   type: string;
   note: string | null;
   author: string | null;
+  // Contact effectivement tenté au moment du geste — sans lui, deux lignes
+  // « Appel · Mauvais numéro » sont indiscernables (revue produit 2026-07-17).
+  contact_used: string | null;
   created_at: string;
 }
 

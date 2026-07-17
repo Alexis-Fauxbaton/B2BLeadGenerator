@@ -73,6 +73,7 @@ def _run_lightweight_migrations() -> None:
         "closed_at": "ALTER TABLE opportunities ADD COLUMN closed_at DATETIME",
         "extra_addresses": "ALTER TABLE opportunities ADD COLUMN extra_addresses JSON",
         "extra_emails": "ALTER TABLE opportunities ADD COLUMN extra_emails JSON",
+        "phone_candidates": "ALTER TABLE opportunities ADD COLUMN phone_candidates JSON",
         "lifecycle_label": "ALTER TABLE opportunities ADD COLUMN lifecycle_label VARCHAR",
         "population": "ALTER TABLE opportunities ADD COLUMN population VARCHAR DEFAULT 'chr'",
         "next_action": "ALTER TABLE opportunities ADD COLUMN next_action VARCHAR",
@@ -96,6 +97,9 @@ def _run_lightweight_migrations() -> None:
             "issue": "ALTER TABLE contact_activities ADD COLUMN issue VARCHAR",
             "raison": "ALTER TABLE contact_activities ADD COLUMN raison VARCHAR",
             "detail": "ALTER TABLE contact_activities ADD COLUMN detail JSON",
+            # Contact effectivement tenté (numéro/email/handle) — cf. docs/plans/
+            # 2026-07-17-multi-numeros-design.md §3. NULL sur les lignes existantes.
+            "contact_used": "ALTER TABLE contact_activities ADD COLUMN contact_used VARCHAR",
         }
         with engine.begin() as conn:
             for column, ddl in ca_additions.items():
