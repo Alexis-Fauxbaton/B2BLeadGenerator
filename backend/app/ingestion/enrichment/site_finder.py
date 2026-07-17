@@ -65,6 +65,33 @@ JAMAIS mis en cache (comme ``error``). Sinon une panne anti-bot ponctuelle (les
 revisite (+2 mois), alors qu'on n'a jamais pu interroger un moteur. Garde
 supplémentaire : un ``no_candidate`` obtenu alors qu'AU MOINS une requête de la
 séquence a été muette n'est pas non plus mis en cache (``any_muted``).
+
+RAPPEL — devinette de domaine + requêtes citées + cache versionné (2026-07-17) :
+après des jours d'usage, DDG oppose des défis anti-bot et Bing renvoie du bruit
+pour les raisons sociales courtes -> trois vrais sites gatés étaient perdus EN
+AMONT du verrou. Trois correctifs, le verrou D'IDENTITÉ restant INCHANGÉ :
+
+  - **Devinette de domaine AVANT les moteurs** (:func:`_guess_domains`) : on
+    construit des domaines candidats depuis les tokens du nom normalisé et le nom
+    complet du dirigeant (concaténation « emdecoration », forme tiret
+    « em-decoration », dirigeant « catherinelassalle »/« catherine-lassalle »),
+    croisés avec ``.fr`` et ``.com`` (borne :data:`_MAX_GUESS_CANDIDATES`). Chaque
+    domaine VIVANT passe par le MÊME verrou gaté (:func:`_inspect_candidate` +
+    voies A+B/C, jamais affaibli) ; si la devinette aboutit on n'appelle AUCUN
+    moteur (zéro rate-limit, instantané). Un domaine deviné MORT est une simple
+    sonde (ni candidat, ni verdict).
+  - **Requêtes citées** (:func:`_build_queries`) : quand le nom a >= 2 tokens
+    significatifs, la 1re requête met le nom entre guillemets pour forcer la
+    correspondance exacte chez DDG/Bing ; les variantes non citées restent en
+    repli.
+  - **Cache de verdicts VERSIONNÉ** : la clé fiche intègre :data:`_ENGINE_VERSION`
+    (``sitefind:opp:v<N>:<id>`` ; repli ``sitefind:siren:v<N>:<siren>``). Les
+    anciennes clés NON versionnées sont IGNORÉES (jamais lues, pas besoin de les
+    supprimer) : tout changement futur du moteur invalide d'un coup les verdicts en
+    bumpant la constante — les ~830 ``locked_out`` de l'ère « recherche dégradée »
+    sont ainsi re-jugés. Le cache de RECHERCHE ``sitefind:q:`` reste, lui, non
+    versionné (il ne stocke que des résultats bruts de moteur, indépendants du
+    verrou).
 """
 from __future__ import annotations
 
@@ -90,6 +117,13 @@ from ..annuaires.http import HtmlFetch
 from .own_site import is_directory as _is_directory
 from .own_site import own_site
 from .website_scraper import HEADERS, _PAGE_CAP, contact_page_urls, home_url_variants
+
+# Version du MOTEUR de découverte : intégrée à la clé de cache des verdicts
+# fiche (``sitefind:opp:v<N>``/``sitefind:siren:v<N>``). La bumper INVALIDE d'un
+# coup tous les verdicts en cache (les anciennes clés, versionnées ou non, ne
+# sont plus jamais lues) — utilisé le 2026-07-17 pour re-juger les ~830
+# ``locked_out`` produits par la couche de recherche dégradée.
+_ENGINE_VERSION = 2
 
 # --------------------------------------------------------------------------- #
 # Réseau : requête POLIE, seul point qui touche réellement le réseau.         #
@@ -774,20 +808,95 @@ def _search(
 
 
 def _build_queries(opp: Any) -> List[str]:
-    """Séquence de requêtes moteur (repli, cf. docstring du module) : nom brut +
-    ville (ou CP en repli) ; nom + « architecte intérieur » + ville ; dirigeant
+    """Séquence de requêtes moteur (repli, cf. docstring du module).
+
+    Correctif 2026-07-17 : si le nom porte >= 2 tokens significatifs, la 1re
+    requête met le nom ENTRE GUILLEMETS (``"EM Décoration" Belfort``) pour forcer
+    la correspondance exacte chez DDG/Bing (les raisons sociales courtes
+    ramenaient sinon du bruit hors sujet). Repli sur les variantes NON citées :
+    nom brut + ville (ou CP) ; nom + « architecte intérieur » + ville ; dirigeant
     + « architecte intérieur » + ville (si un dirigeant est déclaré)."""
     name = (getattr(opp, "establishment_name", "") or "").strip()
     city = (getattr(opp, "city", "") or "").strip()
     if not city:
         city = _extract_postal_code(getattr(opp, "address", None)) or ""
 
-    queries = [f"{name} {city}".strip()]
+    queries: List[str] = []
+    if name and len(significant_tokens(name)) >= 2:
+        queries.append(f'"{name}" {city}'.strip())
+    queries.append(f"{name} {city}".strip())
     queries.append(f"{name} architecte intérieur {city}".strip())
     dirigeant = _dirigeant_full_name(getattr(opp, "dirigeants", None))
     if dirigeant:
         queries.append(f"{dirigeant} architecte intérieur {city}".strip())
     return queries
+
+
+# --------------------------------------------------------------------------- #
+# VOIE « DEVINETTE DE DOMAINE » — construite AVANT tout moteur (2026-07-17).   #
+# Zéro moteur, zéro rate-limit : on tente des domaines dérivés du nom/dirigeant #
+# et on les passe par le MÊME verrou gaté (jamais affaibli).                   #
+# --------------------------------------------------------------------------- #
+
+# Borne du nombre de domaines devinés fetchés par fiche (throttle 2,5 s chacun).
+_MAX_GUESS_CANDIDATES = 10
+_GUESS_TLDS = ("fr", "com")
+
+
+def _guess_domains(opp: Any) -> List[str]:
+    """Domaines candidats DEVINÉS (sans moteur) depuis le nom normalisé et le nom
+    complet du dirigeant : pour chaque « souche » (2 premiers tokens, puis nom
+    entier ; prénom + nom du dirigeant), on produit la concaténation
+    (``emdecoration``) et la forme tiret (``em-decoration``), croisées avec
+    ``.fr`` et ``.com``. Ordre déterministe, dédupliqué, borné à
+    :data:`_MAX_GUESS_CANDIDATES`. Les tokens de longueur 2 sont GARDÉS (``em``,
+    ``pk`` portent la marque), contrairement à ``significant_tokens`` ; une souche
+    de moins de 4 caractères est rejetée (domaine trop générique). Chaque domaine
+    rendu sera fetché puis passé au verrou d'identité INCHANGÉ."""
+    stems: List[str] = []
+    seen_stems: set = set()
+
+    def _add_stem(tokens: List[str]) -> None:
+        if not tokens:
+            return
+        for form in ("".join(tokens), "-".join(tokens)):
+            if len(form) >= 4 and form not in seen_stems:
+                seen_stems.add(form)
+                stems.append(form)
+
+    name = getattr(opp, "establishment_name", "") or ""
+    name_tokens = [t for t in normalize_name(name).split() if len(t) >= 2]
+    if name_tokens:
+        _add_stem(name_tokens[:2])   # 2 premiers tokens : « em decoration » -> emdecoration
+        _add_stem(name_tokens)       # nom entier : emdecorationinterieur
+
+    full = _dirigeant_full_name(getattr(opp, "dirigeants", None))
+    dir_tokens = [t for t in normalize_name(full or "").split() if len(t) >= 2]
+    if len(dir_tokens) >= 2:
+        _add_stem(dir_tokens[:2])    # prénom + nom : « catherine lassalle » -> catherinelassalle
+
+    domains: List[str] = []
+    for stem in stems:
+        for tld in _GUESS_TLDS:
+            domains.append(f"{stem}.{tld}")
+            if len(domains) >= _MAX_GUESS_CANDIDATES:
+                return domains
+    return domains
+
+
+def _candidate_verdict(info: Dict[str, Any]) -> "tuple[bool, Optional[str]]":
+    """Décision d'attribution pour UN candidat inspecté, PARTAGÉE entre la
+    devinette de domaine et la cascade de moteurs (aucune divergence de verrou) :
+    ``(attribué?, name_signal)``. Home racine morte -> jamais. Sinon voie A+B
+    (nom validé ET corroboration suffisante, « ville » seule exclue) puis voie C
+    (nom complet du dirigeant + signal fort géo/immat)."""
+    if not info.get("home_alive"):
+        return False, None
+    if info["a_pass"] and _corroboration_ok(info["b_signals"]):
+        return True, info["name_signal"]
+    if info.get("c_pass", False):
+        return True, "C_dirigeant"
+    return False, None
 
 
 # --------------------------------------------------------------------------- #
@@ -815,13 +924,15 @@ class SiteFindResult:
 
 
 def _verdict_handle(opp: Any) -> Optional[str]:
-    """Clé de cache du VERDICT de la fiche : ``sitefind:opp:<id>``, repli
-    ``sitefind:siren:<siren>`` si l'id est absent (fiche non encore commitée)."""
+    """Clé de cache du VERDICT de la fiche, VERSIONNÉE par :data:`_ENGINE_VERSION`
+    (2026-07-17) : ``sitefind:opp:v<N>:<id>``, repli ``sitefind:siren:v<N>:<siren>``
+    si l'id est absent (fiche non encore commitée). Les anciennes clés non
+    versionnées ne sont plus jamais lues (invalidation par bump de version)."""
     opp_id = getattr(opp, "id", None)
     if opp_id is not None:
-        return f"sitefind:opp:{opp_id}"
+        return f"sitefind:opp:v{_ENGINE_VERSION}:{opp_id}"
     siren = getattr(opp, "siren", None)
-    return f"sitefind:siren:{siren}" if siren else None
+    return f"sitefind:siren:v{_ENGINE_VERSION}:{siren}" if siren else None
 
 
 def find_site(
@@ -830,15 +941,18 @@ def find_site(
 ) -> SiteFindResult:
     """Trouve le site PROPRE d'une fiche, ou rien (doctrine VIDE > FAUX).
 
-    Séquence de requêtes en repli (cf. :func:`_build_queries`), chacune servie
-    par la cascade de moteurs (DDG puis Bing, cf. :func:`_run_engines`) ;
-    candidats filtrés par :func:`own_site` (aucune plateforme/réseau social/
-    annuaire), verrou A ET B strict par candidat (cf. docstring du module) — le
-    premier candidat qui passe gagne, jamais deux sites attribués. Si AUCUN
-    moteur ne sert (tous muets), verdict ``search_unavailable`` (RÉESSAYABLE, non
-    caché) plutôt que ``no_candidate``. Cache par fiche (clé
-    ``sitefind:opp:``/``sitefind:siren:``) : une fiche déjà tranchée et hors
-    fenêtre de revisite n'est PAS re-cherchée (``from_cache=True``)."""
+    D'abord la DEVINETTE DE DOMAINE (:func:`_guess_domains`, 2026-07-17) : des
+    domaines dérivés du nom/dirigeant sont fetchés puis passés au MÊME verrou —
+    si l'un aboutit, AUCUN moteur n'est appelé. Sinon, séquence de requêtes en
+    repli (cf. :func:`_build_queries`, 1re requête citée), chacune servie par la
+    cascade de moteurs (DDG puis Bing, cf. :func:`_run_engines`) ; candidats
+    filtrés par :func:`own_site` (aucune plateforme/réseau social/annuaire),
+    verrou A ET B strict par candidat (cf. docstring du module) — le premier
+    candidat qui passe gagne, jamais deux sites attribués. Si AUCUN moteur ne sert
+    (tous muets), verdict ``search_unavailable`` (RÉESSAYABLE, non caché) plutôt
+    que ``no_candidate``. Cache par fiche VERSIONNÉ (clé
+    ``sitefind:opp:v<N>:``/``sitefind:siren:v<N>:``) : une fiche déjà tranchée et
+    hors fenêtre de revisite n'est PAS re-cherchée (``from_cache=True``)."""
     today = today or date.today()
     name = getattr(opp, "establishment_name", "") or ""
     opp_id = getattr(opp, "id", None)
@@ -858,7 +972,36 @@ def find_site(
     try:
         name_tokens = significant_tokens(name)
         seen_domains: set = set()
+
+        # 1) DEVINETTE DE DOMAINE (avant tout moteur). Chaque domaine deviné
+        #    VIVANT devient un candidat de plein droit, passé au verrou INCHANGÉ ;
+        #    un domaine deviné mort est une simple sonde (ni candidat ni inspected,
+        #    pour ne pas figer une fiche non cherchée en "locked_out").
+        for guess_url in _guess_domains(opp):
+            clean = own_site("https://" + guess_url + "/")
+            if not clean or _is_directory(clean):
+                continue
+            domain = _domain(clean)
+            if not domain or domain in seen_domains:
+                continue
+            info = _inspect_candidate(fetch, clean, domain, name_tokens, opp)
+            if not info.get("home_alive"):
+                continue
+            seen_domains.add(domain)
+            result.candidates.append(domain)
+            result.inspected.append(info)
+            attributed, signal = _candidate_verdict(info)
+            if attributed:
+                result.website = clean
+                result.verdict = "found"
+                result.name_signal = signal
+                result.corroboration = info["b_signals"]
+                break
+
+        # 2) Cascade de moteurs, SEULEMENT si la devinette n'a rien attribué.
         for query in _build_queries(opp):
+            if result.website:
+                break
             result.queries.append(query)
             outcome = _search(query, session, fetch, today)
             if outcome.served:
@@ -883,14 +1026,11 @@ def find_site(
                 #     non réduite à « ville » seule — durcissement 2026-07-14) ;
                 #   - VOIE C : nom COMPLET du dirigeant + signal FORT géo/immat
                 #     (calibrage 2026-07-14, raisons sociales abrégées/fusionnées).
-                if not info.get("home_alive"):
-                    continue
-                a_ok = info["a_pass"] and _corroboration_ok(info["b_signals"])
-                c_ok = info.get("c_pass", False)
-                if a_ok or c_ok:
+                attributed, signal = _candidate_verdict(info)
+                if attributed:
                     result.website = clean
                     result.verdict = "found"
-                    result.name_signal = info["name_signal"] if a_ok else "C_dirigeant"
+                    result.name_signal = signal
                     result.corroboration = info["b_signals"]
                     break
             if result.website:
@@ -918,9 +1058,16 @@ def find_site(
     #    par nature, la figer empoisonnerait le cache sur une panne anti-bot ;
     #  - "no_candidate" quand AU MOINS une requête de la séquence a été muette
     #    (``any_muted``) : une requête de repli non servie a pu masquer le vrai
-    #    site -> on garde la fiche réessayable plutôt que de la figer.
+    #    site -> on garde la fiche réessayable plutôt que de la figer ;
+    #  - "locked_out" quand AUCUN moteur n'a servi (``not search_served``) : le
+    #    ou les candidats venaient de la seule devinette de domaine (2026-07-17) ;
+    #    le vrai site pouvant être ailleurs, on reste réessayable tant qu'un moteur
+    #    n'a pas réellement cherché (jamais une ATTRIBUTION affaiblie, juste le
+    #    NÉGATIF non figé).
     skip_cache = result.verdict in ("error", "search_unavailable") or (
         result.verdict == "no_candidate" and any_muted
+    ) or (
+        result.verdict == "locked_out" and not search_served
     )
     if handle is not None and not skip_cache:
         verdict_cache.upsert(session, handle, verdict=result.verdict,

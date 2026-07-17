@@ -18,7 +18,9 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.ingestion.enrichment import site_finder
 from app.ingestion.enrichment.site_finder import (
+    _ENGINE_VERSION,
     SiteFindResult,
+    _build_queries,
     _check_lock_a,
     _check_lock_b,
     _check_lock_c,
@@ -28,6 +30,8 @@ from app.ingestion.enrichment.site_finder import (
     _domain,
     _domain_matches_name,
     _extract_postal_code,
+    _guess_domains,
+    _verdict_handle,
     extract_identity_markers,
     find_site,
     normalize_name,
@@ -325,11 +329,13 @@ def test_find_site_platforms_only_yields_no_candidate_without_page_fetch():
             "https://www.instagram.com/atelierdupont/",
             "https://www.houzz.fr/pro/atelierdupont/__public",
         ])
+        fetched: List[str] = []
 
         def fetch(url: str) -> Optional[str]:
+            fetched.append(url)
             if "html.duckduckgo.com" in url:
                 return ddg_html
-            raise AssertionError(f"aucun fetch de page candidate attendu : {url}")
+            return None  # domaines devinés morts ; aucune page candidate propre
 
         result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
 
@@ -337,6 +343,9 @@ def test_find_site_platforms_only_yields_no_candidate_without_page_fetch():
         assert result.website is None
         assert result.candidates == []
         assert result.inspected == []
+        # Les plateformes (instagram/houzz) sont filtrées par own_site AVANT tout
+        # fetch de page : jamais fetchées (la devinette ne les construit pas).
+        assert not any("instagram.com" in u or "houzz." in u for u in fetched)
 
 
 def test_find_site_search_cache_shared_across_fiches():
@@ -344,8 +353,12 @@ def test_find_site_search_cache_shared_across_fiches():
         opp1 = _mk_opp(s, source_ref="fiche-a")
         opp2 = _mk_opp(s, source_ref="fiche-b")
         ddg_calls: List[str] = []
-        fetch = _fake_fetch(_read("ddg_results.html"),
-                            {"atelier-dupont.fr": _read("site_match.html")}, ddg_calls)
+        # Site servi sur un domaine NON devinable (les-ateliers-dupont-lyon.fr) :
+        # la devinette de domaine échoue -> la découverte passe par DDG, dont le
+        # résultat est mis en cache de requête (sitefind:q:) et partagé.
+        fetch = _fake_fetch(
+            _ddg_html(["https://les-ateliers-dupont-lyon.fr/"]),
+            {"les-ateliers-dupont-lyon.fr": _read("site_match.html")}, ddg_calls)
 
         r1 = find_site(opp1, s, fetch=fetch, today=date(2026, 7, 14))
         r2 = find_site(opp2, s, fetch=fetch, today=date(2026, 7, 14))
@@ -483,3 +496,152 @@ def test_reference_fiche1554_pkinterieur_found_via_name():
         assert result.verdict == "found"
         assert result.website == "https://pkinterieur.com/"
         assert result.inspected[0]["a_pass"] is True
+
+
+# --- RAPPEL 2026-07-17 : devinette de domaine + requêtes citées + cache versionné #
+# Les trois vrais sites gatés (593/1518/1554) sont des CONCATÉNATIONS du nom ou du
+# dirigeant : la devinette de domaine les retrouve SANS aucun moteur (zéro rate-
+# limit). Chaque domaine deviné passe par le MÊME verrou gaté (jamais affaibli).
+
+
+def _no_engine_fetch(pages_by_domain: Dict[str, str]) -> Callable[[str], Optional[str]]:
+    """``fetch`` qui SERT les pages par domaine mais REFUSE tout appel moteur
+    (DDG/Bing) : prouve que la devinette de domaine tranche sans aucun moteur."""
+    def fetch(url: str) -> Optional[str]:
+        low = url.lower()
+        if "duckduckgo.com" in low or "bing.com" in low:
+            raise AssertionError(f"aucun moteur ne doit être appelé (devinette) : {url}")
+        host = urlparse(url).netloc.lower()
+        bare = host[4:] if host.startswith("www.") else host
+        return pages_by_domain.get(bare)
+    return fetch
+
+
+# --- _guess_domains (pur) --------------------------------------------------------
+
+
+def test_guess_domains_from_name_join_and_hyphen_crossed_with_tlds():
+    opp = SimpleNamespace(establishment_name="EM Décoration Intérieur",
+                          dirigeants=["Émilie Martin, Gérante"])
+    guesses = _guess_domains(opp)
+    # 2 premiers tokens -> emdecoration ; formes join + tiret ; .fr ET .com.
+    assert "emdecoration.fr" in guesses
+    assert "emdecoration.com" in guesses
+    assert "em-decoration.fr" in guesses
+    assert len(guesses) <= 10
+
+
+def test_guess_domains_uses_full_dirigeant_name():
+    opp = SimpleNamespace(establishment_name="Cat Lassalle",
+                          dirigeants=["Catherine Lassalle, Gérante"])
+    guesses = _guess_domains(opp)
+    assert "catherinelassalle.fr" in guesses
+    assert "catherine-lassalle.fr" in guesses
+
+
+def test_guess_domains_empty_without_any_signal():
+    assert _guess_domains(SimpleNamespace(establishment_name=None, dirigeants=None)) == []
+    # Un token unique trop court ne fabrique pas de souche >= 4 caractères.
+    assert _guess_domains(SimpleNamespace(establishment_name="Ax", dirigeants=None)) == []
+
+
+# --- Devinette de domaine : les 3 vrais sites gatés, SANS moteur -----------------
+
+
+def test_guess_finds_emdecoration_without_any_engine():
+    with Session(_engine()) as s:
+        opp = _mk_opp(
+            s, establishment_name="EM Décoration Intérieur", city="Belfort",
+            address="5 faubourg de France, 90000 Belfort",
+            dirigeants=["Émilie Martin, Gérante"], siren="903214567",
+            siret="90321456700018",
+        )
+        fetch = _no_engine_fetch({"emdecoration.fr": _read("site_emdecoration.html")})
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+
+        assert result.verdict == "found"
+        assert result.website == "https://emdecoration.fr/"
+        assert result.queries == []  # AUCUN moteur interrogé
+        assert result.inspected[0]["a_pass"] is True
+
+
+def test_guess_finds_catherinelassalle_via_dirigeant_without_any_engine():
+    with Session(_engine()) as s:
+        opp = _mk_opp(
+            s, establishment_name="Cat Lassalle Intérieurs", city="Lyon",
+            address="3 rue des Fleurs, 69005 Lyon",
+            dirigeants=["Catherine Lassalle, Gérante"], siren="812345678",
+            siret="81234567800011",
+        )
+        fetch = _no_engine_fetch({"catherinelassalle.fr": _read("site_catherine.html")})
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+
+        assert result.verdict == "found"
+        assert result.website == "https://catherinelassalle.fr/"
+        assert result.name_signal == "C_dirigeant"
+        assert result.inspected[0]["c_pass"] is True
+        assert result.queries == []
+
+
+def test_guess_finds_pkinterieur_com_without_any_engine():
+    with Session(_engine()) as s:
+        opp = _mk_opp(
+            s, establishment_name="PK Intérieur", city="Charbonnières-les-Bains",
+            address="8 avenue Lamartine, 69260 Charbonnières-les-Bains",
+            dirigeants=["Pauline Klein, Gérante"], siren="851470962",
+            siret="85147096200013",
+        )
+        fetch = _no_engine_fetch({"pkinterieur.com": _read("site_pkinterieur.html")})
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+
+        assert result.verdict == "found"
+        assert result.website == "https://pkinterieur.com/"  # .com deviné, pas .fr
+        assert result.queries == []
+
+
+def test_guess_domain_homonym_is_refused_by_the_same_lock():
+    """Un domaine DEVINÉ vivant appartenant à un homonyme (autre ville, aucun
+    signal fort) ne passe PAS le verrou : jamais attribué. La devinette
+    n'affaiblit rien (VIDE > FAUX). Moteurs muets ici -> reste réessayable."""
+    with Session(_engine()) as s:
+        opp = _mk_opp(s)  # Atelier Dupont, Lyon -> devine atelierdupont.fr
+
+        def fetch(url: str) -> Optional[str]:
+            low = url.lower()
+            if "duckduckgo.com" in low or "bing.com" in low:
+                return None  # moteurs muets (le domaine deviné a déjà été rejeté)
+            host = urlparse(url).netloc.lower()
+            bare = host[4:] if host.startswith("www.") else host
+            return {"atelierdupont.fr": _read("site_homonym_othercity.html")}.get(bare)
+
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+        assert result.website is None
+        assert result.verdict == "locked_out"
+        assert result.inspected[0]["a_pass"] is True
+        assert result.inspected[0]["b_signals"] == []
+
+
+# --- Requêtes citées + cache de verdict versionné --------------------------------
+
+
+def test_build_queries_quotes_full_name_when_two_significant_tokens():
+    opp = SimpleNamespace(establishment_name="EM Décoration Intérieur",
+                          city="Belfort", address="", dirigeants=None)
+    queries = _build_queries(opp)
+    assert queries[0] == '"EM Décoration Intérieur" Belfort'
+    # Les variantes non citées restent en repli.
+    assert any(not q.startswith('"') for q in queries)
+
+
+def test_build_queries_no_quote_when_single_significant_token():
+    opp = SimpleNamespace(establishment_name="Atelier Dupont", city="Lyon",
+                          address="", dirigeants=["Chiara Rossi, Gérante"])
+    assert not any(q.startswith('"') for q in _build_queries(opp))
+
+
+def test_verdict_handle_is_versioned():
+    assert _verdict_handle(SimpleNamespace(id=593, siren="903214567")) == \
+        f"sitefind:opp:v{_ENGINE_VERSION}:593"
+    # Repli SIREN aussi versionné quand l'id est absent.
+    assert _verdict_handle(SimpleNamespace(id=None, siren="903214567")) == \
+        f"sitefind:siren:v{_ENGINE_VERSION}:903214567"

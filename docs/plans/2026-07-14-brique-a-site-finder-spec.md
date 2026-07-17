@@ -584,3 +584,78 @@ trouvé) : `locked_out` si ≥ 1 candidat propre inspecté et rejeté ; sinon
   `test_opp_all_none_does_not_crash` reflètent désormais `search_unavailable`.
 
 Suite complète : **715 tests, 100 % verts.**
+
+---
+
+## 9. Rappel : devinette de domaine + requêtes citées + cache versionné (2026-07-17)
+
+### 9.1 Diagnostic
+
+Le verrou d'identité tient (gate « 0 faux positif »), mais après des jours
+d'usage la **couche de recherche s'est dégradée** : DDG oppose des défis anti-bot
+et Bing renvoie du bruit hors sujet pour les **raisons sociales courtes**
+(« EM DECORATION D'INTERIEUR Belfort » → EM Strasbourg, emlyon, Wikipédia). Trois
+vrais sites confirmés par gate étaient perdus EN AMONT du verrou :
+`emdecoration.fr` (593), `catherinelassalle.fr` (1518), `pkinterieur.com` (1554).
+Les trois sont des **concaténations** du nom (`em`+`decoration`, `pk`+`interieur`)
+ou du dirigeant (`catherine`+`lassalle`). Correctifs — **le verrou gaté
+(`_inspect_candidate` + voies A+B/C) reste STRICTEMENT INCHANGÉ**.
+
+### 9.2 Voie « devinette de domaine » AVANT les moteurs
+
+`_guess_domains(opp)` construit des domaines candidats sans aucun moteur :
+
+- souches depuis les tokens du **nom normalisé** (tokens de longueur ≥ 2 gardés —
+  `em`/`pk` portent la marque, contrairement à `significant_tokens`) : 2 premiers
+  tokens (`emdecoration`) puis nom entier ;
+- souche depuis le **nom complet du dirigeant** (`catherinelassalle`) ;
+- chaque souche en forme **concaténée** et **tiret** (`em-decoration`), croisée
+  avec `.fr` et `.com`, souche ≥ 4 caractères, borné à `_MAX_GUESS_CANDIDATES`
+  (10).
+
+Chaque domaine est fetché poliment (throttle 2,5 s existant, `_inspect_candidate`)
+et passé au **MÊME verrou gaté**. Un domaine deviné VIVANT devient un candidat de
+plein droit ; un domaine MORT est une simple sonde (ni candidat ni verdict, pour
+ne pas figer en `locked_out` une fiche non cherchée). **Si la devinette aboutit,
+AUCUN moteur n'est appelé** (zéro rate-limit, instantané). La décision
+d'attribution est factorisée dans `_candidate_verdict(info)`, partagée à
+l'identique entre devinette et cascade de moteurs. Avantage : les faux positifs
+sont impossibles (un domaine deviné appartenant à un homonyme échoue le verrou,
+test dédié).
+
+### 9.3 Requêtes citées
+
+`_build_queries` : quand le nom porte ≥ 2 tokens significatifs, la 1re requête met
+le nom ENTRE GUILLEMETS (`"EM Décoration Intérieur" Belfort`) pour forcer la
+correspondance exacte chez DDG/Bing (les raisons sociales courtes ramenaient
+sinon du bruit). Les variantes non citées restent en repli. C'est le mécanisme de
+secours pour les fiches dont le domaine n'est PAS devinable (ex. 1518 sans
+dirigeant en base : la requête citée surface `catherinelassalle.fr`, dont la
+marque « Cat Lassalle » sur la home fait passer A1, CP 33000 corrobore).
+
+### 9.4 Cache de verdicts VERSIONNÉ
+
+Constante `_ENGINE_VERSION = 2` intégrée à la clé fiche :
+`sitefind:opp:v2:<id>` (repli `sitefind:siren:v2:<siren>`). Les anciennes clés NON
+versionnées sont **ignorées** (jamais lues, pas besoin de les supprimer) : bumper
+la constante invalide d'un coup tous les verdicts — les ~830 `locked_out` de l'ère
+« recherche dégradée » sont ainsi re-jugés. Le cache de RECHERCHE `sitefind:q:`
+reste non versionné (résultats bruts de moteur, indépendants du verrou). Garde de
+cache supplémentaire : un `locked_out` obtenu alors qu'AUCUN moteur n'a servi
+(candidats venus de la seule devinette) n'est PAS mis en cache (`not
+search_served`) — réessayable, sans jamais affaiblir une ATTRIBUTION.
+
+### 9.5 Tests (sans réseau) + validation LIVE
+
+- `test_site_finder.py` (+10) : `_guess_domains` (nom join/tiret × TLD, dirigeant,
+  vide) ; devinette trouve `emdecoration.fr`/`catherinelassalle.fr`/`pkinterieur.com`
+  SANS aucun moteur (`fetch` qui lève sur toute URL moteur) ; homonyme deviné
+  vivant REFUSÉ par le même verrou ; requête citée si ≥ 2 tokens ; clé de verdict
+  versionnée. Tests existants ajustés (cache de requête partagé + repli Bing
+  servis sur un domaine NON devinable ; plateformes-seules tolère la sonde de
+  devinette morte).
+- **Validation LIVE** : purge de `sitefind:opp:{593,1518,1554}` (versionnées ET
+  non versionnées) puis `find_site` réel — les trois sortent `found` avec le bon
+  domaine (593/1554 par devinette, 1518 par requête citée + verrou A1+B-cp).
+
+Suite complète : **749 tests, 100 % verts.**
