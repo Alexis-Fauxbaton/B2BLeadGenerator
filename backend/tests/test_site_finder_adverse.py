@@ -17,9 +17,11 @@ from sqlmodel import Session, SQLModel, create_engine
 from app.ingestion.enrichment import site_finder
 from app.ingestion.enrichment.own_site import is_directory, own_site
 from app.ingestion.enrichment.site_finder import (
+    _check_lock_b,
     _check_lock_c,
     _corroboration_ok,
     _domain_matches_name,
+    _has_distinctive_token,
     find_site,
 )
 
@@ -503,3 +505,205 @@ def test_directory_url_re_spares_legit_dated_pages(url):
     # une fiche d'annuaire -> le site reste éligible.
     assert is_directory(url) is False, f"page datée légitime exclue à tort : {url}"
     assert own_site(url) == url
+
+
+# --------------------------------------------------------------------------- #
+# DURCISSEMENT POST-GATE DU 2026-07-18 — un test adverse par attribution       #
+# FAUSSE réellement observée au gate (5 sur 42 -> 88 % de précision, standard  #
+# exigé 98,6 %). Chaque fiche réelle devient un cas adverse AVANT le fix.      #
+# --------------------------------------------------------------------------- #
+
+# 17. Fiche 2366 « MARION LAMBERT » (Lyon), dirigeante Marion Lambert ->
+#     marionlambert.fr = interprète LSF à ANGERS (homonyme). La raison sociale
+#     EST le nom de la dirigeante : le signal de NOM (A) et la corroboration
+#     « dirigeant » dérivent de la MÊME chaîne -> PAS indépendants. Le signal
+#     dirigeant ne doit plus compter ; sans cp/siren propre, VIDE > FAUX.
+
+def test_dirigeant_signal_dropped_when_name_covers_dirigeant():
+    # Raison sociale = nom du dirigeant -> le signal « dirigeant » n'est PAS
+    # indépendant du nom (A) et ne doit pas figurer dans la corroboration B.
+    opp = SimpleNamespace(
+        establishment_name="Marion Lambert", city="", address="",
+        dirigeants=["Marion Lambert, Gérante"], siren=None, siret=None)
+    assert _check_lock_b(opp, "Marion Lambert vous accueille.") == []
+    # Un dirigeant DISTINCT de la raison sociale reste, lui, indépendant.
+    opp2 = SimpleNamespace(
+        establishment_name="Atelier Dupont", city="", address="",
+        dirigeants=["Chiara Rossi, Gérante"], siren=None, siret=None)
+    assert _check_lock_b(opp2, "Gérante : Chiara Rossi.") == ["dirigeant"]
+
+
+def test_fiche2366_marion_lambert_homonym_is_refused():
+    with Session(_engine()) as s:
+        opp = _opp(establishment_name="Marion Lambert", city="Lyon",
+                   address="12 rue de la Republique, 69001 Lyon",
+                   dirigeants=["Marion Lambert, Gérante"], siren="123456789",
+                   siret="12345678900012")
+        # marionlambert.fr : interprète LSF à Angers (49000), aucun signal propre
+        # de la fiche lyonnaise (ni CP 69, ni SIREN) — « Lambert » n'est PAS un
+        # signal indépendant (= raison sociale).
+        angers = ("<title>Marion Lambert — Interprète LSF à Angers</title>"
+                  "<h1>Marion Lambert</h1><body>Interprète en langue des signes "
+                  "française à Angers (49000). Prenez contact.</body>")
+        fetch = _fake_fetch(_ddg_html(["https://marionlambert.fr/"]),
+                            {"marionlambert.fr": angers})
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+        assert result.website is None, (
+            f"FAUX POSITIF : homonyme dirigeant attribué -> {result.website}")
+        assert result.verdict == "locked_out"
+        assert result.inspected[0]["a_pass"] is True     # le nom colle (domaine)
+        assert result.inspected[0]["b_signals"] == []    # dirigeant NON indépendant
+
+
+# 18. Fiche 2690 -> antoine-fabre.fr : domaine parqué/détourné (certificat TLS
+#     d'un autre organisme -> la variante https ÉCHOUE, seul http répond). Une
+#     home servie en repli http n'attribue JAMAIS sur ville/CP seuls : exiger un
+#     signal FORT (SIREN/SIRET ou dirigeant indépendant).
+
+def test_fiche2690_antoine_fabre_http_fallback_requires_strong_signal():
+    with Session(_engine()) as s:
+        opp = _opp(establishment_name="Antoine Fabre", city="Lyon",
+                   address="8 rue Centrale, 69001 Lyon",
+                   dirigeants=["Antoine Fabre, Gérant"], siren="555666777",
+                   siret="55566677700018")
+        parked = ("<title>Antoine Fabre</title><h1>Antoine Fabre</h1>"
+                  "<body>Bienvenue. Lyon 69001.</body>")  # cp coïncidant, rien de fort
+
+        def fetch(url: str) -> Optional[str]:
+            low = url.lower()
+            if "duckduckgo.com" in low or "bing.com" in low:
+                return None  # moteurs muets : seul le domaine deviné est sondé
+            p = urlparse(url)
+            host = p.netloc.lower()
+            bare = host[4:] if host.startswith("www.") else host
+            if bare != "antoine-fabre.fr":
+                return None
+            if p.scheme != "http":
+                return None  # https : le certificat échoue (parqué)
+            return parked
+
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+        assert result.website is None, (
+            f"FAUX POSITIF : domaine parqué (http) attribué -> {result.website}")
+        assert result.verdict == "locked_out"
+        assert result.inspected[0]["home_secure"] is False
+        assert result.inspected[0]["a_pass"] is True
+        # ville + cp coïncidants MAIS aucun signal fort -> insuffisant en http.
+        assert result.inspected[0]["b_signals"] == ["ville", "cp"]
+
+
+# 19. Fiche 1986 « ARCHITECTURE INTERIEUR » (dirigeante Rose-Marie Chardelin) ->
+#     alexiabequin.com (portfolio d'une AUTRE architecte). Raison sociale 100 %
+#     GÉNÉRIQUE (tokens du métier) : le signal de NOM A est réputé NUL — seules
+#     la voie C ou le SIREN de la fiche en mentions légales peuvent attribuer.
+
+def test_has_distinctive_token_rejects_pure_metier_names():
+    assert _has_distinctive_token("Architecture Interieur") is False
+    assert _has_distinctive_token("MD Interior Design") is False       # md = initiales
+    assert _has_distinctive_token("Interieur Concept Design") is False
+    assert _has_distinctive_token("Studio Deco") is False
+    # Un vrai patronyme / marque distinctive reste distinctif.
+    assert _has_distinctive_token("Atelier Dupont") is True
+    assert _has_distinctive_token("Cat Lassalle") is True
+
+
+def test_fiche1986_generic_name_does_not_attribute_other_architect():
+    with Session(_engine()) as s:
+        opp = _opp(establishment_name="Architecture Interieur", city="Lyon",
+                   address="4 rue des Arts, 69003 Lyon",
+                   dirigeants=["Rose-Marie Chardelin, Gérante"], siren="444555666",
+                   siret="44455566600014")
+        # Portfolio d'Alexia Béquin : les mots métier « architecture d'intérieur »
+        # y figurent (A1 matcherait à tort) + CP 69003 par coïncidence de dept.
+        other = ("<title>Alexia Béquin — Architecture d'intérieur</title>"
+                 "<h1>Architecture d'intérieur</h1><body>Portfolio. Lyon 69003. "
+                 "Projets sur mesure.</body>")
+        fetch = _fake_fetch(_ddg_html(["https://alexiabequin.com/"]),
+                            {"alexiabequin.com": other})
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+        assert result.website is None, (
+            f"FAUX POSITIF : nom générique attribué à un autre studio -> {result.website}")
+        assert result.verdict == "locked_out"
+        assert result.inspected[0]["a_pass"] is False  # signal de nom RÉPUTÉ NUL
+
+
+# 20. Fiche 2882 « MD INTERIOR DESIGN » (dirigeante Mathilde Dos Santos) -> site
+#     d'une Margaux Chiarella. Même famille que 19 : initiales « MD » + tokens
+#     génériques -> aucun token distinctif -> signal A nul.
+
+def test_fiche2882_md_interior_design_initials_not_enough():
+    with Session(_engine()) as s:
+        opp = _opp(establishment_name="MD Interior Design", city="Nantes",
+                   address="2 quai de la Fosse, 44000 Nantes",
+                   dirigeants=["Mathilde Dos Santos, Gérante"], siren="777888999",
+                   siret="77788899900012")
+        margaux = ("<title>Margaux Chiarella — Interior Design</title>"
+                   "<h1>Interior Design</h1><body>Studio à Nantes 44000.</body>")
+        fetch = _fake_fetch(_ddg_html(["https://margaux-chiarella.com/"]),
+                            {"margaux-chiarella.com": margaux})
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+        assert result.website is None, (
+            f"FAUX POSITIF : initiales génériques attribuées -> {result.website}")
+        assert result.verdict == "locked_out"
+        assert result.inspected[0]["a_pass"] is False
+
+
+# 21. Fiche 2733 « INTERIEUR CONCEPT DESIGN » -> sb-designinterieur.com : autre
+#     société, SIRET DIFFÉRENT affiché en clair. Contradiction dure -> REJET
+#     IMMÉDIAT quel que soit le reste.
+
+def test_conflicting_registration_forces_hard_reject():
+    # Nom DISTINCTIF + domaine + CP qui matchent (attribuerait normalement) MAIS
+    # le site affiche un SIRET d'une AUTRE société -> REJET IMMÉDIAT.
+    with Session(_engine()) as s:
+        opp = _opp(establishment_name="Atelier Dupont", city="Lyon",
+                   address="12 rue de la Republique, 69001 Lyon",
+                   dirigeants=["Chiara Rossi, Gérante"], siren="123456789",
+                   siret="12345678900012")
+        conflicting = ("<title>Atelier Dupont — Lyon</title><h1>Atelier Dupont</h1>"
+                       "<body>Lyon 69001. SIRET 987 654 321 00099.</body>")
+        fetch = _fake_fetch(_ddg_html(["https://atelier-dupont.fr/"]),
+                            {"atelier-dupont.fr": conflicting})
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+        assert result.website is None, (
+            f"FAUX POSITIF : SIRET contradictoire attribué -> {result.website}")
+        assert result.verdict == "locked_out"
+        assert result.inspected[0]["hard_conflict"] is True
+
+
+def test_fiche2733_interieur_concept_conflicting_siret_is_refused():
+    with Session(_engine()) as s:
+        opp = _opp(establishment_name="Interieur Concept Design", city="Bordeaux",
+                   address="10 cours de l'Intendance, 33000 Bordeaux",
+                   dirigeants=["Sophie Blanc, Gérante"], siren="111222333",
+                   siret="11122233300011")
+        other_company = ("<title>SB Design Intérieur</title><h1>Design d'intérieur</h1>"
+                         "<body>Bordeaux 33000. SIRET 987 654 321 00099.</body>")
+        fetch = _fake_fetch(_ddg_html(["https://sb-designinterieur.com/"]),
+                            {"sb-designinterieur.com": other_company})
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+        assert result.website is None, (
+            f"FAUX POSITIF : autre société (SIRET ≠) attribuée -> {result.website}")
+        assert result.verdict == "locked_out"
+        assert result.inspected[0]["hard_conflict"] is True
+
+
+# 22. VOIE D (garde de RAPPEL) : un nom générique reste attribuable quand le
+#     SIREN PROPRE de la fiche figure en mentions légales (identifiant unique) —
+#     le durcissement ne doit pas tuer ce vrai positif légitime.
+
+def test_route_d_generic_name_with_own_siren_is_attributed():
+    with Session(_engine()) as s:
+        opp = _opp(establishment_name="Architecture Interieur", city="Lyon",
+                   address="4 rue des Arts, 69003 Lyon",
+                   dirigeants=["Rose-Marie Chardelin, Gérante"], siren="444555666",
+                   siret="44455566600014")
+        own = ("<title>Architecture Intérieur — Lyon</title>"
+               "<h1>Architecture d'intérieur</h1><body>Lyon 69003. "
+               "SIREN 444 555 666.</body>")  # SIREN PROPRE de la fiche
+        fetch = _fake_fetch(_ddg_html(["https://archi-int-lyon.fr/"]),
+                            {"archi-int-lyon.fr": own})
+        result = find_site(opp, s, fetch=fetch, today=date(2026, 7, 14))
+        assert result.verdict == "found"
+        assert result.website == "https://archi-int-lyon.fr/"
+        assert result.name_signal == "D_immat"

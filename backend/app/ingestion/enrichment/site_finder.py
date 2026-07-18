@@ -92,6 +92,26 @@ AMONT du verrou. Trois correctifs, le verrou D'IDENTITÉ restant INCHANGÉ :
     sont ainsi re-jugés. Le cache de RECHERCHE ``sitefind:q:`` reste, lui, non
     versionné (il ne stocke que des résultats bruts de moteur, indépendants du
     verrou).
+
+DURCISSEMENT POST-GATE (2026-07-18, ``_ENGINE_VERSION`` -> 3) : un gate adverse a
+compté 5 faux « found » sur 42 (88 % vs 98,6 % exigé). Cinq gardes ajoutées, la
+doctrine VIDE > FAUX renforcée (jamais affaiblie) :
+
+  - **dirigeant NON indépendant** (:func:`_dirigeant_signal_independent`) : quand
+    la raison sociale EST le nom du dirigeant, le signal « dirigeant » et le
+    signal de nom A dérivent de la même chaîne -> le premier ne corrobore plus ;
+  - **home NON sûre** (repli http / certificat suspect, ``home_secure``) : exiger
+    un signal FORT (siren/siret/dirigeant indépendant), jamais ville/CP seuls ;
+  - **nom 100 % générique / initiales** (:func:`_has_distinctive_token`) : A1
+    (contenu) désactivé et A2 réduit à la MARQUE DANS LE DOMAINE
+    (:func:`_domain_matches_guess_stem`) — les mots du métier sur un site tiers ne
+    valent plus signal de nom ;
+  - **contradiction dure** (:func:`_hard_conflict`) : un SIREN/SIRET lisible ≠
+    celui de la fiche, ou la seule localité affichée d'un autre département ->
+    REJET IMMÉDIAT ;
+  - **voie D** : le SIREN/SIRET PROPRE de la fiche en mentions légales
+    (identifiant unique) attribue même sans signal de nom (``name_signal``
+    ``"D_immat"``).
 """
 from __future__ import annotations
 
@@ -123,7 +143,7 @@ from .website_scraper import HEADERS, _PAGE_CAP, contact_page_urls, home_url_var
 # coup tous les verdicts en cache (les anciennes clés, versionnées ou non, ne
 # sont plus jamais lues) — utilisé le 2026-07-17 pour re-juger les ~830
 # ``locked_out`` produits par la couche de recherche dégradée.
-_ENGINE_VERSION = 2
+_ENGINE_VERSION = 3
 
 # --------------------------------------------------------------------------- #
 # Réseau : requête POLIE, seul point qui touche réellement le réseau.         #
@@ -383,10 +403,19 @@ _PUNCT_RE = re.compile(r"[^a-z0-9]+")
 _MULTI_SPACE_RE = re.compile(r"\s+")
 
 # Mots génériques du métier (studio/agence/architecte...) : filtrés des tokens
-# significatifs pour éviter qu'un site matche sur un mot aussi banal seul.
+# significatifs pour éviter qu'un site matche sur un mot aussi banal seul, et
+# — durcissement 2026-07-18 — servant de LEXIQUE MÉTIER pour juger si une raison
+# sociale porte AU MOINS un token DISTINCTIF (cf. :func:`_has_distinctive_token`).
+# Étendu au gate du 2026-07-18 : variantes anglaises (« interior »/« design »),
+# « concept », « home », « maison », « decor »… — les faux « ARCHITECTURE
+# INTERIEUR » (-> alexiabequin.com) et « MD INTERIOR DESIGN » (-> autre studio)
+# n'ont AUCUN token hors de ce lexique.
 _GENERIC_TOKENS = frozenset({
-    "studio", "agence", "atelier", "architecture", "architecte", "interieur",
-    "interieurs", "design", "decoration", "deco", "and", "the", "paris",
+    "studio", "studios", "agence", "atelier", "ateliers", "architecture",
+    "architecte", "architectes", "interieur", "interieurs", "interior",
+    "interiors", "design", "designer", "decoration", "deco", "decor",
+    "decorateur", "decoratrice", "concept", "concepts", "home", "maison",
+    "habitat", "agencement", "amenagement", "renovation", "and", "the", "paris",
 })
 
 
@@ -413,6 +442,20 @@ def significant_tokens(name: str) -> List[str]:
     tokens = [t for t in normalize_name(name).split() if len(t) >= 3]
     filtered = [t for t in tokens if t not in _GENERIC_TOKENS]
     return filtered if filtered else tokens
+
+
+def _has_distinctive_token(name: Optional[str]) -> bool:
+    """True si la raison sociale porte AU MOINS un token DISTINCTIF : longueur
+    >= 3 ET hors du lexique métier (:data:`_GENERIC_TOKENS`). Durcissement
+    2026-07-18 (faux « ARCHITECTURE INTERIEUR », « MD INTERIOR DESIGN »,
+    « INTERIEUR CONCEPT DESIGN ») : une raison sociale 100 % générique (que des
+    mots du métier) ou réduite à des INITIALES + métier (« MD », len 2, ignorée)
+    n'a AUCUN token distinctif -> le signal de NOM A est réputé NUL (l'appelant
+    passe alors ``name_tokens=[]`` au verrou) : seule la voie C (dirigeant
+    indépendant + cp/siren/siret) ou le SIREN/SIRET de la fiche en mentions
+    légales (voie D) peuvent attribuer. Pure."""
+    return any(len(t) >= 3 and t not in _GENERIC_TOKENS
+               for t in normalize_name(name).split())
 
 
 # --------------------------------------------------------------------------- #
@@ -490,9 +533,26 @@ def _domain_matches_name(domain: Optional[str], name_tokens: List[str]) -> bool:
     return all(tok in segments for tok in name_tokens)
 
 
-def _check_lock_a(name_tokens: List[str], markers_text: str, domain: str) -> Optional[str]:
+def _check_lock_a(
+    name_tokens: List[str], markers_text: str, domain: str,
+    opp: Optional[Any] = None, distinctive: bool = True,
+) -> Optional[str]:
     """Verrou A : "A1_content" (tous les tokens dans title/h1/og), sinon
-    "A2_domain" (cœur de domaine ~ tokens), sinon None."""
+    "A2_domain" (cœur de domaine ~ tokens), sinon None.
+
+    Durcissement 2026-07-18 — quand la raison sociale N'A AUCUN token distinctif
+    (``distinctive=False`` : 100 % métier / initiales, fiches 1986/2882/2733) :
+      - A1 (contenu) est DÉSACTIVÉ (les mots du métier présents sur tout site
+        d'archi ne prouvent rien) ;
+      - A2 (domaine) n'accepte PLUS le match tolérant sur tokens génériques
+        (« interieur » ~ ``pkinterieur``) : SEULE la marque DANS LE DOMAINE
+        (souche complète, :func:`_domain_matches_guess_stem`) vaut signal —
+        ``emdecoration.fr``/``pkinterieur.com`` passent, un domaine tiers non.
+    ``opp`` requis pour le cas non distinctif (souches de marque)."""
+    if not distinctive:
+        if opp is not None and _domain_matches_guess_stem(domain, opp):
+            return "A2_domain"
+        return None
     if name_tokens:
         marker_words = set(normalize_name(markers_text).split())
         if all(tok in marker_words for tok in name_tokens):
@@ -545,11 +605,32 @@ def _dirigeant_family_name(dirigeants: Optional[List[str]]) -> Optional[str]:
     return family if len(family) >= 3 else None
 
 
+def _dirigeant_signal_independent(opp: Any) -> bool:
+    """True si le signal « dirigeant » est INDÉPENDANT du signal de nom A.
+
+    Durcissement 2026-07-18 (fiche 2366 « MARION LAMBERT », dirigeante Marion
+    Lambert -> marionlambert.fr, interprète LSF homonyme à Angers) : quand la
+    RAISON SOCIALE recouvre lexicalement le nom du dirigeant (le nom de famille
+    du dirigeant est un token du nom d'établissement), le signal de nom (A) et la
+    corroboration « dirigeant » dérivent de la MÊME chaîne -> ce ne sont PAS deux
+    axes de preuve distincts. Le signal dirigeant ne compte alors PLUS (il faut
+    un cp/siren/siret vraiment indépendant). Pure."""
+    family = _dirigeant_family_name(getattr(opp, "dirigeants", None))
+    if not family:
+        return False
+    name_tokens = set(normalize_name(getattr(opp, "establishment_name", None) or "").split())
+    return family not in name_tokens
+
+
 def _check_lock_b(opp: Any, aggregated_text: str) -> List[str]:
     """Corroboration indépendante du nom : ville, code postal, nom de famille
     d'un dirigeant (texte agrégé normalisé) ; SIREN/SIRET (chiffres bruts,
     séparateurs supprimés, gardes de frontière). Sous-ensemble ordonné de
-    ``["ville", "cp", "dirigeant", "siren", "siret"]``."""
+    ``["ville", "cp", "dirigeant", "siren", "siret"]``.
+
+    Le signal « dirigeant » n'est retenu que s'il est INDÉPENDANT du nom
+    (:func:`_dirigeant_signal_independent`) : une raison sociale qui EST le nom
+    du dirigeant ne fournit pas deux preuves distinctes."""
     signals: List[str] = []
     normalized = normalize_name(aggregated_text)
     words = set(normalized.split())
@@ -563,7 +644,7 @@ def _check_lock_b(opp: Any, aggregated_text: str) -> List[str]:
         signals.append("cp")
 
     family = _dirigeant_family_name(getattr(opp, "dirigeants", None))
-    if family and family in words:
+    if family and family in words and _dirigeant_signal_independent(opp):
         signals.append("dirigeant")
 
     compact_digits = re.sub(r"[ .\-]", "", aggregated_text)
@@ -598,6 +679,85 @@ def _corroboration_ok(signals: List[str]) -> bool:
     if any(sig in _STRONG_B_SIGNALS for sig in signals):
         return True
     return len(set(signals)) >= 2
+
+
+# --------------------------------------------------------------------------- #
+# CONTRADICTION DURE — rejet immédiat (durcissement 2026-07-18).               #
+# Un identifiant d'immatriculation (SIREN/SIRET) LISIBLE et DIFFÉRENT, ou la   #
+# seule localité affichée en désaccord franc avec la fiche, prime sur tout le  #
+# reste : c'est une AUTRE société (fiche 2733 -> sb-designinterieur.com).      #
+# --------------------------------------------------------------------------- #
+
+# Numéro d'immatriculation LISIBLE : label SIREN/SIRET/RCS suivi (à courte
+# distance) d'un groupe de 9 à 14 chiffres (espaces/points tolérés).
+_SITE_REG_RE = re.compile(r"(?:siren|siret|rcs)\D{0,24}((?:\d[ .]?){9,14})", re.I)
+
+# Départements français plausibles (2 premiers chiffres d'un CP) : évite de
+# prendre un fragment de SIRET (« 00012 » -> dept « 00 ») pour un code postal.
+_VALID_DEPT_PREFIXES = frozenset(
+    [f"{d:02d}" for d in range(1, 96)] + ["97", "98", "20"])
+
+
+def _site_registration_sirens(text: str) -> set:
+    """SIREN (9 chiffres de tête) de TOUS les numéros d'immatriculation LISIBLES
+    (SIREN/SIRET/RCS) affichés sur le site. Pure."""
+    out: set = set()
+    for raw in _SITE_REG_RE.findall(text or ""):
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) >= 9:
+            out.add(digits[:9])
+    return out
+
+
+def _fiche_siren(opp: Any) -> Optional[str]:
+    """SIREN de la fiche : ``siren`` direct, sinon les 9 premiers chiffres du
+    ``siret``. None si aucun. Pure."""
+    siren = _only_digits(getattr(opp, "siren", None))
+    if siren and len(siren) >= 9:
+        return siren[:9]
+    siret = _only_digits(getattr(opp, "siret", None))
+    return siret[:9] if siret and len(siret) >= 9 else None
+
+
+def _registration_conflict(opp: Any, text: str) -> bool:
+    """True si le site affiche un SIREN/SIRET LISIBLE dont le SIREN diffère de
+    celui de la fiche : contradiction dure -> c'est une AUTRE société (fiche
+    2733). On compare sur le SIREN (9 chiffres) pour ne PAS rejeter un autre
+    établissement de la MÊME entreprise (même SIREN, NIC différent). Aucun SIREN
+    de fiche connu -> jamais de contradiction (rien à contredire). Pure."""
+    fiche = _fiche_siren(opp)
+    if not fiche:
+        return False
+    shown = _site_registration_sirens(text)
+    return bool(shown) and any(s != fiche for s in shown)
+
+
+def _locality_conflict(opp: Any, text: str) -> bool:
+    """True si la SEULE localité affichée contredit franchement la fiche : la
+    ville de la fiche est ABSENTE et TOUS les codes postaux plausibles du site
+    sont d'un autre DÉPARTEMENT que celui de la fiche (fiche 2366 : Angers 49 vs
+    Lyon 69). Conservateur : si la ville OU le bon département figure quelque
+    part, aucune contradiction (sites multi-agences tolérés). Pure."""
+    fiche_cp = _extract_postal_code(getattr(opp, "address", None))
+    if not fiche_cp:
+        return False
+    normalized = normalize_name(text or "")
+    city = normalize_name(getattr(opp, "city", None) or "")
+    if city and city in normalized:
+        return False
+    site_cps = [cp for cp in _CP_RE.findall(text or "") if cp[:2] in _VALID_DEPT_PREFIXES]
+    if not site_cps:
+        return False
+    if fiche_cp in site_cps:
+        return False
+    fiche_dept = fiche_cp[:2]
+    return all(cp[:2] != fiche_dept for cp in site_cps)
+
+
+def _hard_conflict(opp: Any, text: str) -> bool:
+    """Contradiction dure (immatriculation OU localité) : rejet immédiat du
+    candidat quel que soit le reste (durcissement 2026-07-18)."""
+    return _registration_conflict(opp, text) or _locality_conflict(opp, text)
 
 
 # --------------------------------------------------------------------------- #
@@ -686,6 +846,7 @@ def _aggregate_candidate_text(fetch: HtmlFetch, home_html: str, home_url: str) -
 
 def _inspect_candidate(
     fetch: HtmlFetch, url: str, domain: str, name_tokens: List[str], opp: Any,
+    name_distinctive: bool = True,
 ) -> Dict[str, Any]:
     """Fetch la HOME DU DOMAINE RACINE (pas la page profonde renvoyée par DDG)
     + ses pages contact/mentions, et calcule A et B INDÉPENDAMMENT (traçabilité
@@ -701,12 +862,21 @@ def _inspect_candidate(
     home_html, home_url = _fetch_home_via(fetch, root_url)
     if home_html is None:
         return {"domain": domain, "a_pass": False, "name_signal": None,
-                "b_signals": [], "c_pass": False, "title": "", "home_alive": False}
+                "b_signals": [], "c_pass": False, "title": "", "home_alive": False,
+                "home_secure": True, "hard_conflict": False}
 
-    name_signal = _check_lock_a(name_tokens, extract_identity_markers(home_html), domain)
+    # Home servie sur https (certificat valide) vs repli http (durcissement
+    # 2026-07-18, fiche 2690 antoine-fabre.fr parqué) : ``home_url_variants``
+    # tente https EN PREMIER ; si le certificat échoue, ``fetch`` rend None et
+    # seule une variante http répond -> home réputée NON sûre.
+    home_secure = urlparse(home_url).scheme == "https"
+    name_signal = _check_lock_a(
+        name_tokens, extract_identity_markers(home_html), domain,
+        opp=opp, distinctive=name_distinctive)
     aggregated = _aggregate_candidate_text(fetch, home_html, home_url)
     b_signals = _check_lock_b(opp, aggregated)
     c_pass = _check_lock_c(opp, aggregated, b_signals)
+    hard_conflict = _hard_conflict(opp, aggregated)
 
     return {
         "domain": domain,
@@ -716,6 +886,8 @@ def _inspect_candidate(
         "c_pass": c_pass,
         "title": _extract_title(home_html),
         "home_alive": True,
+        "home_secure": home_secure,
+        "hard_conflict": hard_conflict,
     }
 
 
@@ -843,16 +1015,16 @@ _MAX_GUESS_CANDIDATES = 10
 _GUESS_TLDS = ("fr", "com")
 
 
-def _guess_domains(opp: Any) -> List[str]:
-    """Domaines candidats DEVINÉS (sans moteur) depuis le nom normalisé et le nom
-    complet du dirigeant : pour chaque « souche » (2 premiers tokens, puis nom
-    entier ; prénom + nom du dirigeant), on produit la concaténation
-    (``emdecoration``) et la forme tiret (``em-decoration``), croisées avec
-    ``.fr`` et ``.com``. Ordre déterministe, dédupliqué, borné à
-    :data:`_MAX_GUESS_CANDIDATES`. Les tokens de longueur 2 sont GARDÉS (``em``,
-    ``pk`` portent la marque), contrairement à ``significant_tokens`` ; une souche
-    de moins de 4 caractères est rejetée (domaine trop générique). Chaque domaine
-    rendu sera fetché puis passé au verrou d'identité INCHANGÉ."""
+def _name_stems(opp: Any) -> List[str]:
+    """Souches de MARQUE dérivées du nom normalisé et du nom complet du dirigeant
+    (2 premiers tokens, puis nom entier ; prénom + nom du dirigeant), en forme
+    concaténée (``emdecoration``) ET tiret (``em-decoration``). Les tokens de
+    longueur 2 sont GARDÉS (``em``, ``pk``, ``md`` portent la marque),
+    contrairement à ``significant_tokens`` ; une souche < 4 caractères est
+    rejetée (trop générique). Ordre déterministe, dédupliqué. PARTAGÉ entre la
+    devinette de domaine (:func:`_guess_domains`) et le test « marque DANS LE
+    DOMAINE » du verrou A pour les noms non distinctifs
+    (:func:`_domain_matches_guess_stem`, durcissement 2026-07-18)."""
     stems: List[str] = []
     seen_stems: set = set()
 
@@ -875,8 +1047,46 @@ def _guess_domains(opp: Any) -> List[str]:
     if len(dir_tokens) >= 2:
         _add_stem(dir_tokens[:2])    # prénom + nom : « catherine lassalle » -> catherinelassalle
 
+    return stems
+
+
+def _domain_matches_guess_stem(domain: Optional[str], opp: Any) -> bool:
+    """A2 « marque DANS LE DOMAINE » pour les noms NON distinctifs (durcissement
+    2026-07-18). Le cœur du domaine correspond-il à une SOUCHE de marque
+    (:func:`_name_stems`) ? Match STRICT : égalité exacte du cœur, OU souche = un
+    SEGMENT complet du domaine, OU distance ``difflib`` >= 0.90 (bien plus serrée
+    que le 0.85 de :func:`_domain_matches_name`, réservé aux noms distinctifs).
+
+    C'est le SEUL signal de nom laissé aux raisons sociales 100 % génériques :
+    ``emdecoration.fr`` (593) / ``pkinterieur.com`` (1554) matchent leur souche
+    ``emdecoration`` / ``pkinterieur`` ; en revanche un site d'un AUTRE studio
+    (``alexiabequin.com`` pour « ARCHITECTURE INTERIEUR », ``margaux-chiarella``
+    pour « MD INTERIOR DESIGN ») n'embarque PAS la souche -> aucun match, le nom
+    reste sans signal (seules voies C/D peuvent alors attribuer)."""
+    if not domain:
+        return False
+    core = _domain_core(domain)
+    if not core:
+        return False
+    segments = set(_domain_segments(domain))
+    for stem in _name_stems(opp):
+        s = re.sub(r"[^a-z0-9]", "", stem)
+        if not s:
+            continue
+        if s == core or s in segments:
+            return True
+        if difflib.SequenceMatcher(None, s, core).ratio() >= 0.90:
+            return True
+    return False
+
+
+def _guess_domains(opp: Any) -> List[str]:
+    """Domaines candidats DEVINÉS (sans moteur) depuis les souches de marque
+    (:func:`_name_stems`), croisées avec ``.fr`` et ``.com``. Ordre déterministe,
+    dédupliqué, borné à :data:`_MAX_GUESS_CANDIDATES`. Chaque domaine rendu sera
+    fetché puis passé au verrou d'identité INCHANGÉ."""
     domains: List[str] = []
-    for stem in stems:
+    for stem in _name_stems(opp):
         for tld in _GUESS_TLDS:
             domains.append(f"{stem}.{tld}")
             if len(domains) >= _MAX_GUESS_CANDIDATES:
@@ -884,18 +1094,42 @@ def _guess_domains(opp: Any) -> List[str]:
     return domains
 
 
+# Signaux acceptables pour attribuer sur une home NON SÛRE (repli http /
+# certificat suspect, durcissement 2026-07-18) : jamais « ville »/« cp » seuls,
+# uniquement immatriculation ou dirigeant INDÉPENDANT (déjà gaté côté B).
+_INSECURE_OK_SIGNALS = frozenset({"dirigeant", "siren", "siret"})
+
+
 def _candidate_verdict(info: Dict[str, Any]) -> "tuple[bool, Optional[str]]":
     """Décision d'attribution pour UN candidat inspecté, PARTAGÉE entre la
     devinette de domaine et la cascade de moteurs (aucune divergence de verrou) :
-    ``(attribué?, name_signal)``. Home racine morte -> jamais. Sinon voie A+B
-    (nom validé ET corroboration suffisante, « ville » seule exclue) puis voie C
-    (nom complet du dirigeant + signal fort géo/immat)."""
+    ``(attribué?, name_signal)``.
+
+    Ordre (durcissement 2026-07-18) :
+      1. home racine MORTE -> jamais ;
+      2. CONTRADICTION DURE (SIREN/SIRET lisible ≠, ou localité en désaccord) ->
+         rejet immédiat quel que soit le reste (fiche 2733) ;
+      3. home NON SÛRE (repli http / certificat suspect, fiche 2690) -> exiger un
+         signal FORT (siren/siret/dirigeant indépendant), jamais ville/cp seuls ;
+      4. voie A+B (nom validé ET corroboration suffisante, « ville » seule
+         exclue) ;
+      5. voie C (nom complet du dirigeant indépendant + signal fort géo/immat) ;
+      6. voie D (SIREN/SIRET PROPRE de la fiche en mentions légales) : identifiant
+         unique, attribue même quand le nom est générique (signal A nul)."""
     if not info.get("home_alive"):
         return False, None
-    if info["a_pass"] and _corroboration_ok(info["b_signals"]):
+    if info.get("hard_conflict", False):
+        return False, None
+    b_signals = info["b_signals"]
+    if not info.get("home_secure", True) and not any(
+            sig in _INSECURE_OK_SIGNALS for sig in b_signals):
+        return False, None
+    if info["a_pass"] and _corroboration_ok(b_signals):
         return True, info["name_signal"]
     if info.get("c_pass", False):
         return True, "C_dirigeant"
+    if "siren" in b_signals or "siret" in b_signals:
+        return True, "D_immat"
     return False, None
 
 
@@ -971,6 +1205,13 @@ def find_site(
     any_muted = False       # >= 1 requête muette (202/défi/vide) -> garde de cache
     try:
         name_tokens = significant_tokens(name)
+        # Signal de NOM sur CONTENU (A1) réputé NUL quand la raison sociale n'a
+        # AUCUN token distinctif (100 % métier / initiales — fiches 1986/2882/
+        # 2733, durcissement 2026-07-18) : les mots du métier présents sur
+        # N'IMPORTE QUEL site d'archi ne prouvent rien. Seuls restent alors la
+        # marque DANS LE DOMAINE (A2 souche, brand-in-domain), la voie C et la
+        # voie D. Flag propagé au verrou.
+        name_distinctive = _has_distinctive_token(name)
         seen_domains: set = set()
 
         # 1) DEVINETTE DE DOMAINE (avant tout moteur). Chaque domaine deviné
@@ -984,7 +1225,7 @@ def find_site(
             domain = _domain(clean)
             if not domain or domain in seen_domains:
                 continue
-            info = _inspect_candidate(fetch, clean, domain, name_tokens, opp)
+            info = _inspect_candidate(fetch, clean, domain, name_tokens, opp, name_distinctive)
             if not info.get("home_alive"):
                 continue
             seen_domains.add(domain)
@@ -1018,7 +1259,7 @@ def find_site(
                 seen_domains.add(domain)
                 result.candidates.append(domain)
 
-                info = _inspect_candidate(fetch, clean, domain, name_tokens, opp)
+                info = _inspect_candidate(fetch, clean, domain, name_tokens, opp, name_distinctive)
                 result.inspected.append(info)
                 # Attribution seulement si la home racine est vivante (A/C
                 # calculés dessus) ET l'une des deux voies d'identité passe :

@@ -659,3 +659,103 @@ search_served`) — réessayable, sans jamais affaiblir une ATTRIBUTION.
   domaine (593/1554 par devinette, 1518 par requête citée + verrou A1+B-cp).
 
 Suite complète : **749 tests, 100 % verts.**
+
+---
+
+## 10. Durcissement post-gate 2026-07-18 (`_ENGINE_VERSION` 2 → 3)
+
+### 10.1 Diagnostic
+
+Un **gate adverse réel** (échantillon annoté) a compté **5 attributions fausses
+sur 42 → 88 % de précision**, sous le standard exigé de **98,6 %**. Cinq familles
+de faux positifs contournaient encore le verrou. Chaque cas réel devient un test
+adverse (`tests/test_site_finder_adverse.py`, section « DURCISSEMENT POST-GATE DU
+2026-07-18 ») écrit AVANT le fix. La doctrine VIDE > FAUX est renforcée, jamais
+affaiblie ; `_ENGINE_VERSION` passe à **3** (invalide tous les verdicts en cache,
+les ~faux « found » de l'ère v2 sont re-jugés).
+
+### 10.2 Les 5 faux et leurs correctifs
+
+1. **Fiche 2366 « MARION LAMBERT ARCHITECTURE ET DESIGN » (Lyon)** →
+   `marionlambert.fr` = interprète LSF homonyme à **Angers**. La raison sociale
+   PORTE le nom de la dirigeante (« Marion Lambert ») : le signal de NOM (A) et la
+   corroboration « dirigeant » (B) dérivent de la **même chaîne** — ils ne sont
+   PAS indépendants. **Fix** : `_dirigeant_signal_independent(opp)` — quand le nom
+   de famille du dirigeant est un token de la raison sociale, le signal
+   « dirigeant » ne compte PLUS dans `_check_lock_b` (exiger un cp/siren/siret
+   vraiment indépendant). Renforcé par la contradiction de localité (§ point 5).
+
+2. **Fiche 2690 → `antoine-fabre.fr`** : domaine **parqué/détourné** (certificat
+   TLS d'un autre organisme). `home_url_variants` tente https EN PREMIER ; le
+   certificat échoue (`requests` lève → `fetch` rend None) et seule une variante
+   **http** répond → home servie en repli http. **Fix** : `_inspect_candidate`
+   expose `home_secure` (= scheme https de l'URL qui a répondu) ; sur une home
+   NON sûre, `_candidate_verdict` exige un signal FORT (`siren`/`siret`/dirigeant
+   indépendant, `_INSECURE_OK_SIGNALS`), **jamais ville/CP seuls**.
+
+3. **Fiche 1986 « ARCHITECTURE INTERIEUR » (Bordeaux)** → `alexiabequin.com`
+   (portfolio d'une AUTRE architecte). Raison sociale **100 % générique** (tokens
+   du métier) : A1 (contenu) matchait les mots « architecture d'intérieur »
+   présents sur N'IMPORTE QUEL site d'archi. **Fix** : lexique métier
+   `_GENERIC_TOKENS` étendu (variantes anglaises `interior`/`design`, `concept`,
+   `home`, `maison`, `decor`…) + `_has_distinctive_token(name)`. Sans token
+   distinctif (hors lexique, len ≥ 3), **A1 est désactivé** et **A2 n'accepte plus
+   le match tolérant sur tokens génériques** : seul reste A2 « **marque DANS LE
+   DOMAINE** » (`_domain_matches_guess_stem` — souche complète, ratio ≥ 0,90),
+   plus la voie C ou la voie D (ci-dessous). `alexiabequin.com` n'embarque pas la
+   souche → non attribué.
+
+4. **Fiche 2882 « MD INTERIOR DESIGN » (Le Cannet)** → site d'une Margaux
+   Chiarella. Même famille que 3 : **initiales** « MD » (len 2, ignorée) + tokens
+   génériques → aucun token distinctif → même fix (A1 nul, A2 réduit à la marque
+   dans le domaine). « MD » ne suffit pas ; le domaine tiers n'embarque pas la
+   souche → non attribué.
+
+5. **Fiche 2733 « INTERIEUR CONCEPT DESIGN » (Antibes)** →
+   `sb-designinterieur.com` : autre société, **SIRET DIFFÉRENT affiché en clair**.
+   **Fix (contradiction dure)** : `_registration_conflict` — si le site affiche un
+   SIREN/SIRET LISIBLE (label `SIREN`/`SIRET`/`RCS` + 9-14 chiffres) dont le SIREN
+   (9 chiffres de tête) diffère de celui de la fiche → **REJET IMMÉDIAT** quel que
+   soit le reste (comparaison sur le SIREN pour ne pas rejeter un autre
+   établissement de la MÊME entreprise). Idem si la SEULE localité affichée est
+   d'un autre département et que la ville de la fiche est absente
+   (`_locality_conflict` — Angers 49 vs Lyon 69 du cas 1). Fusionnés dans
+   `_hard_conflict`, prioritaire sur toute voie d'attribution.
+
+### 10.3 Nouvelle voie D — SIREN/SIRET propre en mentions légales
+
+Contrepartie POSITIVE de la nullification du nom générique (§ points 3-4) : un
+SIREN/SIRET est un **identifiant unique**. Si le SIREN/SIRET PROPRE de la fiche
+figure dans le texte agrégé (mentions légales), `_candidate_verdict` attribue
+(`name_signal="D_immat"`) **même sans signal de nom** — après A+B et voie C, et
+seulement en l'ABSENCE de contradiction dure. Sûr : les agrégateurs sont écartés
+en amont (`own_site`) ; un SIREN à 9 chiffres coïncidant par hasard est
+improbable (gardes de frontière de `_check_lock_b`).
+
+### 10.4 Ordre de décision (`_candidate_verdict`)
+
+1. home racine morte → jamais ; 2. **contradiction dure** (`hard_conflict`) →
+rejet ; 3. home **non sûre** sans signal fort → rejet ; 4. **A+B** (nom validé,
+corroboration suffisante) ; 5. **voie C** (dirigeant complet indépendant + fort
+géo/immat) ; 6. **voie D** (SIREN/SIRET propre en mentions).
+
+### 10.5 Recall préservé (5 positifs de référence INCHANGÉS)
+
+`emdecoration.fr` (593), `pkinterieur.com` (1554), `catherinelassalle.fr` (1518,
+voie C), + fixtures nominales : tous restent `found` SANS modification de leurs
+assertions. 593/1554 ont un nom générique mais leur **marque est dans le domaine**
+(`emdecoration`/`pkinterieur` = souche) → A2 « marque dans le domaine » les sauve
+(pas besoin de la voie D). Test de garde `test_route_d_generic_name_with_own_siren`
+protège la voie D.
+
+### 10.6 Tests + validation LIVE
+
+- `test_site_finder_adverse.py` (+9) : indépendance dirigeant, home http/cert
+  → signal fort exigé, `_has_distinctive_token`, nom générique non attribué (1986/
+  2882), contradiction SIREN/SIRET (rejet dur), voie D (garde de rappel).
+- **Validation LIVE** (réseau réel, LECTURE SEULE base principale, cache sur base
+  temporaire — patron `repechage_verify`) : `find_site` rejoué sur 2366/1986/2733/
+  2882 → les QUATRE sortent verdict ≠ `found` (vide plutôt que faux) ; sur 593/
+  1554 → toujours `found` avec le bon domaine.
+
+Suite complète : **960 tests, 100 % verts.**
