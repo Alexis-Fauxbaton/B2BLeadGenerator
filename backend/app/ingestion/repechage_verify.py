@@ -11,18 +11,20 @@ Ce module les VERIFIE un par un :
      (`enrichment.site_finder.find_site` -- verrou d'identite gate, devinette
      de domaine, dirigeants -- importe seulement, jamais modifie ni reecrit) ;
   2. si un site est trouve, MARQUEURS INTERIEUR sur son CONTENU
-     (`evaluate_site_content`) : reutilise les gardes negatives dures de
-     `jeunes_studios.qualifies` v2 (`HARD_NEG` -- design graphique/produit,
-     evenementiel, maroquinerie...) ETENDUES de deux familles propres au
-     CONTENU d'un site (absentes du filtre de DENOMINATION, car le 71.11Z est
-     deja hors-cible en amont, cf. `repechage_scan`, mais un site peut le
-     reveler alors que le nom seul 74.10Z ne le disait pas) : paysagisme
-     (« architecte paysagiste », metier adjacent) et architecture BATIMENT
-     pure (« permis de construire », « maison individuelle »). Exige ENSUITE
-     >= 1 marqueur POSITIF (`jeunes_studios.INTERIOR_MARKERS`, reutilise TEL
-     QUEL -- interieur/interior/home/espace/archi) dans le texte agrege
-     title/h1/og:site_name (`site_finder.extract_identity_markers`, reutilise)
-     + meta description + texte visible de la HOME DU DOMAINE RACINE ;
+     (`evaluate_site_content`) : REFONTE 2026-07-18 apres un gate adverse reel
+     (1 faux `confirme` + 8 faux `infirme` sur 21). On exige >= 1 LOCUTION FORTE
+     du metier (`SITE_POSITIVE_MARKERS` -- « architecture d'interieur »,
+     « decoration d'interieur », « home staging »...) dans le texte NORMALISE
+     (accents ET apostrophes replies) agrege title/h1/og:site_name
+     (`site_finder.extract_identity_markers`, reutilise) + TOUS les
+     `<meta content>` (og:description/og:image:alt) + texte visible de la HOME
+     RACINE ET de 1-2 pages internes (a-propos/prestations/projets). Une
+     LOCUTION est a la fois la preuve positive ET la garde contre les metiers
+     adjacents (fabrication, 3D, design graphique, paysagisme) : plus de garde
+     negative en SOUS-CHAINE (elle rejetait a tort les vrais studios sur
+     « emotion »/`motion`, « permis de construire », « communication »...) ni de
+     token isole (« home » d'un menu suffisait au faux confirme NAA STUDIO,
+     marque serbe de lampes) ;
   3. verdict stocke dans le MEME magasin separe (`AmbiguStore.save_verdict`,
      table `verify_verdicts`, cf. `repechage_scan.py`) :
        - `confirme` : site trouve ET marqueur(s) interieur present(s) ;
@@ -81,7 +83,6 @@ from typing import Any, Dict, List, Optional
 from sqlmodel import Session, SQLModel, create_engine
 
 from ..models import HandleVerdict
-from . import jeunes_studios as js
 from .enrichment.site_finder import (
     HtmlFetch,
     _domain,
@@ -90,29 +91,70 @@ from .enrichment.site_finder import (
     extract_identity_markers,
     find_site,
 )
+from .enrichment.website_scraper import _PAGE_CAP
 from .repechage_scan import AmbiguRecord, AmbiguStore, DEFAULT_STORE_PATH
 
 DEFAULT_CACHE_PATH = "data/repechage_cache.db"
 
 # --- Marqueurs de CONTENU de site (distincts des marqueurs de DENOMINATION -----
-#     de `repechage_scan`/`jeunes_studios`, meme doctrine VIDE > FAUX) ---------
+#     de `repechage_scan`/`jeunes_studios`) -----------------------------------
+#
+# REFONTE 2026-07-18 (gate adverse reel : 1 faux `confirme` + 8 faux `infirme`
+# sur 21 verdicts). L'ancien detecteur reutilisait `jeunes_studios.
+# INTERIOR_MARKERS` (tokens ISOLES interieur/interior/home/espace/archi) filtres
+# par une garde negative `HARD_NEG` en SOUS-CHAINE sur tout le texte visible.
+# DEUX defauts symetriques constates :
+#
+#   1. FAUX CONFIRME (precision) : un token isole matche hors-cible. « NAA!
+#      STUDIO » (Marseille) a ete confirme sur naa-studio.com -- une marque SERBE
+#      de lampes ceramique -- parce que le lien de nav « Home » suffisait au
+#      marqueur `home`. Un mot de menu banal n'est PAS une preuve d'archi
+#      d'interieur.
+#   2. FAUX INFIRMES (rendement) : la garde `HARD_NEG` en sous-chaine, pensee
+#      pour des DENOMINATIONS courtes, s'auto-declenche sur le texte ENTIER d'un
+#      vrai studio -- « emotion » contient `motion`, « fleuristes » contient
+#      `fleur`, un studio qui aide au « permis de construire » ou fait de la
+#      « communication »/« evenementiel » etait rejete alors qu'il affiche
+#      « architecture d'interieur ».
+#
+# Nouveau detecteur : un LEXIQUE de LOCUTIONS DISCRIMINANTES (multi-mots), et
+# la CONFIRMATION exige >= 1 locution presente. Une locution comme
+# « architecture d'interieur » / « decoration d'interieur » / « home staging »
+# est intrinsequement specifique du metier : un site de fabrication (dpdesign),
+# de 3D (mooka3d), de design graphique (frappe) ou de lampes (naa) ne l'emploie
+# pas. La garde `HARD_NEG` en sous-chaine est donc SUPPRIMEE (elle ne protegeait
+# plus rien que le lexique fort ne protege deja, et causait les 8 faux infirmes)
+# -- doctrine VIDE > FAUX conservee : sans locution forte, VIDE (`infirme`),
+# jamais un faux `confirme` sur un token ambigu isole.
 
-# Gardes negatives DURES sur le CONTENU du site : reutilise TEL QUEL
-# `jeunes_studios.HARD_NEG` (design graphique/produit, evenementiel,
-# maroquinerie, jeu video...) + deux familles propres au CONTENU (jamais
-# necessaires au niveau DENOMINATION puisque le 71.11Z est deja hors-cible en
-# amont, cf. `repechage_scan` -- mais un site peut reveler une architecture
-# BATIMENT pure ou un paysagisme que le nom seul 74.10Z ne disait pas).
-SITE_HARD_NEG = js.HARD_NEG + (
-    "graphik",  # variante orthographique de "graphic"/"graphique" (absente de HARD_NEG)
-    "paysagiste", "paysager", "architecture paysagere", "architecte paysagiste",
-    "permis de construire", "maison individuelle", "maitre d oeuvre batiment",
+# Marqueurs POSITIFS FORTS (forme NORMALISEE : minuscules, accents retires,
+# ponctuation/apostrophes -> espaces, cf. `_norm_markers`). Chaque entree est
+# une LOCUTION du metier archi/decoration d'INTERIEUR, choisie pour ne PAS
+# matcher les metiers adjacents (paysagisme « amenagement d'espaces exterieurs »,
+# fabrication, 3D, design graphique). Volontairement PAS de token isole
+# (« interieur »/« home »/« espace »/« archi » seuls) : c'est le vecteur du faux
+# confirme NAA.
+SITE_POSITIVE_MARKERS = (
+    "architecture d interieur", "architecture interieure", "architectures interieures",
+    "architecte d interieur", "architecte interieur", "architectes d interieur",
+    "architecte decorateur", "architecte decoratrice",
+    "decoration d interieur", "decoration interieure", "decorations interieures",
+    "decorateur d interieur", "decoratrice d interieur",
+    "design d interieur", "designer d interieur", "designer interieur",
+    "amenagement d interieur", "amenagement interieur", "amenagements interieurs",
+    "agencement d interieur", "agencement interieur",
+    "home staging", "relooking deco", "relooking d interieur", "relooking interieur",
+    # Locutions ANGLAISES de ROLE/discipline (certains vrais studios sont
+    # anglophones : aethosdesign.fr « interior architect », elliepeugeot.com
+    # « interior designer »). Volontairement le ROLE/la discipline complets, PAS
+    # le « interior design » NU : un fabricant/entrepreneur qui travaille POUR
+    # des projets de « interior design » l'emploie (contre-garde
+    # dpdesignandfabrication.com, San Francisco, « design fabrication
+    # construction contractor ») -- il ne se dit jamais « interior designer/
+    # architect ».
+    "interior designer", "interior architect", "interior architecture",
+    "interior decorator",
 )
-
-# Marqueurs POSITIFS : reutilise TEL QUEL `jeunes_studios.INTERIOR_MARKERS`
-# (interieur/interior/home/espace/archi) -- meme doctrine, meme constante,
-# jamais reecrite.
-SITE_POSITIVE_MARKERS = js.INTERIOR_MARKERS
 
 # Groupe (1) = le guillemet OUVRANT (simple ou double), reutilise en
 # back-reference pour fermer l'attribut : une apostrophe FRANCAISE dans le
@@ -124,8 +166,15 @@ _META_DESC_RE = re.compile(
     r'<meta[^>]+name=["\']description["\'][^>]+content=(["\'])(.*?)\1', re.I)
 _META_DESC_RE2 = re.compile(
     r'<meta[^>]+content=(["\'])(.*?)\1[^>]+name=["\']description["\']', re.I)
+# TOUT attribut ``content`` de balise <meta> (og:description, og:image:alt,
+# keywords...) : le texte SEO d'un studio vit souvent la (cas reel
+# accord-conception.fr, en maintenance, dont la seule mention « architecture
+# interieure » est dans un ``og:image:alt``).
+_META_ANY_RE = re.compile(r'<meta[^>]+content=(["\'])(.*?)\1', re.I)
 _SCRIPT_STYLE_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.I | re.S)
 _TAG_RE = re.compile(r"<[^>]+>")
+_PUNCT_RE = re.compile(r"[^a-z0-9]+")
+_MULTI_SPACE_RE = re.compile(r"\s+")
 _TEXT_CAP = 20000  # plafond raisonnable (home lourde), evite un texte demesure
 
 
@@ -134,6 +183,14 @@ def _norm(text: Optional[str]) -> str:
     (convention du repo : petit helper prive re-decline par module)."""
     t = unicodedata.normalize("NFD", (text or "").lower())
     return "".join(c for c in t if unicodedata.category(c) != "Mn")
+
+
+def _norm_markers(text: Optional[str]) -> str:
+    """Normalisation pour la CORRESPONDANCE de LOCUTIONS : minuscules, accents
+    retires (`_norm`), puis toute ponctuation/apostrophe repliee en espace unique
+    (l'apostrophe francaise « d'interieur » devient un espace, comme dans les
+    entrees de :data:`SITE_POSITIVE_MARKERS`). PURE."""
+    return _MULTI_SPACE_RE.sub(" ", _PUNCT_RE.sub(" ", _norm(text))).strip()
 
 
 def _visible_text(html: Optional[str]) -> str:
@@ -156,46 +213,116 @@ def _meta_description(html: Optional[str]) -> str:
     return _html_unescape(m.group(2)) if m else ""
 
 
+def _meta_contents(html: Optional[str]) -> str:
+    """Concatenation de TOUS les attributs ``content`` de balises <meta>
+    (og:description, og:image:alt, keywords...). Le texte SEO d'un studio y vit
+    souvent quand la home est pauvre ou en maintenance (cf. :data:`_META_ANY_RE`).
+    PURE."""
+    if not html:
+        return ""
+    return " ".join(_html_unescape(m.group(2)) for m in _META_ANY_RE.finditer(html))
+
+
 def _aggregate_site_text(html: Optional[str]) -> str:
     """Texte agrege d'une page (title + h1 + og:site_name via
-    `site_finder.extract_identity_markers`, reutilise TEL QUEL, + meta
-    description + texte visible) -- passe a :func:`evaluate_site_content`.
-    PURE."""
+    `site_finder.extract_identity_markers`, reutilise TEL QUEL, + TOUS les
+    attributs `<meta content>` + texte visible) -- passe a
+    :func:`evaluate_site_content`. PURE."""
     if not html:
         return ""
     return " ".join((
         extract_identity_markers(html),
-        _meta_description(html),
+        _meta_contents(html),
         _visible_text(html),
     ))
 
 
 def evaluate_site_content(aggregated_text: str) -> "tuple[bool, List[str]]":
-    """True + marqueurs positifs trouves si le texte agrege d'un site parle
-    d'ARCHITECTURE/DECORATION D'INTERIEUR. False (marqueurs vides) si une garde
-    negative (:data:`SITE_HARD_NEG`) est presente -- MEME en presence d'un
-    marqueur positif (VIDE > FAUX, meme precedence que `jeunes_studios.
-    qualifies` : le negatif l'emporte toujours). Sinon True SEULEMENT si >= 1
-    marqueur de :data:`SITE_POSITIVE_MARKERS` co-occurre. PURE."""
-    n = _norm(aggregated_text)
-    if any(neg in n for neg in SITE_HARD_NEG):
-        return False, []
+    """True + locutions trouvees si le texte agrege d'un site parle
+    d'ARCHITECTURE/DECORATION D'INTERIEUR : True SSI >= 1 LOCUTION FORTE de
+    :data:`SITE_POSITIVE_MARKERS` est presente dans le texte NORMALISE
+    (`_norm_markers` : accents ET ponctuation/apostrophes replies -> « d'interieur »
+    matche « d interieur »). PURE.
+
+    REFONTE 2026-07-18 (cf. bloc de constantes) : plus de garde negative en
+    sous-chaine (elle rejetait a tort les vrais studios sur « emotion »/`motion`,
+    « fleuriste »/`fleur`, « permis de construire », « communication »...), et
+    plus de token isole (« home » d'un menu suffisait au faux confirme NAA). Une
+    LOCUTION du metier est a la fois la preuve positive ET, par sa specificite,
+    la garde contre les metiers adjacents -- doctrine VIDE > FAUX conservee :
+    aucune locution -> VIDE (`infirme`), jamais un faux confirme."""
+    n = _norm_markers(aggregated_text)
     found = [m for m in SITE_POSITIVE_MARKERS if m in n]
     return (len(found) > 0), found
+
+
+# Liens de la home menant vraisemblablement a une page « a-propos / prestations /
+# projets » (la ou un studio developpe son metier). Sert a scanner 1-2 pages
+# internes EN PLUS de la home (le marqueur peut n'y figurer que la).
+_INTERNAL_LINK_RE = re.compile(
+    r"propos|about|prestation|service|projet|project|realisation|work|"
+    r"savoir[-_ ]?faire|expertise|metier|studio|agence|demarche|approche|"
+    r"qui[-_ ]?sommes",
+    re.I,
+)
+_MAX_INTERNAL_PAGES = 2
+_HREF_RE = re.compile(r'<a\b[^>]*?\bhref\s*=\s*["\']([^"\'>]+)["\']', re.I)
+
+
+def _internal_page_urls(home_html: Optional[str], domain: str) -> List[str]:
+    """URLs de pages internes (a-propos/prestations/projets...) decouvertes
+    dans les liens de la home, restreintes au DOMAINE RACINE, dedupliquees,
+    bornees a :data:`_MAX_INTERNAL_PAGES`. Home elle-meme exclue. PURE."""
+    if not home_html:
+        return []
+    out: List[str] = []
+    seen: set = set()
+    for href in _HREF_RE.findall(home_html):
+        href = href.strip()
+        if not href or not _INTERNAL_LINK_RE.search(href):
+            continue
+        if href.startswith(("mailto:", "tel:", "javascript:", "#")):
+            continue
+        if href.startswith("/"):
+            url = "https://" + domain + href
+        elif href.startswith("http"):
+            if _domain(href) != domain:
+                continue  # jamais un lien sortant (reseau social, annuaire...)
+            url = href
+        else:
+            url = "https://" + domain + "/" + href
+        key = url.split("#")[0].rstrip("/")
+        if key in seen or _domain(url) != domain:
+            continue
+        seen.add(key)
+        out.append(url)
+        if len(out) >= _MAX_INTERNAL_PAGES:
+            break
+    return out
 
 
 def _fetch_website_text(fetch: HtmlFetch, website: str) -> Optional[str]:
     """Re-fetch la HOME DU DOMAINE RACINE du site attribue par `find_site`
     (meme patron que `site_finder._inspect_candidate`, reutilise
-    `_fetch_home_via` -- jamais reecrit) et l'agrege pour
-    :func:`evaluate_site_content`. None si le domaine est illisible ou si la
-    home ne repond plus au re-fetch (VIDE > FAUX -- verdict `sans_site`,
-    REESSAYABLE, jamais `infirme` sur une simple panne reseau)."""
+    `_fetch_home_via` -- jamais reecrit) PLUS 1-2 pages internes
+    (a-propos/prestations/projets, cf. :func:`_internal_page_urls`) et agrege le
+    tout pour :func:`evaluate_site_content` -- un vrai studio peut ne developper
+    son metier que sur une page interne. None si le domaine est illisible ou si
+    la home ne repond plus au re-fetch (VIDE > FAUX -- verdict `sans_site`,
+    REESSAYABLE, jamais `infirme` sur une simple panne reseau ; une page interne
+    muette est simplement ignoree, elle ne fait jamais echouer la home)."""
     domain = _domain(website)
     if not domain:
         return None
-    html, _ = _fetch_home_via(fetch, "https://" + domain + "/")
-    return _aggregate_site_text(html) if html else None
+    home_html, _ = _fetch_home_via(fetch, "https://" + domain + "/")
+    if not home_html:
+        return None
+    parts = [_aggregate_site_text(home_html)]
+    for page_url in _internal_page_urls(home_html, domain):
+        page_html = fetch(page_url)
+        if page_html:
+            parts.append(_aggregate_site_text(page_html[:_PAGE_CAP]))
+    return " ".join(parts)
 
 
 @dataclass

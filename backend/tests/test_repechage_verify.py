@@ -100,14 +100,28 @@ def test_evaluate_site_content_positive_marker_confirms():
         "Garrigos Design — Architecture d'intérieur à Lyon, agencement sur-mesure"
     )
     assert ok is True
-    assert "interieur" in markers or "archi" in markers
+    # Marqueurs = LOCUTIONS FORTES (accents/apostrophes replies), pas un token isole.
+    assert "architecture d interieur" in markers
 
 
-def test_evaluate_site_content_hard_neg_wins_even_with_positive_marker():
-    # "graphique" (HARD_NEG) + "interieur" (positif) co-occurrent -> le negatif
-    # l'emporte (VIDE > FAUX, meme precedence que jeunes_studios.qualifies).
+def test_evaluate_site_content_strong_locution_confirms_despite_adjacent_word():
+    # REFONTE 2026-07-18 : « graphique » n'est PLUS une garde negative en
+    # sous-chaine (elle rejetait a tort de vrais studios qui mentionnent une
+    # activite adjacente). Une LOCUTION FORTE d'archi d'interieur confirme meme
+    # a cote du mot « graphique » (cas reel studio-optimiste.fr : « pieces
+    # graphiques » + « architecture d'interieur »).
     ok, markers = evaluate_site_content(
         "Studio de design graphique et d'architecture d'intérieur"
+    )
+    assert ok is True
+    assert "architecture d interieur" in markers
+
+
+def test_evaluate_site_content_isolated_token_home_does_not_confirm():
+    # DEFAUT 1 (faux confirme NAA STUDIO) : un « Home » de menu, ou « interior »
+    # isole dans un contexte produit, ne suffit PLUS -- il faut une LOCUTION.
+    ok, markers = evaluate_site_content(
+        "naa studio | unique handmade ceramic lamps  Home  art  modernity  interior"
     )
     assert ok is False
     assert markers == []
@@ -188,7 +202,7 @@ def test_verify_ambigu_confirms_when_site_found_with_interior_markers():
     assert result.site_finder_verdict == "found"
     assert result.verdict == "confirme"
     assert result.website == "https://garrigosinterieur.fr/"
-    assert "interieur" in result.marqueurs
+    assert "architecture d interieur" in result.marqueurs
     assert result.detail  # renseigne (name_signal ou repli)
 
 
@@ -339,6 +353,118 @@ def test_run_repechage_verify_retries_sans_site(tmp_path):
                                       fetch=fetch_found)
     assert stats2.scanned == 1
     store.close()
+
+
+# --- GT ADVERSE REEL 2026-07-18 (snapshots HTML reels, recuperes poliment) --------
+#     Fixtures dans tests/fixtures/repechage_verify/ (head + metas + region du
+#     texte, trimme). Chaque cas du gate devient un test de non-regression.
+
+import os
+
+import pytest
+
+from app.ingestion.repechage_verify import _aggregate_site_text
+
+_FIXDIR = os.path.join(os.path.dirname(__file__), "fixtures", "repechage_verify")
+
+
+def _fixture_html(name: str) -> str:
+    with open(os.path.join(_FIXDIR, name + ".html"), encoding="utf-8") as f:
+        return f.read()
+
+
+# 7 des 8 VRAIS studios infirmes A TORT au gate -> doivent CONFIRMER (rendement).
+# mtstudio-archi.com EXCLU a dessein : SPA Canva 100 % JS dont la seule mention
+# « architecture d'interieur » vit dans un blob <script> JSON en mojibake
+# (« intÃ©rieur ») -- illisible par un scan HTML statique poli (VIDE > FAUX,
+# limite honnete assumee, cf. rapport). Ce faux negatif residuel est documente
+# par test_gt_mtstudio_js_spa_stays_empty ci-dessous.
+@pytest.mark.parametrize("fixture", [
+    "hoquet",       # « Architecture d'interieur designer global Rhone »
+    "nais",         # studio d'architecture d'interieur, Toulouse
+    "valentine",    # architecte d'interieur et decoratrice
+    "optimiste",    # decoration + architecture d'interieur + suivi de chantier
+    "edel",         # designer d'interieur ecoresponsable, home staging
+    "nkdeco",       # relooking deco d'interieur, home staging
+    "accord",       # site en maintenance, « architecture interieure » en og:image:alt
+    "aethos",       # anglophone : « interior architect » (avait confirme sur « home » nu)
+    "ellie",        # anglophone : « interior designer » (avait confirme sur « home » nu)
+])
+def test_gt_real_studio_now_confirms(fixture):
+    ok, markers = evaluate_site_content(_aggregate_site_text(_fixture_html(fixture)))
+    assert ok is True, f"{fixture} devrait CONFIRMER (vrai studio)"
+    assert markers, f"{fixture} : au moins une locution forte attendue"
+
+
+# CONTRE-GARDE : les infirmes LEGITIMES du GT restent infirmes (precision).
+# naa = defaut 1 (marque serbe de lampes), + fabrication / 3D / design graphique.
+@pytest.mark.parametrize("fixture", [
+    "naa",          # DEFAUT 1 : naa-studio.com, lampes ceramique serbes (« Home » de menu)
+    "dpdesign",     # dpdesignandfabrication.com : fabrication
+    "mooka",        # mooka3d.studio : 3D
+    "frappe",       # frappe-design.com : design graphique
+])
+def test_gt_legit_infirme_stays_infirme(fixture):
+    ok, markers = evaluate_site_content(_aggregate_site_text(_fixture_html(fixture)))
+    assert ok is False, f"{fixture} doit RESTER infirme (contre-garde)"
+    assert markers == []
+
+
+def test_english_role_locution_confirms_but_bare_interior_design_does_not():
+    # Discrimination anglaise : « interior designer/architect » (ROLE) confirme,
+    # mais « interior design » NU ne confirme PAS -- un fabricant/entrepreneur
+    # travaille POUR des projets de « interior design » sans etre lui-meme un
+    # studio (contre-garde dpdesignandfabrication.com : « interior design ...
+    # design fabrication construction contractor san francisco »).
+    ok_role, _ = evaluate_site_content("We are an interior designer studio in Nantes.")
+    assert ok_role is True
+    ok_bare, markers = evaluate_site_content(
+        "dpdesign interior design photo photography design fabrication contractor san francisco"
+    )
+    assert ok_bare is False
+    assert markers == []
+
+
+def test_gt_mtstudio_js_spa_stays_empty():
+    # Limite honnete : contenu JS (SPA Canva) + mojibake dans un <script> ->
+    # aucun texte lisible par un scan statique. VIDE (sans_site/infirme),
+    # jamais un faux confirme.
+    ok, markers = evaluate_site_content(_aggregate_site_text(_fixture_html("mtstudio")))
+    assert ok is False
+    assert markers == []
+
+
+def test_meta_og_image_alt_is_scanned():
+    # accord-conception.fr : la seule mention du metier est dans un
+    # <meta property="og:image:alt"> -> _aggregate_site_text scanne TOUS les
+    # attributs content de <meta>, pas seulement name="description".
+    from app.ingestion.repechage_verify import _meta_contents
+    html = ('<html><head><meta property="og:image:alt" '
+            "content=\"inspirations d'architecture intérieure\"></head></html>")
+    assert "architecture" in _meta_contents(html).lower()
+    ok, _ = evaluate_site_content(_aggregate_site_text(html))
+    assert ok is True
+
+
+def test_internal_pages_scanned_for_markers():
+    # Le marqueur peut ne figurer que sur une page interne (a-propos/prestations).
+    from app.ingestion.repechage_verify import _fetch_website_text
+    home = ('<html><head><title>Studio Bloom</title></head><body>'
+            '<a href="/a-propos">A propos</a></body></html>')
+    about = ('<html><head><title>A propos</title></head><body>'
+             "<p>Architecte d'intérieur à Nantes, agencement sur-mesure.</p>"
+             '</body></html>')
+    fetch = _dispatch_fetch({}, {"studiobloom.fr": home})
+    # page interne servie a part (le _dispatch_fetch ne route que par domaine :
+    # on enrichit la home avec un lien, la page interne renvoie 'about').
+    def fetch2(url):
+        if url.rstrip("/").endswith("a-propos"):
+            return about
+        return fetch(url)
+    text = _fetch_website_text(fetch2, "https://studiobloom.fr/")
+    ok, markers = evaluate_site_content(text)
+    assert ok is True
+    assert "architecte d interieur" in markers
 
 
 def test_run_repechage_verify_apply_raises_and_never_touches_store(tmp_path):
