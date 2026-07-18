@@ -36,7 +36,21 @@ Téléphone international monégasque (+377, 8 chiffres) normalisé en
 `normalize_phone_mc`. Pas d'email en clair (sonde). Fail-soft partout, HTTP
 injectable (tests sans réseau, snapshot réel dans
 tests/fixtures/monacomania/, récupéré poliment le 2026-07-17, throttle >=
-2,5 s)."""
+2,5 s).
+
+Garde hors-cible « intérieur » [défaut qualité #3, revue Alexis 2026-07-18] :
+monacomania.com est un annuaire d'ARCHITECTES GÉNÉRALISTES monégasques -- la
+majorité des ~6 cabinets référencés sont du bâtiment PUR (urbanisme,
+construction), hors cible LumaPro (aménagement/décoration d'intérieur). Même
+exigence que les autres connecteurs annuaire (CFAI/UFDI/annuaire_decoration/
+mon_architecte_interieur) : `parse_card` ne garde une carte QUE si son
+descriptif libre évoque explicitement l'intérieur/la décoration/
+l'aménagement (`_INTERIOR_MENTION_RE`) -- sinon écartée (VIDE > FAUX : sur les
+6 cabinets réels sondés, seul « ARCH - FRED GENIN » qualifie ; on préfère 1
+fiche juste que 6 douteuses plutôt que de deviner sur un simple nom
+d'enseigne). Aucun nouveau fetch réseau : le filtre reste purement déterministe
+sur le texte déjà présent dans la page annuaire (pas de crawl du site propre
+de chaque cabinet)."""
 from __future__ import annotations
 
 import re
@@ -54,7 +68,12 @@ _POSTAL_CITY_RE = re.compile(r"^MC-(\d{5})\s+MONACO$", re.IGNORECASE)
 _TEL_LINE_RE = re.compile(r"^tel\s*:?", re.IGNORECASE)
 _PHONE_DIGITS_RE = re.compile(r"\d")
 _SLUG_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
-_INTERIEUR_RE = re.compile(r"int[ée]rieur", re.IGNORECASE)
+# Garde hors-cible + tiering : mention intérieur/décoration/aménagement dans le
+# descriptif libre de la carte (cf. docstring module, défaut qualité #3).
+# Utilisée à la fois par `parse_card` (garde -- rejette si absente) et
+# `to_candidates` (tiering -- inchangé, mais désormais toujours vrai pour une
+# carte gardée : `parse_card` garantit déjà la présence de la mention).
+_INTERIOR_MENTION_RE = re.compile(r"int[ée]rieur|d[ée]corat|am[ée]nagement", re.IGNORECASE)
 
 
 def normalize_phone_mc(raw: Optional[str]) -> Optional[str]:
@@ -79,8 +98,9 @@ def slugify(name: str) -> str:
 
 def parse_card(html: str) -> Optional[Dict[str, Any]]:
     """Une carte (table à 2 colonnes) -> dict, ou None si <span class="style133">
-    absent (pas une carte cabinet) ou fiche institutionnelle (ni tél ni adresse
-    -- garde hors-cible, cf. docstring module). PURE."""
+    absent (pas une carte cabinet), fiche institutionnelle (ni tél ni adresse),
+    ou descriptif sans mention intérieur/décoration/aménagement (gardes
+    hors-cible, cf. docstring module). PURE."""
     soup = BeautifulSoup(html or "", "html.parser")
     name_span = soup.select_one("span.style133")
     if name_span is None:
@@ -118,6 +138,9 @@ def parse_card(html: str) -> Optional[Dict[str, Any]]:
 
     if not phone and not address:
         return None  # fiche institutionnelle (ex. Ordre des Architectes) : pas un cabinet
+
+    if not _INTERIOR_MENTION_RE.search(description):
+        return None  # hors-cible : cabinet bâtiment pur (garde intérieur, défaut #3)
 
     website = None
     link = info_td.select_one("a[href]")
@@ -187,10 +210,14 @@ class MonacomaniaConnector(Connector):
             description = (r.get("description") or "").strip()
             secondary = ["annuaire monacomania"]
             establishment_type = "architecte"
-            if _INTERIEUR_RE.search(description):
-                # Mention explicite « architecture d'intérieur » dans le descriptif
-                # libre (ex. ARCH - FRED GENIN) -- signal utile pour le tiering aval,
-                # cette page référençant surtout des architectes bâtiment (sonde).
+            if _INTERIOR_MENTION_RE.search(description):
+                # Mention explicite intérieur/décoration/aménagement dans le
+                # descriptif libre (ex. ARCH - FRED GENIN) -- signal utile pour
+                # le tiering aval. Depuis la garde hors-cible de `parse_card`
+                # (défaut #3), ce test est TOUJOURS vrai pour une carte issue
+                # de `fetch()` (la garde a déjà écarté les cartes sans mention)
+                # ; il reste exercé directement par `to_candidates` sur des
+                # records construits à la main (tests unitaires).
                 secondary.append("mention architecture d'intérieur")
                 establishment_type = "architecte d'intérieur"
             proof = "Cabinet d'architecture référencé dans l'annuaire monacomania.com (Monaco)."

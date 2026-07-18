@@ -944,6 +944,44 @@ def _soft_dedup_architecte(
     return hits[0] if _corroborates(cand, hits[0]) else None
 
 
+def _soft_dedup_same_connector(session: Session, cand: LeadCandidate) -> Optional[Opportunity]:
+    """Fusion douce nom+ville INTRA-connecteur (défaut qualité #1, cas réel
+    Sabrina Rosadoni #6788/#6790) : un annuaire liste PARFOIS la même personne
+    deux fois sous deux libellés différents (donc deux `source_ref` distincts
+    du MÊME connecteur, ex. `monarchitecteinterieur:368` et `:156`) —
+    `_soft_dedup_architecte` ne peut pas les fusionner : elle exclut
+    explicitement le même connecteur (`_connector_key`) pour protéger le chemin
+    UPDATE par `source_ref` exact (un re-crawl de la MÊME fiche ne doit jamais
+    passer par ici, cf. `test_cfai_recrawl_same_source_ref_updates_not_duplicate...`).
+
+    Ce chemin est DISTINCT et STRICT : même connecteur, même nom normalisé ET
+    même ville normalisée, ET une corroboration FORTE (`_corroborates` —
+    téléphone ou domaine de site identiques ; le géo seul ne suffit jamais ici,
+    deux homonymes du même annuaire dans la même ville restent 2 fiches SANS
+    corroboration explicite). Exactement 1 hit corroboré -> le renvoie ; sinon
+    None (jamais de faux merge, VIDE > FAUX). Le chemin `existing`
+    (source+source_ref+population exact, dans `_process_candidate`) reste
+    prioritaire et inchangé : cette fonction n'est jamais atteinte pour un
+    re-crawl de la même fiche (existing serait alors non-None en amont)."""
+    from .enrichment.siret_matcher import _tokens, _city_tokens
+    want_name = _tokens(cand.establishment_name)
+    want_city = _city_tokens(cand.city)
+    if not want_name or not want_city:
+        return None
+    cand_key = _connector_key(cand.source, cand.source_ref)
+    rows = session.exec(
+        select(Opportunity).where(Opportunity.population == cand.population)
+    ).all()
+    hits = [o for o in rows
+            if _connector_key(o.source, o.source_ref) == cand_key
+            and o.source_ref != cand.source_ref
+            and _tokens(o.establishment_name) == want_name
+            and _city_tokens(o.city) == want_city]
+    if len(hits) != 1:
+        return None
+    return hits[0] if _corroborates(cand, hits[0]) else None
+
+
 def _reset_source(session: Session, source: str) -> None:
     ids = [
         o.id
@@ -1199,6 +1237,19 @@ def _process_candidate(
     # identiques. Conservateur : exactement 1 fiche corroborée sinon rien.
     if existing is None and corroborated is None and cand.source in SOFT_DEDUP_SOURCES:
         soft = _soft_dedup_architecte(session, cand, dedup_index)
+        # DOUBLON INTRA-ANNUAIRE (défaut qualité #1, cas réel Sabrina Rosadoni
+        # #6788/#6790) : le même annuaire liste parfois deux fois la même
+        # personne sous deux libellés (deux source_ref du MÊME connecteur) —
+        # la fusion douce ci-dessus les EXCLUT explicitement l'un de l'autre
+        # (protection du chemin update par source_ref exact). On tente donc EN
+        # PLUS une fusion INTRA-connecteur, avec la même exigence de
+        # corroboration forte. Restreint à `source == "annuaire"` (petits
+        # volumes, un SELECT de plus par candidat non matché est sans risque —
+        # contrairement à run_stock/run_places où `dedup_index` existe
+        # justement pour éviter le scan full-table par candidat, décision #11 ;
+        # y ajouter ce chemin coûterait un scan O(N) par candidat non matché).
+        if soft is None and cand.source == "annuaire":
+            soft = _soft_dedup_same_connector(session, cand)
         if soft is not None:
             label = SOURCE_LABELS.get(cand.source, cand.source)
             already = session.exec(

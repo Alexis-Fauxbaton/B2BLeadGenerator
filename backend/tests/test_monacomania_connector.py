@@ -13,6 +13,7 @@ from app.ingestion.annuaires.monacomania import (
     parse_card,
     parse_list,
     slugify,
+    _INTERIOR_MENTION_RE,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "monacomania"
@@ -61,7 +62,10 @@ CARD_FRED_GENIN = """
 """
 
 # Cas « deux spans distincts » : description dans un 1er span.style5 séparé de
-# l'adresse/tél/lien (2e span.style5).
+# l'adresse/tél/lien (2e span.style5). Descriptif tweaké (mention « décoration
+# intérieure » ajoutée) pour rester gardée par la garde hors-cible #3 tout en
+# testant la structure DOM à deux spans -- le fixture RÉEL (page complète,
+# sans cette mention) reste, lui, écarté (cf. test_parse_list_on_full_real_page).
 CARD_ATELIER_VII = """
 <table width="800" border="0" align="center" cellpadding="0" cellspacing="0">
   <tr>
@@ -69,7 +73,7 @@ CARD_ATELIER_VII = """
     <td width="729" align="left" valign="middle"><div align="center">
         <p><span class="style133"><strong>ATELIER VII  ARCHITECTURE</strong></span> </p>
         <p>&nbsp;</p>
-      <p><span class="style5">Atelier d'architecture de Monaco</span><span class="style5"> <br>
+      <p><span class="style5">Atelier de décoration intérieure de Monaco</span><span class="style5"> <br>
         «Tour Odéon» 36, av. de l'Annonciade <br>
         MC-98000 MONACO<br>
         Tel: +377 97 70 06 93 <br>
@@ -110,8 +114,25 @@ CARD_ORDRE = """
 """
 
 
-def test_parse_card_simple_single_span():
-    c = parse_card(CARD_RAYMOND)
+# --- Défaut qualité #3 (revue Alexis, 2026-07-18) : garde hors-cible
+# « intérieur ». CARD_RAYMOND (cabinet bâtiment RÉEL, descriptif « Atelier
+# d'architecture de Monaco », AUCUNE mention intérieur/décoration/aménagement)
+# doit désormais être écartée par `parse_card`.
+
+def test_parse_card_no_interior_mention_is_dropped():
+    assert parse_card(CARD_RAYMOND) is None
+
+
+# Variante de CARD_RAYMOND (même structure « simple single span »), avec une
+# mention intérieur ajoutée au descriptif -- couvre l'extraction complète des
+# champs pour ce cas de structure DOM (le seul cabinet réel qualifiant, ARCH -
+# FRED GENIN, a une structure différente, cf. test_parse_card_description_outside_span).
+CARD_RAYMOND_INTERIOR = CARD_RAYMOND.replace(
+    "Atelier d'architecture de Monaco", "Atelier de décoration intérieure de Monaco")
+
+
+def test_parse_card_simple_single_span_with_interior_mention():
+    c = parse_card(CARD_RAYMOND_INTERIOR)
     assert c is not None
     assert c["name"] == "ATELIER RAYMOND ARCHITECTES"
     assert c["slug"] == "atelier-raymond-architectes"
@@ -119,7 +140,7 @@ def test_parse_card_simple_single_span():
     assert c["city"] == "Monaco"
     assert c["phone"] == "+377 97 70 75 37"
     assert c["website"] == "http://raymond-architecte.mc/"
-    assert c["description"] == "Atelier d'architecture de Monaco"
+    assert c["description"] == "Atelier de décoration intérieure de Monaco"
 
 
 def test_parse_card_description_outside_span():
@@ -139,7 +160,7 @@ def test_parse_card_two_separate_spans():
     assert c["address"] == "«Tour Odéon» 36, av. de l'Annonciade"
     assert c["phone"] == "+377 97 70 06 93"
     assert c["website"] == "http://atelier7monaco.com/"
-    assert c["description"] == "Atelier d'architecture de Monaco"
+    assert c["description"] == "Atelier de décoration intérieure de Monaco"
 
 
 def test_parse_card_ad_block_returns_none():
@@ -154,6 +175,18 @@ def test_parse_card_institution_returns_none():
 
 def test_parse_card_missing_style133_returns_none():
     assert parse_card("<div>page cassée</div>") is None
+
+
+@pytest.mark.parametrize("description,expected", [
+    ("Atelier d'architecture de Monaco", False),                       # bâtiment pur
+    ("Agence d'architecture et d'urbanisme monégasque", False),        # urbanisme pur
+    ("Architécture d'intérieur | design | concours", True),
+    ("Décoration intérieure de Monaco", True),
+    ("Spécialiste de l'aménagement de villas", True),
+    ("", False),
+])
+def test_interior_mention_regex(description, expected):
+    assert bool(_INTERIOR_MENTION_RE.search(description)) is expected
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -180,17 +213,20 @@ def test_slugify(name, expected):
 
 
 def test_parse_list_on_full_real_page():
-    # Page réelle complète : 6 cabinets + Ordre (écarté) + bloc pub (écarté).
+    # Page réelle complète : 6 cabinets bâtiment/architecture, Ordre (écarté,
+    # institution) et bloc pub (écarté, structure). Garde hors-cible #3 : sur
+    # les 6 cabinets, seul ARCH - FRED GENIN mentionne explicitement
+    # l'intérieur ("architécture d'intérieur") dans son descriptif -- les 5
+    # autres ("Atelier d'architecture de Monaco", "Agence d'architecture et
+    # d'urbanisme monégasque"...) sont du bâtiment pur, écartés (VIDE > FAUX).
     rows = parse_list(FULL_PAGE)
     names = {r["name"] for r in rows}
-    assert names == {
-        "ATELIER RAYMOND ARCHITECTES",
-        "ATELIER NATACHA MORIN-INNOCENTI (NMI)",
-        "ARCH - FRED GENIN",
-        "RAINIER BOISSON ARCHITECTES",
-        "ATELIER VII  ARCHITECTURE",
-        "ARCHI STUDIO",
-    }
+    assert names == {"ARCH - FRED GENIN"}
+    assert "ATELIER RAYMOND ARCHITECTES" not in names        # bâtiment pur
+    assert "ATELIER NATACHA MORIN-INNOCENTI (NMI)" not in names  # bâtiment pur
+    assert "RAINIER BOISSON ARCHITECTES" not in names        # bâtiment/urbanisme pur
+    assert "ATELIER VII  ARCHITECTURE" not in names          # bâtiment pur
+    assert "ARCHI STUDIO" not in names                       # bâtiment pur
     assert "ORDRE DES ARCHITECTES DE MONACO" not in names
     assert "AJOUTER VOTRE SITE À MONACOMANIA.COM" not in names
     # Rendement : 100 % des cabinets retenus ont un téléphone exploitable.
@@ -206,18 +242,47 @@ def test_connector_fetch_single_page_no_pagination():
 
     conn = MonacomaniaConnector(http_fetch=fake)
     records = conn.fetch(limit=100)
-    assert len(records) == 6
-    assert conn.last_total_count == 6
+    # 6 cabinets sur la page, 1 seul garde l'intérieur (garde hors-cible #3,
+    # cf. test_parse_list_on_full_real_page) -- `last_total_count` reflète le
+    # décompte APRÈS gardes (pas de badge total distinct sur cette page, même
+    # comportement qu'avant la garde intérieur pour l'institution/bloc pub).
+    assert len(records) == 1
+    assert conn.last_total_count == 1
     # Une seule requête HTTP (page non paginée -- pas de fiches détaillées).
     assert calls == ["https://www.monacomania.com/architectes-de-monaco.php"]
 
 
+# Page synthétique à 3 cabinets mentionnant TOUS l'intérieur (garde hors-cible
+# #3 satisfaite) -- utilisée uniquement pour tester la troncature par `limit`
+# indépendamment du volume réel (1 seul cabinet réel qualifie, insuffisant
+# pour couvrir ce cas).
+def _interior_card(n: int) -> str:
+    return f"""
+<table width="800" border="0" align="center" cellpadding="0" cellspacing="0">
+  <tr>
+    <td width="191"><a href="http://cabinet{n}.mc/"><img title="CABINET {n}"></a></td>
+    <td width="729"><div align="center">
+      <p><span class="style133"><strong>CABINET {n}</strong></span></p>
+      <p><span class="style5">Décoration intérieure de Monaco <br>
+      {n}, rue Test <br>
+      MC-98000 MONACO<br>
+      Tel: +377 90 00 00 0{n}</span><br>
+      <a href="http://cabinet{n}.mc/" target="_blank">+ info »</a></p>
+    </div></td>
+  </tr>
+</table>
+"""
+
+
+MULTI_INTERIOR_PAGE = "\n".join(_interior_card(n) for n in range(1, 4))
+
+
 def test_connector_fetch_bounded_by_limit():
-    conn = MonacomaniaConnector(http_fetch=lambda u: FULL_PAGE)
+    conn = MonacomaniaConnector(http_fetch=lambda u: MULTI_INTERIOR_PAGE)
     records = conn.fetch(limit=2)
     assert len(records) == 2
-    # last_total_count reflète le total réel (6), pas la troncature par limit.
-    assert conn.last_total_count == 6
+    # last_total_count reflète le total réel (3), pas la troncature par limit.
+    assert conn.last_total_count == 3
 
 
 def test_connector_fetch_returns_empty_when_http_fetch_fails():

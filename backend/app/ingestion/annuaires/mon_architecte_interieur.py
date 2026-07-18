@@ -13,13 +13,28 @@ structure DOM sur les ~22 fiches sondées). Téléphone normalisé en 5 groupes 
 2 (`normalize_phone_fr`, même contrat qu'annuaire_decoration.py). Pas d'email
 en clair (sonde).
 
-Garde hors-cible : ce répertoire référence aussi des architectes BELGES (ex.
-ARCHI-IN à Andenne, CREEL à Namur, Benoit Custers à Liège) -- le site ne cible
-que France + Monaco (sonde). Détection déterministe dans `parse_fiche` :
-mention explicite « Belgique »/« Belgium » dans l'adresse, OU code postal à 4
-chiffres (les codes FR/Monaco en comptent 5, ex. 98000 Monaco). VIDE > FAUX :
-adresse absente ou sans code postal identifiable -> jamais exclue (cf. fiche
-Emilie Bouaziz, sonde, adresse vide, gardée).
+Garde hors-cible (Belgique) : ce répertoire référence aussi des architectes
+BELGES (ex. ARCHI-IN à Andenne, CREEL à Namur, Benoit Custers à Liège) -- le
+site ne cible que France + Monaco (sonde). Détection déterministe dans
+`parse_fiche` : mention explicite « Belgique »/« Belgium » dans l'adresse, OU
+code postal à 4 chiffres (les codes FR/Monaco en comptent 5, ex. 98000
+Monaco). VIDE > FAUX : adresse absente ou sans code postal identifiable ->
+jamais exclue (cf. fiche Emilie Bouaziz, sonde, adresse vide, gardée).
+
+Garde hors-cible (maître d'œuvre) [défaut qualité #2, revue Alexis 2026-07-18,
+cas réel fiche #6785 « Maître d'oeuvre Vigneux-de-Bretagne -- Guillaume
+Clouet »] : ce répertoire « Architecte » référence occasionnellement des
+maîtres d'œuvre / constructeurs / bureaux d'études -- un métier voisin mais
+HORS CIBLE (ni architecture d'intérieur, ni décoration). Détection
+déterministe dans `parse_fiche` (`_is_hors_cible_maitre_oeuvre`, sur le titre
+h1 ET la présentation `wpbdp-field-presentation_de_larchitecte`) : mention de
+« maître(sse) d'œuvre » / « maîtrise d'œuvre » / « constructeur » / « bureau
+d'études » SANS AUCUNE mention d'architecture ou de décoration (intérieure ou
+non) -> écartée. Une fiche mentionnant la maîtrise d'œuvre comme UN SERVICE
+PARMI D'AUTRES (ex. « architecte d'intérieur proposant aussi de la maîtrise
+d'œuvre ») n'est PAS écartée -- la présence du mot « architect »/« décorat »
+suffit à la garder (VIDE > FAUX : on ne perd un lead que si RIEN ne rattache la
+fiche à l'intérieur/la décoration).
 
 Fail-soft partout, HTTP injectable (tests sans réseau, snapshots dans
 tests/fixtures/mon_architecte_interieur/, récupérés poliment le 2026-07-17,
@@ -27,6 +42,7 @@ throttle >= 2,5 s)."""
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup
@@ -41,6 +57,35 @@ _LISTING_ID_RE = re.compile(r"^wpbdp-listing-(\d+)$")
 _POSTAL_RE = re.compile(r"\b(\d{4,5})\b")
 _BELGIAN_HINT_RE = re.compile(r"\bbelgi(?:um|que)\b", re.IGNORECASE)
 _PHONE_DIGITS_RE = re.compile(r"\d")
+
+# Garde hors-cible « maître d'œuvre » (cf. docstring module) : motifs testés
+# sur le texte replié (accents/ligature « œ » retirés, cf. `_fold`).
+_MOE_HINT_RE = re.compile(
+    r"\bma[iî]tres?\s+d.{0,2}oeuvre\b|\bma[iî]trise\s+d.{0,2}oeuvre\b"
+    r"|\bconstructeur\b|\bbureau\s+d.{0,2}etudes?\b",
+    re.IGNORECASE,
+)
+_INTERIOR_HINT_RE = re.compile(r"architect|decorat", re.IGNORECASE)
+
+
+def _fold(text: Optional[str]) -> str:
+    """Texte replié : ligature « œ »/« Œ » développée en « oe »/« OE » puis
+    accents retirés (NFKD + suppression des marques combinantes). Rend les
+    gardes hors-cible robustes aux variantes orthographiques (« maître
+    d'œuvre » / « maitre d'oeuvre » / « MAITRE D'OEUVRE »). PURE."""
+    s = (text or "").replace("œ", "oe").replace("Œ", "OE")
+    s = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in s if not unicodedata.combining(c))
+
+
+def _is_hors_cible_maitre_oeuvre(name: str, description: str) -> bool:
+    """Vrai si le titre/la présentation de la fiche est DOMINÉ par un métier
+    voisin hors cible (maître d'œuvre / maîtrise d'œuvre / constructeur /
+    bureau d'études) SANS AUCUNE mention d'architecture ou de décoration
+    (cf. docstring module, défaut qualité #2, fiche #6785 Guillaume Clouet).
+    PURE."""
+    folded = _fold(" ".join(filter(None, [name, description])))
+    return bool(_MOE_HINT_RE.search(folded)) and not _INTERIOR_HINT_RE.search(folded)
 
 
 def _list_url(page: int) -> str:
@@ -134,21 +179,27 @@ def normalize_phone_fr(raw: Optional[str]) -> Optional[str]:
 
 
 def parse_fiche(html: str, listing_id: str) -> Optional[Dict[str, Any]]:
-    """Fiche architecte -> dict, ou None si <h1> absent (fiche illisible) ou
-    adresse belge (garde hors-cible). PURE. Extrait nom/adresse/ville/
-    téléphone/site depuis les champs `wpbdp-field-*` (structure identique sur
-    toutes les fiches sondées)."""
+    """Fiche architecte -> dict, ou None si <h1> absent (fiche illisible),
+    adresse belge, ou maître d'œuvre/constructeur hors-cible (gardes, cf.
+    docstring module). PURE. Extrait nom/adresse/ville/téléphone/site depuis
+    les champs `wpbdp-field-*` (structure identique sur toutes les fiches
+    sondées)."""
     soup = BeautifulSoup(html or "", "html.parser")
     h1 = soup.select_one("h1")
     if h1 is None:
         return None
+    name = h1.get_text(" ", strip=True)
     address = _field_value(soup, "adresse")
     if _is_belgian_address(address):
         return None  # hors-cible : architecte belge (site France + Monaco)
 
+    description = _field_value(soup, "presentation_de_larchitecte")
+    if _is_hors_cible_maitre_oeuvre(name, description):
+        return None  # hors-cible : maître d'œuvre/constructeur (défaut #2)
+
     return {
         "listing_id": listing_id,
-        "name": h1.get_text(" ", strip=True),
+        "name": name,
         "address": address,
         "city": _field_value(soup, "ville"),
         "phone": normalize_phone_fr(_field_value(soup, "numero_de_telephone_")),

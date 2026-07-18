@@ -8,7 +8,7 @@ from app.ingestion.base import LeadCandidate
 from app.ingestion.enrichment.siret_matcher import MatchResult
 from app.ingestion.pipeline import (
     IngestStats, _connector_key, _process_candidate, _soft_dedup_architecte,
-    run_annuaires,
+    _soft_dedup_same_connector, run_annuaires,
 )
 from app.models import Opportunity
 
@@ -445,6 +445,129 @@ def test_cfai_recrawl_same_source_ref_updates_not_duplicate_even_with_siren():
         assert len(rows) == 1
         assert rows[0].website == "https://cabinet-delta.fr"
         assert stats.soft_merges == []
+
+
+# --- Défaut qualité #1 (revue Alexis, 2026-07-18) : doublon INTRA-annuaire —
+# le même connecteur (mon_architecte_interieur) liste PARFOIS la même personne
+# deux fois sous deux libellés différents (cas réel Sabrina Rosadoni, fiches
+# #6788 "Sabrina ROSADONI, architecte d'intérieur à Nice" et #6790 "Sabrina
+# Rosadoni : architecte d'intérieur à Nice", même téléphone). Le chemin
+# `_soft_dedup_architecte` exclut explicitement le même connecteur (protection
+# du chemin update par source_ref exact) -> `_soft_dedup_same_connector`
+# comble ce trou, avec la même exigence de corroboration forte.
+
+def test_same_connector_duplicate_listing_merges_with_phone_corroboration():
+    """Cas réel Sabrina Rosadoni : même connecteur (monarchitecteinterieur),
+    deux source_ref différents, même nom+ville, MÊME téléphone -> fusion (1
+    seule fiche), pas de doublon."""
+    with Session(_engine()) as s:
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="monarchitecteinterieur:368",
+            establishment_name="Sabrina ROSADONI, architecte d'intérieur à Nice",
+            city="Nice", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 17),
+            establishment_type="architecte d'intérieur", population="architecte",
+            website="https://www.sabrinarosadoni.fr/",
+            raw={"phone": "04 13 68 05 57"}),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+
+        stats = IngestStats(source="annuaire")
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="monarchitecteinterieur:156",
+            establishment_name="Sabrina Rosadoni : architecte d'intérieur à Nice",
+            city="Nice", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 17),
+            establishment_type="architecte d'intérieur", population="architecte",
+            website="https://www.sabrinarosadoni.fr/",
+            raw={"phone": "04 13 68 05 57"}),  # même téléphone -> corrobore
+            stats, set(), None)
+        s.commit()
+
+        rows = s.exec(select(Opportunity).where(
+            Opportunity.population == "architecte")).all()
+        assert len(rows) == 1
+        assert rows[0].source_ref == "monarchitecteinterieur:368"  # 1ère fiche conservée
+        assert stats.updated == 1 and stats.created == 0
+        assert stats.soft_merges == [
+            ("monarchitecteinterieur:156", "monarchitecteinterieur:368"),
+        ]
+
+
+def test_same_connector_homonyms_without_corroboration_stay_two_fiches():
+    """Adverse : 2 homonymes du MÊME connecteur, même ville, SANS aucune
+    corroboration (tél/site différents) -> PAS de fusion, 2 fiches (jamais de
+    faux merge, VIDE > FAUX)."""
+    with Session(_engine()) as s:
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="monarchitecteinterieur:10",
+            establishment_name="Julien Petit, architecte d'intérieur à Lyon",
+            city="Lyon", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 17),
+            establishment_type="architecte d'intérieur", population="architecte",
+            website="https://julien-petit-archi.fr",
+            raw={"phone": "04 78 00 00 01"}),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+
+        stats = IngestStats(source="annuaire")
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="monarchitecteinterieur:11",
+            establishment_name="Julien Petit, architecte d'intérieur à Lyon",
+            city="Lyon", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 17),
+            establishment_type="architecte d'intérieur", population="architecte",
+            website="https://un-autre-julien-petit.fr",  # domaine différent
+            raw={"phone": "04 78 00 00 02"}),  # tél différent
+            stats, set(), None)
+        s.commit()
+
+        rows = s.exec(select(Opportunity).where(
+            Opportunity.population == "architecte")).all()
+        assert len(rows) == 2
+        assert stats.created == 1 and stats.updated == 0
+        assert stats.soft_merges == []
+
+
+def test_soft_dedup_same_connector_direct_unit():
+    """Unité directe de `_soft_dedup_same_connector` (miroir des tests directs
+    de `_soft_dedup_architecte` ci-dessus)."""
+    with Session(_engine()) as s:
+        _process_candidate(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:701",
+            establishment_name="Studio Voltaire", city="Reims", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 17),
+            establishment_type="architecte d'intérieur", population="architecte",
+            raw={"phone": "03 26 00 00 01"}),
+            IngestStats(source="annuaire"), set(), None)
+        s.commit()
+
+        # Corroboré (même tél) -> fusion.
+        match = _soft_dedup_same_connector(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:702",
+            establishment_name="Studio Voltaire", city="Reims", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 17),
+            establishment_type="architecte d'intérieur", population="architecte",
+            raw={"phone": "03.26.00.00.01"}))
+        assert match is not None and match.source_ref == "cfai:701"
+
+        # Sans corroboration -> None.
+        no_match = _soft_dedup_same_connector(s, LeadCandidate(
+            source="annuaire", source_ref="cfai:703",
+            establishment_name="Studio Voltaire", city="Reims", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 17),
+            establishment_type="architecte d'intérieur", population="architecte"))
+        assert no_match is None
+
+        # Autre connecteur (même nom+ville+tél) -> jamais atteint par cette
+        # fonction (c'est le rôle de `_soft_dedup_architecte`).
+        cross = _soft_dedup_same_connector(s, LeadCandidate(
+            source="annuaire", source_ref="ufdi:studio-voltaire",
+            establishment_name="Studio Voltaire", city="Reims", address="",
+            main_signal="prescripteur actif", detection_date=date(2026, 7, 17),
+            establishment_type="architecte d'intérieur", population="architecte",
+            raw={"phone": "03 26 00 00 01"}))
+        assert cross is None
 
 
 def test_two_different_annuaire_connectors_merge_by_siren_corroboration():

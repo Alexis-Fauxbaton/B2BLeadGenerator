@@ -9,6 +9,7 @@ import pytest
 from app.ingestion.annuaires.mon_architecte_interieur import (
     MonArchitecteInterieurConnector,
     _is_belgian_address,
+    _is_hors_cible_maitre_oeuvre,
     normalize_phone_fr,
     parse_fiche,
     parse_list_page,
@@ -84,6 +85,75 @@ def test_parse_fiche_without_address_stays_valid():
 
 def test_parse_fiche_missing_h1_returns_none():
     assert parse_fiche("<div>page cassée</div>", "0") is None
+
+
+# --- Défaut qualité #2 (revue Alexis, 2026-07-18) : garde hors-cible « maître
+# d'œuvre » — cas réel fiche #6785 « Maître d'oeuvre Vigneux-de-Bretagne --
+# Guillaume Clouet », site clouet-maitre-oeuvre.com. Structure synthétique
+# (mêmes classes wpbdp-field-* que les fiches réelles ci-dessus).
+
+def _fiche_html(name: str, presentation: str = "", adresse: str = "Nice") -> str:
+    return f"""
+<div class="listing-title"><h1>{name}</h1></div>
+<div class="wpbdp-field-adresse wpbdp-field"><div class="value">{adresse}</div></div>
+<div class="wpbdp-field-ville wpbdp-field"><div class="value">Nice</div></div>
+<div class="wpbdp-field-numero_de_telephone_ wpbdp-field"><div class="value">04 00 00 00 00</div></div>
+<div class="wpbdp-field-presentation_de_larchitecte wpbdp-field">
+  <div class="value">{presentation}</div>
+</div>
+"""
+
+
+def test_parse_fiche_maitre_oeuvre_title_only_is_dropped():
+    # Cas réel : titre 100% "maître d'oeuvre", aucune mention archi/décoration.
+    html = _fiche_html("Maître d'oeuvre Vigneux-de-Bretagne – Guillaume Clouet")
+    assert parse_fiche(html, "149") is None
+
+
+def test_parse_fiche_maitrise_oeuvre_in_description_without_interior_is_dropped():
+    html = _fiche_html(
+        "Guillaume Clouet",
+        presentation="Nous proposons une prestation complète de maîtrise d'œuvre "
+                     "pour vos projets de construction et de rénovation.",
+    )
+    assert parse_fiche(html, "150") is None
+
+
+def test_parse_fiche_bureau_etudes_is_dropped():
+    html = _fiche_html("Bureau d'études BTP Ouest")
+    assert parse_fiche(html, "151") is None
+
+
+def test_parse_fiche_architecte_mentioning_maitrise_oeuvre_as_service_stays_valid():
+    # Régression : une VRAIE fiche archi d'intérieur qui propose AUSSI de la
+    # maîtrise d'œuvre (service complémentaire) ne doit PAS être écartée --
+    # la mention "architecte"/"décorat" suffit à la garder (VIDE > FAUX).
+    html = _fiche_html(
+        "ARCHISUIVI, architecte d'intérieur à Nice",
+        presentation="Cabinet d'architecture d'intérieur proposant également une "
+                     "prestation de maîtrise d'œuvre pour le suivi de chantier.",
+    )
+    f = parse_fiche(html, "344")
+    assert f is not None
+    assert f["name"] == "ARCHISUIVI, architecte d'intérieur à Nice"
+
+
+@pytest.mark.parametrize("name,description,expected", [
+    ("Maître d'oeuvre Vigneux-de-Bretagne – Guillaume Clouet", "", True),
+    ("MAITRE D'OEUVRE DUPONT", "", True),           # accent-insensible + majuscules
+    ("Constructeur de maisons individuelles", "", True),
+    ("Guillaume Clouet", "Bureau d'études structure bâtiment", True),
+    ("ARCHISUIVI, architecte d'intérieur à Nice", "", False),   # pas de garde MOE
+    ("Studio Déco", "Décoratrice d'intérieur", False),
+    (
+        "Cabinet Dupont",
+        "Architecte proposant aussi de la maîtrise d'œuvre",
+        False,
+    ),  # service parmi d'autres -> gardé
+    ("", "", False),
+])
+def test_is_hors_cible_maitre_oeuvre(name, description, expected):
+    assert _is_hors_cible_maitre_oeuvre(name, description) is expected
 
 
 @pytest.mark.parametrize("address,expected", [
